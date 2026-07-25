@@ -1,0 +1,10 @@
+{
+  "hook_event_name": "PreToolUse",
+  "session_id": "codex-sess-0001",
+  "cwd": "/workspace/demo-repo",
+  "turn_id": "turn-0003",
+  "tool_call_id": "call-mcp-0001",
+  "tool_name": "mcp__acme-server__lookup_customer",
+  "tool_input": { "customer_id": "cus_12345" },
+  "occurred_at": 1700000004000
+}

@@ -1,0 +1,16 @@
+{
+  "hook_event_name": "PostCompact",
+  "session_id": "codex-sess-0001",
+  "cwd": "/workspace/demo-repo",
+  "trigger": "auto",
+  "context_tokens_after": 32000,
+  "dropped_message_count": 42,
+  "usage": {
+    "input_tokens": 500000,
+    "cached_input_tokens": 480000,
+    "output_tokens": 20000,
+    "reasoning_output_tokens": 5000,
+    "total_tokens": 520000
+  },
+  "occurred_at": 1700000005500
+}

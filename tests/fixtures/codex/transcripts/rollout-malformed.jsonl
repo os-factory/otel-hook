@@ -1,0 +1,6 @@
+{"type":"session_meta","payload":{"id":"codex-sess-broken","cwd":"/workspace/demo-repo"}}
+this is not json at all
+{"type":"turn_context","payload":{"id":"turn-0001","model":"gpt-5-codex"}}
+{"type":"event_msg","payload":{"type":"token_count","total_token_usage":{"input_tokens":100,"output_tokens":10,"total_tokens":110}}}
+{"unterminated": "json
+{"type":"response_item","payload":{"id":"item-0001","type":"message","role":"user"}}

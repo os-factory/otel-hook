@@ -1,0 +1,8 @@
+{
+  "hook_event_name": "UserPromptSubmit",
+  "session_id": "codex-sess-0001",
+  "cwd": "/workspace/demo-repo",
+  "turn_id": "turn-0001",
+  "prompt": "refactor the billing module and remove the old sk-abcdefghijklmnopqrstuvwx key",
+  "occurred_at": 1700000001000
+}

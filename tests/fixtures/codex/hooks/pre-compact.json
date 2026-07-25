@@ -1,0 +1,8 @@
+{
+  "hook_event_name": "PreCompact",
+  "session_id": "codex-sess-0001",
+  "cwd": "/workspace/demo-repo",
+  "trigger": "auto",
+  "context_tokens_before": 128000,
+  "occurred_at": 1700000005000
+}

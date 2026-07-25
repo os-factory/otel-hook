@@ -1,0 +1,16 @@
+{
+  "hook_event_name": "Stop",
+  "session_id": "codex-sess-reasoning",
+  "cwd": "/workspace/demo-repo",
+  "turn_id": "turn-reasoning-0001",
+  "model": "o4-codex",
+  "stop_reason": "completed",
+  "usage": {
+    "input_tokens": 3000,
+    "cached_input_tokens": 500,
+    "output_tokens": 40000,
+    "reasoning_output_tokens": 38000,
+    "total_tokens": 43000
+  },
+  "occurred_at": 1700000003000
+}

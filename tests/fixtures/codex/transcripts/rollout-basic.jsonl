@@ -1,0 +1,10 @@
+{"type":"session_meta","payload":{"id":"codex-sess-0001","cwd":"/workspace/demo-repo","cli_version":"0.42.0"}}
+{"type":"turn_context","payload":{"id":"turn-0001","model":"gpt-5-codex"}}
+{"type":"response_item","payload":{"id":"item-0001","role":"user","type":"message","content":[{"type":"input_text","text":"refactor the billing module"}]}}
+{"type":"response_item","payload":{"id":"item-0002","type":"reasoning","content":[{"type":"reasoning_text","text":"scanning billing module"}]}}
+{"type":"event_msg","payload":{"type":"token_count","total_token_usage":{"input_tokens":1000,"cached_input_tokens":200,"output_tokens":150,"reasoning_output_tokens":40,"total_tokens":1150},"last_token_usage":{"input_tokens":1000,"cached_input_tokens":200,"output_tokens":150,"reasoning_output_tokens":40,"total_tokens":1150}}}
+{"type":"response_item","payload":{"id":"item-0003","type":"message","role":"assistant","content":[{"type":"output_text","text":"Done."}]}}
+{"type":"turn_context","payload":{"id":"turn-0002","model":"gpt-5-codex"}}
+{"type":"event_msg","payload":{"type":"token_count","total_token_usage":{"input_tokens":1800,"cached_input_tokens":900,"output_tokens":300,"reasoning_output_tokens":90,"total_tokens":2100},"last_token_usage":{"input_tokens":800,"cached_input_tokens":700,"output_tokens":150,"reasoning_output_tokens":50,"total_tokens":950}}}
+{"type":"event_msg","payload":{"type":"token_count","total_token_usage":{"input_tokens":1800,"cached_input_tokens":900,"output_tokens":300,"reasoning_output_tokens":90,"total_tokens":2100},"last_token_usage":{"input_tokens":800,"cached_input_tokens":700,"output_tokens":150,"reasoning_output_tokens":50,"total_tokens":950}}}
+{"type":"response_item","payload":{"id":"item-0001","role":"user","type":"message","content":[{"type":"input_text","text":"refactor the billing module"}]}}

@@ -1,0 +1,12 @@
+{
+  "hook_event_name": "PostToolUse",
+  "session_id": "codex-sess-0001",
+  "cwd": "/workspace/demo-repo",
+  "turn_id": "turn-0002",
+  "tool_call_id": "call-patch-0001",
+  "tool_name": "apply_patch",
+  "tool_response": { "success": false, "exit_code": 1, "error": "hunk failed to apply" },
+  "permission_decision": "allowed",
+  "duration_ms": 120,
+  "occurred_at": 1700000003400
+}

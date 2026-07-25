@@ -1,0 +1,12 @@
+{
+  "hook_event_name": "PostToolUse",
+  "session_id": "codex-sess-0001",
+  "cwd": "/workspace/demo-repo",
+  "turn_id": "turn-0001",
+  "tool_call_id": "call-shell-0001",
+  "tool_name": "shell",
+  "tool_response": { "success": true, "exit_code": 0, "stdout": "deployed ok" },
+  "permission_decision": "allowed",
+  "duration_ms": 842,
+  "occurred_at": 1700000002800
+}

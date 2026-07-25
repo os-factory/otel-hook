@@ -1,0 +1,10 @@
+{
+  "hook_event_name": "SubagentStart",
+  "session_id": "codex-sess-0001",
+  "cwd": "/workspace/demo-repo",
+  "turn_id": "turn-0004",
+  "subagent_id": "sub-0001",
+  "subagent_type": "reviewer",
+  "model": "gpt-5-codex-mini",
+  "occurred_at": 1700000006000
+}

@@ -1,0 +1,16 @@
+{
+  "hook_event_name": "SubagentStop",
+  "session_id": "codex-sess-0001",
+  "cwd": "/workspace/demo-repo",
+  "turn_id": "turn-0004",
+  "subagent_id": "sub-0001",
+  "status": "completed",
+  "usage": {
+    "input_tokens": 4000,
+    "cached_input_tokens": 1000,
+    "output_tokens": 800,
+    "reasoning_output_tokens": 200,
+    "total_tokens": 4800
+  },
+  "occurred_at": 1700000006900
+}

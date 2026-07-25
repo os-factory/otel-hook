@@ -1,0 +1,17 @@
+{
+  "hook_event_name": "Stop",
+  "session_id": "codex-sess-0001",
+  "cwd": "/workspace/demo-repo",
+  "turn_id": "turn-0001",
+  "model": "gpt-5-codex",
+  "stop_reason": "completed",
+  "usage": {
+    "input_tokens": 12000,
+    "cached_input_tokens": 8000,
+    "output_tokens": 1500,
+    "reasoning_output_tokens": 400,
+    "total_tokens": 13500
+  },
+  "duration_ms": 4200,
+  "occurred_at": 1700000003000
+}
