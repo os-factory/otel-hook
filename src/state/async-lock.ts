@@ -10,8 +10,9 @@
  */
 export interface AsyncLock {
   /**
-   * `timeoutMillis` bounds how long the *caller* waits for a result; it does
-   * not cancel `fn` once queued. Letting a timed-out caller skip the queue
+   * `timeoutMillis` bounds how long the caller waits to acquire the key; it
+   * does not bound `fn` after acquisition or cancel a queued operation.
+   * Letting a timed-out caller skip the queue
    * would let it run concurrently with whoever still holds the key, which
    * defeats the point of a mutex. So a slow holder can make a waiter give up
    * on an answer while its own turn still arrives later, in order, and still
@@ -35,7 +36,11 @@ export const createAsyncLock = (): AsyncLock => {
 
   const run = async <T>(key: string, fn: () => Promise<T>, timeoutMillis?: number): Promise<T> => {
     const previous = tail.get(key) ?? Promise.resolve();
-    const current = previous.then(fn, fn);
+    const acquired = previous.then(
+      () => undefined,
+      () => undefined,
+    );
+    const current = acquired.then(fn);
     const swallowed = current.then(
       () => undefined,
       () => undefined,
@@ -59,12 +64,13 @@ export const createAsyncLock = (): AsyncLock => {
       timer.unref?.();
     });
     try {
-      return await Promise.race([current, timeout]);
+      await Promise.race([acquired, timeout]);
     } finally {
       if (timer !== undefined) {
         clearTimeout(timer);
       }
     }
+    return current;
   };
 
   return { run };
