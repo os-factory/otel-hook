@@ -1,0 +1,39 @@
+# CODEOWNERS
+#
+# Replace the placeholder handles below (@core-team, @parity-team) with real
+# GitHub usernames or teams before enabling required-review branch
+# protection. Placeholders are kept here so the ownership *shape* — which
+# paths belong to which review authority — survives even before that mapping
+# is finalized. See CONTRIBUTING.md for the same areas in prose.
+#
+# Order matters: later patterns override earlier ones for overlapping paths.
+
+# Default: unmatched paths fall to the core team for triage.
+*                                   @core-team
+
+# Core contract: canonical model, privacy service, runtime, config, error
+# taxonomy, and the provider adapter boundary/registry itself. Provider
+# adapters and this repo's own parity/CI tooling must not change these
+# without core-team review.
+/src/model/                        @core-team
+/src/privacy/                      @core-team
+/src/runtime/                      @core-team
+/src/config/                       @core-team
+/src/errors/                       @core-team
+/src/providers/adapter.ts          @core-team
+/src/providers/builder.ts          @core-team
+/src/providers/registry.ts         @core-team
+/src/index.ts                      @core-team
+/docs/adr/                         @core-team
+
+# Parity, packaging, CI, and release hardening (this task's area).
+/tests/parity/                     @parity-team
+/tests/packaging/                  @parity-team
+/scripts/                          @parity-team
+/.github/                          @parity-team
+/fixtures/                         @parity-team
+/SECURITY.md                       @parity-team
+/CONTRIBUTING.md                   @parity-team
+/docs/compatibility-policy.md      @parity-team
+/docs/release-checklist.md         @parity-team
+/docs/shadow-mode.md               @parity-team
