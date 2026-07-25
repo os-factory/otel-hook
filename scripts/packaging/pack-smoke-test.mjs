@@ -19,7 +19,10 @@ const execFileAsync = promisify(execFile);
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..", "..");
-const NPM_EXECUTABLE = process.platform === "win32" ? "npm.cmd" : "npm";
+const runNpm = (args, options = {}) =>
+  process.env.npm_execpath
+    ? execFileAsync(process.execPath, [process.env.npm_execpath, ...args], options)
+    : execFileAsync("npm", args, options);
 
 const readPackageJson = async () =>
   JSON.parse(await readFile(path.join(REPO_ROOT, "package.json"), "utf8"));
@@ -33,13 +36,12 @@ const runSmokeTest = async ({ skipBuild = false } = {}) => {
   const pkg = await readPackageJson();
 
   if (!skipBuild) {
-    await execFileAsync(NPM_EXECUTABLE, ["run", "build"], { cwd: REPO_ROOT });
+    await runNpm(["run", "build"], { cwd: REPO_ROOT });
     steps.push("build: ok");
   }
 
   const packDestination = await mkdtemp(path.join(tmpdir(), "otel-hook-pack-"));
-  const { stdout: packStdout } = await execFileAsync(
-    NPM_EXECUTABLE,
+  const { stdout: packStdout } = await runNpm(
     ["pack", "--json", "--pack-destination", packDestination],
     { cwd: REPO_ROOT },
   );
@@ -70,7 +72,7 @@ const runSmokeTest = async ({ skipBuild = false } = {}) => {
       path.join(consumerDir, "package.json"),
       JSON.stringify({ name: "otel-hook-packaging-smoke", version: "0.0.0", private: true, type: "module" }, null, 2),
     );
-    await execFileAsync(NPM_EXECUTABLE, ["install", "--no-audit", "--no-fund", tarballPath], {
+    await runNpm(["install", "--no-audit", "--no-fund", tarballPath], {
       cwd: consumerDir,
     });
     steps.push("install: ok (installed from packed tarball, not the workspace source)");
