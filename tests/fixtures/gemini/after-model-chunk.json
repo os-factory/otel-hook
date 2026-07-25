@@ -1,0 +1,23 @@
+{
+  "session_id": "ses_gemini_demo_1",
+  "hook_event_name": "AfterModel",
+  "cwd": "/workspace/demo-repo",
+  "timestamp": "2026-07-25T10:00:03.000Z",
+  "llm_request": {
+    "model": "gemini-2.5-pro",
+    "messages": [
+      { "role": "user", "content": "Refactor the retry helper to use exponential backoff." }
+    ],
+    "config": {
+      "temperature": 0.4,
+      "maxOutputTokens": 8192
+    }
+  },
+  "llm_response": {
+    "candidates": [
+      {
+        "content": { "role": "model", "parts": [{ "text": "Looking at the retry helper" }] }
+      }
+    ]
+  }
+}

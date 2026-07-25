@@ -1,0 +1,9 @@
+{
+  "session_id": "ses_gemini_demo_1",
+  "hook_event_name": "AfterAgent",
+  "cwd": "/workspace/demo-repo",
+  "timestamp": "2026-07-25T10:00:20.000Z",
+  "prompt": "Refactor the retry helper to use exponential backoff.",
+  "prompt_response": "Done — the retry helper now backs off exponentially with jitter.",
+  "stop_hook_active": false
+}

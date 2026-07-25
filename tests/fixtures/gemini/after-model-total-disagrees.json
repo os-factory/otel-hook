@@ -1,0 +1,23 @@
+{
+  "session_id": "ses_gemini_demo_2",
+  "hook_event_name": "AfterModel",
+  "cwd": "/workspace/demo-repo",
+  "timestamp": "2026-07-25T10:10:05.000Z",
+  "llm_request": {
+    "model": "gemini-2.5-flash",
+    "messages": [{ "role": "user", "content": "List the open TODOs in this file." }]
+  },
+  "llm_response": {
+    "candidates": [
+      {
+        "content": { "role": "model", "parts": [{ "text": "There are three TODOs." }] },
+        "finishReason": "STOP"
+      }
+    ],
+    "usageMetadata": {
+      "promptTokenCount": 200,
+      "candidatesTokenCount": 20,
+      "totalTokenCount": 999
+    }
+  }
+}
