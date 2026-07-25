@@ -1,0 +1,6 @@
+{
+  "hook_event_name": "UserPromptSubmit",
+  "session_id": "sess-parity-claude-001",
+  "cwd": "/workspace/fixture-repo",
+  "prompt": "Explain what the parity harness fixture directory is for."
+}

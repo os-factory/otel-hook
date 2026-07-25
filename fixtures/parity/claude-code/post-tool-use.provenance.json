@@ -1,0 +1,11 @@
+{
+  "fixture": "post-tool-use.json",
+  "sourceContract": "Claude Code hook JSON protocol (PostToolUse)",
+  "provider": "claude-code",
+  "capturedDate": "2026-07-25",
+  "author": "otel-hook parity owner (agent)",
+  "sanitization": "Tool response content is an invented placeholder string, explicitly labeled synthetic; duration is an arbitrary small integer.",
+  "licenseBasis": "Original synthetic authorship.",
+  "sha256": "bff3230a1a1078ab457dc64f338b9d4a9f0e322d7aac9009de62e6f9302a1991",
+  "notes": "Pairs with pre-tool-use.json to exercise tool.start/tool.end mapping and duration semantics."
+}

@@ -1,0 +1,7 @@
+{
+  "hook_event_name": "SessionStart",
+  "session_id": "sess-parity-claude-001",
+  "transcript_path": "/workspace/fixture-repo/.claude/transcripts/sess-parity-claude-001.jsonl",
+  "cwd": "/workspace/fixture-repo",
+  "source": "startup"
+}

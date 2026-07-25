@@ -1,0 +1,11 @@
+{
+  "fixture": "stop.json",
+  "sourceContract": "Claude Code hook JSON protocol (Stop), with usage fields shaped to reproduce the exact top-level-vs-nested-usage precedence probe used to characterize opentelemetry-hooks==0.14.0's token accounting",
+  "provider": "claude-code",
+  "capturedDate": "2026-07-25",
+  "author": "otel-hook parity owner (agent)",
+  "sanitization": "last_assistant_message is an invented placeholder sentence; token counts are arbitrary small integers chosen to exercise cache/total-tokens semantics, not measurements of any real model call.",
+  "licenseBasis": "Original synthetic authorship.",
+  "sha256": "4b03097552b7ece7a15307b272f07eb516f49c5564397dcc9e75878625a86e76",
+  "notes": "Drives DIVERGENCE-001/002/003 (total_tokens pass-through not computed, no reasoning-token support, cache accounting not reconciled with input) in tests/parity/divergence-manifest.ts."
+}

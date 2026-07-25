@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/os-factory/otel-hook/fixtures/provenance.schema.json",
+  "title": "Fixture provenance record",
+  "description": "Sidecar record required for every synthetic fixture under fixtures/**. One `<name>.provenance.json` accompanies each `<name>.json` fixture and documents where the fixture's shape came from, how it was sanitized, and a content hash so drift is detectable in review.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "fixture",
+    "sourceContract",
+    "provider",
+    "capturedDate",
+    "author",
+    "sanitization",
+    "licenseBasis",
+    "sha256"
+  ],
+  "properties": {
+    "fixture": {
+      "type": "string",
+      "description": "Filename of the fixture this record describes, relative to this file's directory.",
+      "pattern": "^[A-Za-z0-9._-]+\\.json$"
+    },
+    "sourceContract": {
+      "type": "string",
+      "description": "What protocol/contract the fixture's shape is modeled on: a public spec URL, a named third-party CLI's documented hook format, or \"synthetic\" when the shape is invented for this repository.",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "provider": {
+      "type": "string",
+      "description": "Provider id the fixture represents (lowercase, hyphenated), or \"synthetic\" for the invented reference protocol.",
+      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"
+    },
+    "providerVersionObserved": {
+      "type": "string",
+      "description": "Version of the third-party tool the contract was observed against, if any. Omitted for purely synthetic fixtures.",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "capturedDate": {
+      "type": "string",
+      "description": "ISO 8601 date the fixture was authored or last reviewed.",
+      "format": "date"
+    },
+    "author": {
+      "type": "string",
+      "description": "Person or agent role that authored the fixture.",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "sanitization": {
+      "type": "string",
+      "description": "Explicit statement of what was removed or invented to make this fixture safe: no real transcript text, no real credentials, no real filesystem paths or hostnames.",
+      "minLength": 1,
+      "maxLength": 1024
+    },
+    "licenseBasis": {
+      "type": "string",
+      "description": "Why this repository may include the fixture: original synthetic authorship, or a specific permissive license covering a reproduced protocol shape.",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "sha256": {
+      "type": "string",
+      "description": "Lowercase hex SHA-256 of the exact bytes of the sibling fixture file, recomputed and checked by scripts/fixtures/validate-fixtures.mjs.",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "notes": {
+      "type": "string",
+      "description": "Optional free-text context, e.g. which parity dimension the fixture exists to exercise.",
+      "maxLength": 1024
+    }
+  }
+}

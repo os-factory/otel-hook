@@ -1,0 +1,11 @@
+{
+  "fixture": "post-compact.json",
+  "sourceContract": "Claude Code hook JSON protocol (PostCompact)",
+  "provider": "claude-code",
+  "capturedDate": "2026-07-25",
+  "author": "otel-hook parity owner (agent)",
+  "sanitization": "All values are invented; context_tokens_after is an arbitrary round number, not a measurement of any real session.",
+  "licenseBasis": "Original synthetic authorship.",
+  "sha256": "985fadb45c21709b81eee53e2efb2991cefc2b9275008a41b1b371b3ccf87b45",
+  "notes": "Pairs with pre-compact.json; see DIVERGENCE-004 in tests/parity/divergence-manifest.ts."
+}

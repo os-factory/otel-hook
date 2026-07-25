@@ -1,0 +1,6 @@
+{
+  "hook_event_name": "SessionEnd",
+  "session_id": "sess-parity-claude-001",
+  "cwd": "/workspace/fixture-repo",
+  "reason": "completed"
+}

@@ -1,0 +1,11 @@
+{
+  "fixture": "pre-tool-use-mcp.json",
+  "sourceContract": "Cursor hook JSON protocol (preToolUse) with an MCP-encoded tool name (mcp__<server>__<tool>)",
+  "provider": "cursor",
+  "capturedDate": "2026-07-25",
+  "author": "otel-hook parity owner (agent)",
+  "sanitization": "Tool name and query are invented placeholders; no real MCP server or issue tracker is referenced.",
+  "licenseBasis": "Original synthetic authorship.",
+  "sha256": "bda1fc6ab5112cdea0163f4a699d4c4e0b060dfa4e283350a3320ccd0016bbcb",
+  "notes": "Parity confirmation, not a divergence: both opentelemetry-hooks and our comparison mapper split mcp__<server>__<tool> into separate server/tool fields; asserted equal in tests/parity/cursor.parity.test.ts."
+}

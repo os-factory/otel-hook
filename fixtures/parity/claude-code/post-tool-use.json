@@ -1,0 +1,9 @@
+{
+  "hook_event_name": "PostToolUse",
+  "session_id": "sess-parity-claude-001",
+  "cwd": "/workspace/fixture-repo",
+  "tool_use_id": "tool-parity-claude-001",
+  "tool_name": "Read",
+  "tool_response": { "content": "synthetic file contents, not a real repository" },
+  "duration_ms": 42
+}

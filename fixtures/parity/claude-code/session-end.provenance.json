@@ -1,0 +1,11 @@
+{
+  "fixture": "session-end.json",
+  "sourceContract": "Claude Code hook JSON protocol (SessionEnd)",
+  "provider": "claude-code",
+  "capturedDate": "2026-07-25",
+  "author": "otel-hook parity owner (agent)",
+  "sanitization": "All values are invented placeholders.",
+  "licenseBasis": "Original synthetic authorship.",
+  "sha256": "8c3d53437e74c2b645d2a60b44d7e2fa873087adf53d3dc8ba4dbd889ec3c9da",
+  "notes": "Final event of the claude-code parity session sequence; exercises session.end mapping. Also drives DIVERGENCE-006 (opentelemetry-hooks maintains no session-cumulative usage total and emits an unconditional session rollup span with no canonical counterpart) in tests/parity/divergence-manifest.ts."
+}

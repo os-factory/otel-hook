@@ -1,0 +1,11 @@
+{
+  "fixture": "user-prompt-submit.json",
+  "sourceContract": "Claude Code hook JSON protocol (UserPromptSubmit)",
+  "provider": "claude-code",
+  "capturedDate": "2026-07-25",
+  "author": "otel-hook parity owner (agent)",
+  "sanitization": "Prompt text is an invented sentence about this repository's own fixture directory, not a captured user conversation. Session id and cwd are synthetic.",
+  "licenseBasis": "Original synthetic authorship.",
+  "sha256": "8a8ccf6b103df159f9f216b0b2e1ced99e4744be0f29ebe33ce34964e7f47ce7",
+  "notes": "Exercises prompt.submitted mapping and content-disclosure defaults on both sides of the differential."
+}

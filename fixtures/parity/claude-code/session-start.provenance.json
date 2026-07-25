@@ -1,0 +1,11 @@
+{
+  "fixture": "session-start.json",
+  "sourceContract": "Claude Code hook JSON protocol (SessionStart), as documented publicly by Anthropic for Claude Code hooks and independently corroborated by the opentelemetry-hooks==0.14.0 ClaudeEventAdapter field usage (hook_event_name, session_id, transcript_path, cwd, source)",
+  "provider": "claude-code",
+  "capturedDate": "2026-07-25",
+  "author": "otel-hook parity owner (agent)",
+  "sanitization": "All values are invented placeholders: session id, transcript path, and cwd are synthetic strings under /workspace/fixture-repo. No real transcript, credential, hostname, or home directory appears.",
+  "licenseBasis": "Original synthetic authorship; the field-name shape mirrors a publicly documented hook protocol, not copyrightable expression, so no third-party content is reproduced.",
+  "sha256": "b990c27e9f162f4bb156088909820e95cc9314cb905fff580d49cbfefe7483ae",
+  "notes": "First event of the claude-code parity session sequence; exercises session.start mapping and provider-detection-by-flag. Also drives DIVERGENCE-005 (opentelemetry-hooks copies cwd/workspace verbatim into span attributes; our workspace identity is always an opaque salted hash) in tests/parity/divergence-manifest.ts."
+}

@@ -1,0 +1,11 @@
+{
+  "fixture": "post-tool-use-mcp.json",
+  "sourceContract": "Cursor hook JSON protocol (afterMCPExecution) reporting duration in fractional seconds",
+  "provider": "cursor",
+  "capturedDate": "2026-07-25",
+  "author": "otel-hook parity owner (agent)",
+  "sanitization": "Duration is an arbitrary small fractional value, not a measurement of any real tool call.",
+  "licenseBasis": "Original synthetic authorship.",
+  "sha256": "66d3850e690693a14524f912526f80b83d328e04b6221124e771aa2853f7585a",
+  "notes": "Parity confirmation, not a divergence: both sides convert Cursor's fractional-seconds duration field to milliseconds identically; asserted equal in tests/parity/cursor.parity.test.ts."
+}

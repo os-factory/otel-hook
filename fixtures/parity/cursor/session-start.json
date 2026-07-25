@@ -1,0 +1,6 @@
+{
+  "hook_event_name": "sessionStart",
+  "conversation_id": "conv-parity-cursor-001",
+  "cwd": "/workspace/fixture-repo",
+  "composer_mode": "agent"
+}

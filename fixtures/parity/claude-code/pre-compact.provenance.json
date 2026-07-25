@@ -1,0 +1,11 @@
+{
+  "fixture": "pre-compact.json",
+  "sourceContract": "Claude Code hook JSON protocol (PreCompact)",
+  "provider": "claude-code",
+  "capturedDate": "2026-07-25",
+  "author": "otel-hook parity owner (agent)",
+  "sanitization": "All values are invented; context_tokens_before is an arbitrary round number, not a measurement of any real session.",
+  "licenseBasis": "Original synthetic authorship.",
+  "sha256": "d5b680bb2d24d6a50bd736625ad6cc4f496dc0c448381c8d16ceee18867aa217",
+  "notes": "Drives DIVERGENCE-004 (opentelemetry-hooks has no _EVENT_ATTR_MAP entry for PreCompact/PostCompact and drops compaction-specific fields); see tests/parity/divergence-manifest.ts."
+}

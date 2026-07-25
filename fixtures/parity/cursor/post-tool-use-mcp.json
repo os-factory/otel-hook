@@ -1,0 +1,8 @@
+{
+  "hook_event_name": "afterMCPExecution",
+  "conversation_id": "conv-parity-cursor-001",
+  "generation_id": "gen-parity-cursor-001",
+  "cwd": "/workspace/fixture-repo",
+  "tool_name": "mcp__github__search_issues",
+  "duration": 0.084
+}

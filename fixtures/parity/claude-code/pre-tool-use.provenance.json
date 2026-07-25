@@ -1,0 +1,11 @@
+{
+  "fixture": "pre-tool-use.json",
+  "sourceContract": "Claude Code hook JSON protocol (PreToolUse)",
+  "provider": "claude-code",
+  "capturedDate": "2026-07-25",
+  "author": "otel-hook parity owner (agent)",
+  "sanitization": "Tool name and file path are invented placeholders inside a synthetic repository root; no real file contents or paths are present.",
+  "licenseBasis": "Original synthetic authorship.",
+  "sha256": "7bffb53e37e3e6b4ef57991d6e51167c7886102eda812770f36d55b194415805",
+  "notes": "Pairs with post-tool-use.json to exercise tool.start/tool.end mapping."
+}

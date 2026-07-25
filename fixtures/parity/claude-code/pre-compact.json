@@ -1,0 +1,7 @@
+{
+  "hook_event_name": "PreCompact",
+  "session_id": "sess-parity-claude-001",
+  "cwd": "/workspace/fixture-repo",
+  "trigger": "automatic",
+  "context_tokens_before": 180000
+}

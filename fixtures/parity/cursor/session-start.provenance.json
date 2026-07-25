@@ -1,0 +1,11 @@
+{
+  "fixture": "session-start.json",
+  "sourceContract": "Cursor hook JSON protocol (sessionStart, camelCase event naming)",
+  "provider": "cursor",
+  "capturedDate": "2026-07-25",
+  "author": "otel-hook parity owner (agent)",
+  "sanitization": "All values are invented placeholders under a synthetic repository root.",
+  "licenseBasis": "Original synthetic authorship.",
+  "sha256": "d5c253a3b9f397ab534ecbbe53e3c383dc6d681773c1530c8000e1b4298b249e",
+  "notes": "Exercises provider-specific event-name aliasing (camelCase -> canonical) distinct from Claude Code's PascalCase names."
+}
