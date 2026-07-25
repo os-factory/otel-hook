@@ -1,0 +1,12 @@
+{
+  "hookEventName": "PostToolUse",
+  "conversationId": "conv_synthetic_0001",
+  "workspacePaths": ["/workspace/example-repo"],
+  "invocationNum": 3,
+  "stepIdx": 6,
+  "toolName": "run_terminal_command",
+  "toolResponse": { "exitCode": 1 },
+  "isError": true,
+  "transcriptPath": "/tmp/antigravity/example-repo/transcript.jsonl",
+  "artifactDirectoryPath": "/tmp/antigravity/example-repo/artifacts"
+}

@@ -1,0 +1,12 @@
+{
+  "hookEventName": "PostToolUse",
+  "conversationId": "conv_synthetic_0001",
+  "workspacePaths": ["/workspace/example-repo"],
+  "invocationNum": 3,
+  "stepIdx": 5,
+  "toolName": "read_file",
+  "toolResponse": { "byteLength": 128 },
+  "isError": false,
+  "transcriptPath": "/tmp/antigravity/example-repo/transcript.jsonl",
+  "artifactDirectoryPath": "/tmp/antigravity/example-repo/artifacts"
+}

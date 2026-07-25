@@ -1,0 +1,9 @@
+{
+  "hookEventName": "PostInvocation",
+  "conversationId": "conv_synthetic_0001",
+  "workspacePaths": ["/workspace/example-repo"],
+  "invocationNum": 3,
+  "transcriptPath": "/tmp/antigravity/example-repo/transcript.jsonl",
+  "artifactDirectoryPath": "/tmp/antigravity/example-repo/artifacts",
+  "agentVersion": "1.0.0-preview"
+}

@@ -1,0 +1,9 @@
+{
+  "hookEventName": "Stop",
+  "conversationId": "conv_synthetic_0001",
+  "workspacePaths": ["/workspace/example-repo"],
+  "invocationNum": 4,
+  "fullyIdle": false,
+  "transcriptPath": "/tmp/antigravity/example-repo/transcript.jsonl",
+  "artifactDirectoryPath": "/tmp/antigravity/example-repo/artifacts"
+}

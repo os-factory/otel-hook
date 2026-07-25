@@ -1,0 +1,11 @@
+{
+  "hookEventName": "PreToolUse",
+  "conversationId": "conv_synthetic_0001",
+  "workspacePaths": ["/workspace/example-repo"],
+  "invocationNum": 4,
+  "stepIdx": 9,
+  "toolName": "invoke_subagent",
+  "toolInput": { "task": "run the test suite" },
+  "transcriptPath": "/tmp/antigravity/example-repo/transcript.jsonl",
+  "artifactDirectoryPath": "/tmp/antigravity/example-repo/artifacts"
+}

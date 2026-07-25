@@ -1,0 +1,13 @@
+{
+  "hookEventName": "PreToolUse",
+  "conversationId": "conv_synthetic_0001",
+  "workspacePaths": ["/workspace/example-repo"],
+  "invocationNum": 3,
+  "stepIdx": 7,
+  "toolName": "write_file",
+  "toolInput": { "path": "src/example.ts", "content": "example" },
+  "transcriptPath": "/tmp/antigravity/example-repo/transcript.jsonl",
+  "artifactDirectoryPath": "/tmp/antigravity/example-repo/artifacts",
+  "futureField": "some-value-a-newer-antigravity-release-might-add",
+  "experimentalFlags": { "betaFeature": true }
+}

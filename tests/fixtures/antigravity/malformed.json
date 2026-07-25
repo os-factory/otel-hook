@@ -1,0 +1,6 @@
+{
+  "hookEventName": "PreToolUse",
+  "conversationId": "conv_synthetic_0001",
+  "workspacePaths": ["/workspace/example-repo"],
+  "invocationNum": 3
+}
