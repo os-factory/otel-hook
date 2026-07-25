@@ -27,12 +27,15 @@ export const ANTIGRAVITY_PROVIDER_ID = "antigravity" as const;
 
 /**
  * What this adapter can honestly observe from the five documented command
- * hooks. Token/cache accounting and a stable subagent lifecycle are both
- * undocumented for Antigravity, so both are declared unavailable rather than
- * approximated (see `./maturity.ts`).
+ * hooks. Only PreToolUse/PostToolUse carry a lifecycle fact the canonical
+ * model can represent without inventing anything: PreInvocation,
+ * PostInvocation, and Stop expose invocation/execution bookkeeping, not a
+ * session or generation identity (no `modelId`, no genuine start/end
+ * signal), so none of them produce an event — see `parse()` below and
+ * `./maturity.ts` for what would need to change that.
  */
 export const ANTIGRAVITY_CAPABILITIES: ProviderCapabilities = Object.freeze({
-  lifecycleEvents: Object.freeze(["session.start", "session.end", "tool.start", "tool.end"] as const),
+  lifecycleEvents: Object.freeze(["tool.start", "tool.end"] as const),
   usageTemporality: "delta",
   reportsCachedInput: false,
   reportsCacheCreation: false,
@@ -55,9 +58,13 @@ export type AntigravityAdapterOptions = {
  *
  * Maps the five documented camelCase command hooks onto canonical events
  * conservatively: fields the hooks do not expose (model identifiers, usage,
- * a genuine session-start signal) are never fabricated. See ADR 0003 for the
- * adapter contract this implements and `./maturity.ts` for what would need to
- * be verified before this leaves `experimental`.
+ * a genuine session start/end signal) are never fabricated. PreInvocation,
+ * PostInvocation, and Stop report invocation and execution-completion
+ * bookkeeping only — none of it converts to a canonical event without
+ * inventing a session or generation identity, so all three are ignored with
+ * a diagnostic reason. See ADR 0003 for the adapter contract this implements
+ * and `./maturity.ts` for what would need to be verified before this leaves
+ * `experimental`.
  */
 export const createAntigravityAdapter = (
   options: AntigravityAdapterOptions = {},
@@ -143,30 +150,19 @@ export const createAntigravityAdapter = (
     });
 
     switch (payload.hookEventName) {
-      case "PreInvocation": {
-        if (payload.invocationNum !== 0) {
-          return {
-            status: "ignored",
-            reason: "PreInvocation with invocationNum > 0 carries no additional documented lifecycle fact",
-          };
-        }
-        factory.build({
-          type: "session.start",
-          sessionKind: "unknown",
-          ...(payload.agentVersion === undefined ? {} : { agentVersion: payload.agentVersion }),
-          extensions: {
-            // Marks that this session.start is inferred from the first
-            // observed invocation, not a genuine session-start signal from
-            // the provider: Antigravity documents no such hook.
-            "antigravity.session-start-inferred": true,
-          },
-        });
-        break;
-      }
+      case "PreInvocation":
+        return {
+          status: "ignored",
+          reason:
+            "PreInvocation reports invocation bookkeeping only; it carries no modelId or usage, so it cannot " +
+            "become a generation fact, and it is not a genuine session-start signal Antigravity documents",
+        };
       case "PostInvocation":
         return {
           status: "ignored",
-          reason: "PostInvocation carries no documented lifecycle fact beyond invocation bookkeeping",
+          reason:
+            "PostInvocation reports invocation bookkeeping only; it carries no modelId, usage, or outcome that " +
+            "the canonical model can represent without inventing a generation fact",
         };
       case "PreToolUse": {
         const toolCallId = context.ids.newOpaqueId([
@@ -216,16 +212,15 @@ export const createAntigravityAdapter = (
         });
         break;
       }
-      case "Stop": {
-        if (!payload.fullyIdle) {
-          return {
-            status: "ignored",
-            reason: "Stop received while the agent is not fully idle; the conversation continues",
-          };
-        }
-        factory.build({ type: "session.end", reason: "completed" });
-        break;
-      }
+      case "Stop":
+        return {
+          status: "ignored",
+          reason: payload.fullyIdle
+            ? "Stop signals execution/turn completion (fullyIdle=true) but exposes no session or generation " +
+              "identity, so it cannot become session.end or generation.end without inventing one"
+            : "Stop received while the agent is not fully idle; the conversation continues and the hook exposes " +
+              "no lifecycle fact the canonical model can represent",
+        };
     }
 
     return { status: "parsed", events: factory.events() };

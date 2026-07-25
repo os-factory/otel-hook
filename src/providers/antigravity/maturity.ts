@@ -16,33 +16,39 @@ export type AntigravityProviderMaturity = typeof ANTIGRAVITY_PROVIDER_MATURITY;
  * What must be verified against real Antigravity hook captures before this
  * adapter can be promoted past `experimental`:
  *
- * 1. `invocationNum` indexing: this adapter assumes it is 0-based and treats
- *    `invocationNum === 0` as the first invocation of a conversation, which is
- *    the only signal used to emit a (marked-inferred) `session.start`. If the
- *    real counter is 1-based, or does not reset per conversation, that
- *    assumption is wrong and needs a fixed base or an explicit start signal.
- * 2. Whether `PreInvocation`/`PostInvocation` ever expose a model identifier
- *    or usage figures. If they do, promote from the current session-start/
- *    ignored handling to `generation.start`/`generation.end` — this adapter
- *    deliberately does not fabricate a `modelId` to unlock that today.
- * 3. Whether Antigravity reports its own tool-call identifier. This adapter
+ * 1. Whether `PreInvocation`/`PostInvocation` ever expose a model identifier
+ *    or usage figures. If they do, promote from the current ignored handling
+ *    to `generation.start`/`generation.end` — this adapter deliberately does
+ *    not fabricate a `modelId` to unlock that today, and does not treat
+ *    `invocationNum === 0` as a session-start signal: Antigravity documents
+ *    no such hook, and a genuine session-start fact requires more than an
+ *    invocation counter reaching zero.
+ * 2. Whether Antigravity documents any hook that reports a real session or
+ *    conversation start/end (as opposed to per-invocation bookkeeping). If
+ *    one exists, add `session.start`/`session.end` handling for it instead of
+ *    inferring boundaries from `PreInvocation`/`Stop`.
+ * 3. Whether `Stop` (or another hook) ever exposes enough to honestly close
+ *    out a `generation.end` — a model identifier, an outcome, or a
+ *    generation id correlating it to a prior invocation. Today `Stop` is
+ *    ignored regardless of `fullyIdle`, because turn/execution completion
+ *    alone does not map to any canonical event without inventing one.
+ * 4. Whether Antigravity reports its own tool-call identifier. This adapter
  *    derives `toolCallId` from `conversationId` + `stepIdx`; a native id
  *    would be strictly more precise and should replace the derived one.
- * 4. Whether `invoke_subagent` warrants a dedicated subagent lifecycle
+ * 5. Whether `invoke_subagent` warrants a dedicated subagent lifecycle
  *    (`subagent.start`/`subagent.end` with parent/child invocation identity)
  *    instead of being modeled as an ordinary delegated tool call.
- * 5. Whether `Stop.fullyIdle` is the correct — and only — terminal signal for
- *    a conversation, and whether `PostToolUse.isError` is really optional or
- *    always present.
- * 6. A captured, redacted end-to-end transcript replayed through this
+ * 6. Whether `PostToolUse.isError` is really optional or always present.
+ * 7. A captured, redacted end-to-end transcript replayed through this
  *    adapter with zero `schema-validation-failed` or `privacy-policy-violation`
  *    diagnostics.
  */
 export const ANTIGRAVITY_PROMOTION_GATES: readonly string[] = Object.freeze([
-  "confirm invocationNum indexing base and per-conversation reset behaviour",
   "confirm whether PreInvocation/PostInvocation ever expose modelId or usage",
+  "confirm whether any hook documents a genuine session/conversation start or end",
+  "confirm whether Stop or another hook can honestly close out a generation.end",
   "confirm whether Antigravity reports a native tool-call identifier",
   "confirm whether invoke_subagent should have a dedicated subagent lifecycle",
-  "confirm Stop.fullyIdle and PostToolUse.isError against real payloads",
+  "confirm PostToolUse.isError against real payloads",
   "replay a captured, redacted transcript with zero validation/privacy diagnostics",
 ]);

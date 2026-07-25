@@ -95,7 +95,7 @@ describe("antigravity adapter: capabilities and maturity", () => {
     expect(describeAdapter(adapter)).toEqual({
       id: "antigravity",
       version: "0.1.0",
-      lifecycleEvents: ["session.start", "session.end", "tool.start", "tool.end"],
+      lifecycleEvents: ["tool.start", "tool.end"],
       usageTemporality: "delta",
     });
     expect(ANTIGRAVITY_CAPABILITIES.reportsCachedInput).toBe(false);
@@ -149,32 +149,26 @@ describe("antigravity adapter: parse() unit behaviour", () => {
 });
 
 describe("antigravity adapter: end-to-end lifecycle mapping", () => {
-  it("infers a partial session.start only from the first invocation", async () => {
+  it("ignores every PreInvocation without inventing a session-start fact", async () => {
     const harness = createTestHook({ adapters: [createAntigravityAdapter()] });
-    const outcome = await harness.hook.ingest(detectionInput(loadAntigravityFixture("pre-invocation-first.json")));
-
-    expect(outcome.attribution).toBe("attributed");
-    expect(harness.sink.events()).toHaveLength(1);
-    const event = harness.sink.events()[0];
-    expect(event?.type).toBe("session.start");
-    if (event?.type === "session.start") {
-      expect(event.sessionKind).toBe("unknown");
-      expect(event.model).toBeUndefined();
-      expect(event.agentVersion).toBe("1.0.0-preview");
-      expect(event.extensions["antigravity.session-start-inferred"]).toBe(true);
-    }
-  });
-
-  it("ignores later invocations and post-invocation bookkeeping", async () => {
-    const harness = createTestHook({ adapters: [createAntigravityAdapter()] });
-    const later = await harness.hook.ingest(
+    const first = await harness.hook.ingest(detectionInput(loadAntigravityFixture("pre-invocation-first.json")));
+    const subsequent = await harness.hook.ingest(
       detectionInput(loadAntigravityFixture("pre-invocation-subsequent.json")),
     );
+
+    expect(first.attribution).toBe("not-applicable");
+    expect(first.attributionReason).toBe("adapter-ignored-input");
+    expect(subsequent.attribution).toBe("not-applicable");
+    expect(subsequent.attributionReason).toBe("adapter-ignored-input");
+    expect(harness.sink.events()).toEqual([]);
+  });
+
+  it("ignores post-invocation bookkeeping", async () => {
+    const harness = createTestHook({ adapters: [createAntigravityAdapter()] });
     const post = await harness.hook.ingest(detectionInput(loadAntigravityFixture("post-invocation.json")));
 
-    expect(later.attribution).toBe("not-applicable");
-    expect(later.attributionReason).toBe("adapter-ignored-input");
     expect(post.attribution).toBe("not-applicable");
+    expect(post.attributionReason).toBe("adapter-ignored-input");
     expect(harness.sink.events()).toEqual([]);
   });
 
@@ -222,31 +216,26 @@ describe("antigravity adapter: end-to-end lifecycle mapping", () => {
     expect(event.outcome).toBe("error");
   });
 
-  it("emits session.end only for a fully idle Stop", async () => {
+  it("ignores Stop regardless of fullyIdle, without inventing a session-end fact", async () => {
     const harness = createTestHook({ adapters: [createAntigravityAdapter()] });
     const idle = await harness.hook.ingest(detectionInput(loadAntigravityFixture("stop-fully-idle.json")));
     const notIdle = await harness.hook.ingest(detectionInput(loadAntigravityFixture("stop-not-idle.json")));
 
-    expect(idle.attribution).toBe("attributed");
+    expect(idle.attribution).toBe("not-applicable");
+    expect(idle.attributionReason).toBe("adapter-ignored-input");
     expect(notIdle.attribution).toBe("not-applicable");
     expect(notIdle.attributionReason).toBe("adapter-ignored-input");
-    expect(harness.sink.events()).toHaveLength(1);
-    const event = harness.sink.events()[0];
-    expect(event?.type).toBe("session.end");
-    if (event?.type === "session.end") {
-      expect(event.reason).toBe("completed");
-    }
+    expect(harness.sink.events()).toEqual([]);
   });
 
-  it("handles repeated fully-idle Stop events without special-casing them", async () => {
+  it("ignores repeated fully-idle Stop events identically", async () => {
     const harness = createTestHook({ adapters: [createAntigravityAdapter()] });
     const first = await harness.hook.ingest(detectionInput(loadAntigravityFixture("stop-fully-idle.json")));
     const second = await harness.hook.ingest(detectionInput(loadAntigravityFixture("stop-fully-idle.json")));
 
-    expect(first.attribution).toBe("attributed");
-    expect(second.attribution).toBe("attributed");
-    expect(harness.sink.events().filter((event) => event.type === "session.end")).toHaveLength(2);
-    expect(harness.sink.events()[0]?.sequence).not.toBe(harness.sink.events()[1]?.sequence);
+    expect(first.attribution).toBe("not-applicable");
+    expect(second.attribution).toBe("not-applicable");
+    expect(harness.sink.events()).toEqual([]);
   });
 });
 

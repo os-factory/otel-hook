@@ -22,14 +22,14 @@ live credentials.
 
 | File | Scenario |
 | --- | --- |
-| `pre-invocation-first.json` | First invocation of a conversation (`invocationNum: 0`) |
-| `pre-invocation-subsequent.json` | A later invocation (`invocationNum: 3`) — no session-start fact |
-| `post-invocation.json` | Post-invocation bookkeeping only |
+| `pre-invocation-first.json` | First invocation of a conversation (`invocationNum: 0`) — ignored, no lifecycle fact |
+| `pre-invocation-subsequent.json` | A later invocation (`invocationNum: 3`) — ignored, no lifecycle fact |
+| `post-invocation.json` | Post-invocation bookkeeping only — ignored, no lifecycle fact |
 | `pre-tool-use.json` / `post-tool-use.json` | A correlated tool-call pair (`stepIdx: 5`) |
 | `pre-tool-use-subagent.json` / `post-tool-use-subagent.json` | `invoke_subagent` modeled as a delegated tool call |
 | `post-tool-use-error.json` | A failed tool call (`isError: true`) |
-| `stop-fully-idle.json` | Terminal `Stop` (`fullyIdle: true`) |
-| `stop-not-idle.json` | Non-terminal `Stop` (`fullyIdle: false`) |
+| `stop-fully-idle.json` | `Stop` with `fullyIdle: true` — ignored, no lifecycle fact |
+| `stop-not-idle.json` | `Stop` with `fullyIdle: false` — ignored, no lifecycle fact |
 | `malformed.json` | Recognizable `hookEventName` but missing required fields |
 | `unknown-fields.json` | Valid payload plus additive/unknown fields |
 | `secrets-tool-input.json` | Tool input carrying secret-shaped keys and values |
