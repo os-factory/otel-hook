@@ -1,0 +1,61 @@
+import type { CallbackDeduplicator } from "./dedup.js";
+import type { SpanCorrelator } from "./span-correlator.js";
+import type { UsageAccumulator } from "./usage-accumulator.js";
+
+const DEFAULT_MAX_AGE_MILLIS = 24 * 60 * 60 * 1000;
+const DEFAULT_MAX_ENTRIES_PER_COMPONENT = 1_000;
+
+export type LifecycleJanitorOptions = {
+  readonly spanCorrelator?: SpanCorrelator;
+  readonly deduplicator?: CallbackDeduplicator;
+  readonly usageAccumulator?: UsageAccumulator;
+  readonly spanMaxAgeMillis?: number;
+  readonly dedupMaxAgeMillis?: number;
+  readonly usageMaxAgeMillis?: number;
+  /** Caps how many keys any single component scans per sweep. */
+  readonly maxEntriesPerComponent?: number;
+};
+
+export type LifecycleSweepStats = { readonly removed: number; readonly scanned: number };
+
+export type LifecycleCleanupReport = {
+  readonly span?: LifecycleSweepStats;
+  readonly dedup?: LifecycleSweepStats;
+  readonly usage?: LifecycleSweepStats;
+};
+
+/**
+ * Fans a single bounded cleanup pass out across whichever lifecycle
+ * components are configured.
+ *
+ * Each component already bounds its own sweep (`maxEntries`); this exists so
+ * a caller — a CLI subcommand, a periodic timer, an opportunistic call at the
+ * end of `flush()` — can run "the" cleanup without wiring each component by
+ * hand, and so the bound is enforced uniformly rather than per call site.
+ */
+export interface LifecycleJanitor {
+  runOnce(sessionId?: string): Promise<LifecycleCleanupReport>;
+}
+
+export const createLifecycleJanitor = (options: LifecycleJanitorOptions): LifecycleJanitor => {
+  const maxEntries = options.maxEntriesPerComponent ?? DEFAULT_MAX_ENTRIES_PER_COMPONENT;
+  const spanMaxAge = options.spanMaxAgeMillis ?? DEFAULT_MAX_AGE_MILLIS;
+  const dedupMaxAge = options.dedupMaxAgeMillis ?? DEFAULT_MAX_AGE_MILLIS;
+  const usageMaxAge = options.usageMaxAgeMillis ?? DEFAULT_MAX_AGE_MILLIS;
+
+  const runOnce = async (sessionId?: string): Promise<LifecycleCleanupReport> => {
+    const scope = { maxEntries, ...(sessionId === undefined ? {} : { sessionId }) };
+    const [span, dedup, usage] = await Promise.all([
+      options.spanCorrelator?.cleanup(spanMaxAge, scope),
+      options.deduplicator?.cleanup(dedupMaxAge, scope),
+      options.usageAccumulator?.cleanup(usageMaxAge, scope),
+    ]);
+    return {
+      ...(span === undefined ? {} : { span }),
+      ...(dedup === undefined ? {} : { dedup }),
+      ...(usage === undefined ? {} : { usage }),
+    };
+  };
+
+  return { runOnce };
+};
