@@ -18,5 +18,6 @@ const REPO_ROOT = path.resolve(import.meta.dirname, "..");
  * whichever file got there first.
  */
 export const setup = async (): Promise<void> => {
-  await execFileAsync("npx", ["tsup"], { cwd: REPO_ROOT, timeout: 300_000 });
+  const tsupCli = path.join(REPO_ROOT, "node_modules", "tsup", "dist", "cli-default.js");
+  await execFileAsync(process.execPath, [tsupCli], { cwd: REPO_ROOT, timeout: 300_000 });
 };
