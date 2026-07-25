@@ -21,7 +21,9 @@ export default defineConfig([
   {
     entry: { cli: "src/cli.ts" },
     format: ["esm"],
-    banner: { js: "#!/usr/bin/env node" },
+    // src/cli.ts already starts with its own "#!/usr/bin/env node"; a banner
+    // here would duplicate it, producing a second shebang line that isn't
+    // valid JS and breaks the built binary (caught by tests/packaging).
     sourcemap: true,
     splitting: false,
   },
