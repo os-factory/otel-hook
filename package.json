@@ -4,9 +4,12 @@
   "description": "Provider-neutral coding-agent hooks to OpenTelemetry",
   "scripts": {
     "test": "vitest run",
+    "test:parity": "vitest run tests/parity",
+    "test:packaging": "vitest run tests/packaging",
     "build": "tsup",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
+    "fixtures:validate": "node scripts/fixtures/validate-fixtures.mjs",
     "check": "npm run typecheck && npm run lint && npm test && npm run build"
   },
   "keywords": [],
