@@ -112,5 +112,8 @@
   "bugs": {
     "url": "https://github.com/os-factory/otel-hook/issues"
   },
-  "homepage": "https://github.com/os-factory/otel-hook#readme"
+  "homepage": "https://github.com/os-factory/otel-hook#readme",
+  "overrides": {
+    "esbuild": "^0.28.1"
+  }
 }
