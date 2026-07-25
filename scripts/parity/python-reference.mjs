@@ -27,6 +27,7 @@ import { mkdtemp, mkdir, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import { pathToFileURL } from "node:url";
 
 const execFileAsync = promisify(execFile);
 
@@ -254,7 +255,8 @@ const readStdin = async () => {
   return Buffer.concat(chunks).toString("utf8");
 };
 
-const isMainModule = import.meta.url === `file://${process.argv[1]}`;
+const isMainModule =
+  process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (isMainModule) {
   if (process.argv.includes("--probe")) {
     const availability = await isAvailable();

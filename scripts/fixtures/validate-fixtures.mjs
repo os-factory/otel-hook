@@ -17,7 +17,7 @@
 import { createHash } from "node:crypto";
 import { readFile, writeFile, readdir } from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..", "..");
@@ -173,7 +173,8 @@ export const validateFixtures = async ({ fix = false } = {}) => {
   };
 };
 
-const isMainModule = import.meta.url === `file://${process.argv[1]}`;
+const isMainModule =
+  process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (isMainModule) {
   const fix = process.argv.includes("--fix");
   const json = process.argv.includes("--json");
