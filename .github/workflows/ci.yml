@@ -38,10 +38,13 @@ jobs:
         run: npm run typecheck
       - name: Lint
         run: npm run lint
-      - name: Test (unit, parity, packaging)
-        run: npm test
+      # Build precedes test: the end-to-end suite drives the built CLI binary as
+      # a child process, which is the only way to observe a hook's stdout
+      # contract, stderr diagnostics, and exit code.
       - name: Build
         run: npm run build
+      - name: Test (unit, e2e, parity, packaging)
+        run: npm test
 
   # Targeted, single-Node-version paths on the other two platforms, per the
   # release-hardening compatibility policy (docs/compatibility-policy.md):
@@ -69,10 +72,13 @@ jobs:
         run: npm run typecheck
       - name: Lint
         run: npm run lint
-      - name: Test (unit, parity, packaging)
-        run: npm test
+      # Build precedes test: the end-to-end suite drives the built CLI binary as
+      # a child process, which is the only way to observe a hook's stdout
+      # contract, stderr diagnostics, and exit code.
       - name: Build
         run: npm run build
+      - name: Test (unit, e2e, parity, packaging)
+        run: npm test
 
   package-contents:
     name: package contents guard

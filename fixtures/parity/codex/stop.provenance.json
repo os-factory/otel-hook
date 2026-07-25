@@ -1,0 +1,11 @@
+{
+  "fixture": "stop.json",
+  "sourceContract": "Codex CLI hook JSON protocol (Stop) reporting cumulative per-session usage with cached input and reasoning output tokens",
+  "provider": "codex",
+  "capturedDate": "2026-07-25",
+  "author": "otel-hook integration owner (agent)",
+  "sanitization": "Token counts are round invented figures, not a measurement of any real turn; model id is the publicly documented name only.",
+  "licenseBasis": "Original synthetic authorship.",
+  "sha256": "618ca15410915677da199d1546818e016ef8d9e5cf9ee299084a97dbe256689d",
+  "notes": "Exercises cumulative-to-delta conversion and reasoning-token subset handling against the real codex adapter."
+}

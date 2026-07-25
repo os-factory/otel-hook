@@ -118,6 +118,26 @@ export const DIVERGENCE_MANIFEST: readonly DivergenceEntry[] = [
       "empirically confirmed extra `gen_ai.client.session` span in the claude-code fixture session output " +
       "despite IDE_OTEL_BATCH_ON_STOP=false",
   },
+  {
+    id: "DIVERGENCE-007",
+    title: "A provider's own event vocabulary is rewritten into Claude Code's",
+    dimension: "lifecycle",
+    pythonBehavior:
+      "The Gemini adapter renames each Gemini CLI hook event to the Claude Code event it considers " +
+      "equivalent: a `BeforeTool` payload produces a span named `gen_ai.client.hook.PreToolUse` with " +
+      "`gen_ai.client.hook.event=PreToolUse`, keeping the real name only in a secondary " +
+      "`gen_ai.client.hook.original_event` attribute. A consumer filtering on the primary event attribute " +
+      "therefore cannot tell a Gemini tool call from a Claude Code one, and the two providers' distinct " +
+      "hook semantics are flattened into one vocabulary.",
+    ourBehavior:
+      "Canonical event types are provider-neutral by design (`tool.start`, not any provider's hook name), and " +
+      "the provider's own name for the event is preserved verbatim and separately in " +
+      "`provenance.sourceEventName` — so `BeforeTool` stays `BeforeTool` while the lifecycle meaning is " +
+      "expressed in the canonical type. Nothing is renamed into another provider's vocabulary.",
+    citation:
+      "empirically confirmed against fixtures/parity/gemini-cli/before-tool.json: the emitted span reports " +
+      'hook.event="PreToolUse" with hook.original_event="BeforeTool" and provider_adapter="gemini"',
+  },
 ];
 
 export const findDivergence = (id: string): DivergenceEntry => {

@@ -15,7 +15,10 @@ type SmokeResult =
 
 const runSmokeTest = async (): Promise<SmokeResult> => {
   try {
-    const { stdout } = await execFileAsync(process.execPath, [SMOKE_SCRIPT, "--json"], {
+    // `--skip-build`: vitest's global setup already built dist/ for this run.
+    // Rebuilding here would run `tsup` with `clean: true` while the end-to-end
+    // suite is spawning dist/cli.js, deleting the binary mid-test.
+    const { stdout } = await execFileAsync(process.execPath, [SMOKE_SCRIPT, "--json", "--skip-build"], {
       cwd: REPO_ROOT,
       timeout: 180_000,
       maxBuffer: 16 * 1024 * 1024,
@@ -42,8 +45,12 @@ describe("packed tarball install/binary/API smoke test", () => {
 
       expect(result.steps.some((step) => step.startsWith("pack contents: only"))).toBe(true);
       expect(result.steps.some((step) => step.startsWith("install: ok"))).toBe(true);
-      expect(result.steps.filter((step) => step.startsWith("import ")).length).toBeGreaterThanOrEqual(8);
-      expect(result.steps.some((step) => step.startsWith("bin otel-hook"))).toBe(true);
+      expect(result.steps.filter((step) => step.startsWith("import ")).length).toBeGreaterThanOrEqual(14);
+      expect(result.steps.some((step) => step.includes("--version"))).toBe(true);
+      // The installed binary must be able to construct every adapter it ships
+      // and run its own diagnostic, not merely resolve its subpaths.
+      expect(result.steps.some((step) => step.includes("providers --json"))).toBe(true);
+      expect(result.steps.some((step) => step.includes("doctor --json"))).toBe(true);
     },
     200_000,
   );

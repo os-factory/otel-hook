@@ -4,6 +4,12 @@ import * as library from "../src/index.js";
 import * as model from "../src/model/index.js";
 import * as providers from "../src/providers/index.js";
 import * as testing from "../src/testing/index.js";
+import * as diagnostics from "../src/public/diagnostics.js";
+import * as lifecycle from "../src/public/lifecycle.js";
+import * as state from "../src/public/state.js";
+import * as telemetry from "../src/public/telemetry.js";
+import * as install from "../src/install/index.js";
+import * as integration from "../src/integration/index.js";
 
 describe("public surface", () => {
   it("exports the contract provider agents build against", () => {
@@ -33,6 +39,28 @@ describe("public surface", () => {
       "createRecordingTelemetrySink",
       "SILENT_HOOK_RESPONSE",
       "VERSION",
+      // Provider adapters and the default registry factory.
+      "createClaudeCodeAdapter",
+      "createCursorAdapter",
+      "createCodexAdapter",
+      "createGeminiCliAdapter",
+      "createAntigravityAdapter",
+      "createDefaultProviderRegistry",
+      "describeProviderCatalog",
+      "PROVIDER_DESCRIPTORS",
+      // Lifecycle, state, telemetry, diagnostics, and the integration runtime.
+      "createCallbackDeduplicator",
+      "createSpanCorrelator",
+      "createUsageAccumulator",
+      "createLifecycleJanitor",
+      "createFilesystemStateStore",
+      "createFileDurableSpool",
+      "createOtlpTraceSink",
+      "canonicalEventsToReadableSpans",
+      "createHealthTracker",
+      "summarizeHealth",
+      "createHookRuntime",
+      "planProviderRegistration",
     ]) {
       expect(library, name).toHaveProperty(name);
     }
@@ -42,6 +70,45 @@ describe("public surface", () => {
     expect(model.CANONICAL_SCHEMA_VERSION).toBe(1);
     expect(providers.BUILT_IN_PROVIDERS).toEqual([]);
     expect(typeof testing.createTestHook).toBe("function");
+  });
+
+  it("exposes every curated subpath with its own entry point", () => {
+    expect(typeof lifecycle.createLifecycleJanitor).toBe("function");
+    expect(typeof state.createFilesystemStateStore).toBe("function");
+    expect(typeof telemetry.createOtlpTraceSink).toBe("function");
+    expect(typeof diagnostics.summarizeHealth).toBe("function");
+    expect(typeof integration.createHookRuntime).toBe("function");
+    expect(typeof install.planProviderRegistration).toBe("function");
+  });
+
+  it("registers all five providers, keeping the experimental one visibly labelled", () => {
+    const catalog = providers.describeProviderCatalog();
+    expect(catalog.map((entry) => entry.id)).toEqual([
+      "antigravity",
+      "claude-code",
+      "codex",
+      "cursor",
+      "gemini-cli",
+    ]);
+    expect(
+      catalog.filter((entry) => entry.maturity === "experimental").map((entry) => entry.id),
+    ).toEqual(["antigravity"]);
+  });
+
+  it("keeps unstable internals out of the curated subpaths", () => {
+    // On-disk key derivation and span re-assembly are how the layers are built,
+    // not contracts a host may pin: publishing them would freeze the state
+    // layout and give hosts a way around the canonical-event boundary.
+    for (const name of ["keyDigest", "sanitizeSegment", "namespaceSegments", "createAsyncLock"]) {
+      expect(state, name).not.toHaveProperty(name);
+      expect(library, name).not.toHaveProperty(name);
+    }
+    for (const name of ["spanKey", "dedupKey", "rollupUsageKey", "LIFECYCLE_PREFIX"]) {
+      expect(lifecycle, name).not.toHaveProperty(name);
+      expect(library, name).not.toHaveProperty(name);
+    }
+    expect(telemetry).not.toHaveProperty("assembleReadableSpan");
+    expect(library).not.toHaveProperty("assembleReadableSpan");
   });
 
   it("exposes no mutable module-level identity, session, tracer, or workspace", () => {

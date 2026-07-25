@@ -1,0 +1,11 @@
+{
+  "fixture": "user-prompt-submit.json",
+  "sourceContract": "Codex CLI hook JSON protocol (UserPromptSubmit), as modelled by src/providers/codex/payload.ts",
+  "provider": "codex",
+  "capturedDate": "2026-07-25",
+  "author": "otel-hook integration owner (agent)",
+  "sanitization": "Prompt text, session id, turn id, and repository root are invented placeholders; no real transcript, path, or credential.",
+  "licenseBasis": "Original synthetic authorship.",
+  "sha256": "45afd7a0f142b57cb6996c3646b2fd271cf8edf6efeeb0f2133a58ab90432c16",
+  "notes": "Exercises the real codex adapter through the CLI-equivalent path. No Python parity is claimed for codex provenance: the pinned reference reads gen_ai.client.version from whichever codex binary is on the host PATH, which is host-dependent and unrelated to the payload."
+}

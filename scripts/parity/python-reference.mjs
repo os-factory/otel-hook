@@ -236,7 +236,13 @@ export const runSession = async (provider, payloads) => {
       reason: `otel-hook invocation failed: ${error instanceof Error ? error.message : String(error)}`,
     };
   } finally {
-    await rm(hookHome, { recursive: true, force: true });
+    // The pinned package can still be flushing state into IDE_OTEL_HOOK_HOME as
+    // the last child exits, which races the directory walk and surfaces as
+    // ENOTEMPTY. Retry, and never let cleanup of a temp directory fail a parity
+    // run: the directory is under the OS temp root either way.
+    await rm(hookHome, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }).catch(
+      () => undefined,
+    );
   }
 };
 

@@ -1,39 +1,51 @@
 # CODEOWNERS
 #
-# Replace the placeholder handles below (@core-team, @parity-team) with real
-# GitHub usernames or teams before enabling required-review branch
-# protection. Placeholders are kept here so the ownership *shape* — which
-# paths belong to which review authority — survives even before that mapping
-# is finalized. See CONTRIBUTING.md for the same areas in prose.
+# Ownership is recorded per path so the review *shape* — which areas belong to
+# which authority — is explicit and enforceable through required-review branch
+# protection. Every area currently resolves to the same maintainer; when the
+# team grows, replace the handle per area rather than flattening the areas.
+# See CONTRIBUTING.md for the same areas in prose.
 #
 # Order matters: later patterns override earlier ones for overlapping paths.
 
-# Default: unmatched paths fall to the core team for triage.
-*                                   @core-team
+# Default: unmatched paths fall to the maintainer for triage.
+*                                   @antoineFrau
 
 # Core contract: canonical model, privacy service, runtime, config, error
 # taxonomy, and the provider adapter boundary/registry itself. Provider
 # adapters and this repo's own parity/CI tooling must not change these
-# without core-team review.
-/src/model/                        @core-team
-/src/privacy/                      @core-team
-/src/runtime/                      @core-team
-/src/config/                       @core-team
-/src/errors/                       @core-team
-/src/providers/adapter.ts          @core-team
-/src/providers/builder.ts          @core-team
-/src/providers/registry.ts         @core-team
-/src/index.ts                      @core-team
-/docs/adr/                         @core-team
+# without core review.
+/src/model/                        @antoineFrau
+/src/privacy/                      @antoineFrau
+/src/runtime/                      @antoineFrau
+/src/config/                       @antoineFrau
+/src/errors/                       @antoineFrau
+/src/providers/adapter.ts          @antoineFrau
+/src/providers/builder.ts          @antoineFrau
+/src/providers/registry.ts         @antoineFrau
+/src/index.ts                      @antoineFrau
+/docs/adr/                         @antoineFrau
 
-# Parity, packaging, CI, and release hardening (this task's area).
-/tests/parity/                     @parity-team
-/tests/packaging/                  @parity-team
-/scripts/                          @parity-team
-/.github/                          @parity-team
-/fixtures/                         @parity-team
-/SECURITY.md                       @parity-team
-/CONTRIBUTING.md                   @parity-team
-/docs/compatibility-policy.md      @parity-team
-/docs/release-checklist.md         @parity-team
-/docs/shadow-mode.md               @parity-team
+# Parity, packaging, CI, and release hardening.
+/tests/parity/                     @antoineFrau
+/tests/packaging/                  @antoineFrau
+/scripts/                          @antoineFrau
+/.github/                          @antoineFrau
+/fixtures/                         @antoineFrau
+/SECURITY.md                       @antoineFrau
+/CONTRIBUTING.md                   @antoineFrau
+/docs/compatibility-policy.md      @antoineFrau
+/docs/release-checklist.md         @antoineFrau
+/docs/shadow-mode.md               @antoineFrau
+
+# Integration: the CLI, the short-lived-process runtime wiring, the registration
+# planners, and the curated public subpaths. These compose the core contract and
+# the provider adapters; they must not reinterpret either.
+/src/cli.ts                        @antoineFrau
+/src/cli/                          @antoineFrau
+/src/integration/                  @antoineFrau
+/src/install/                      @antoineFrau
+/src/public/                       @antoineFrau
+/src/providers/defaults.ts         @antoineFrau
+/src/providers/adapters.ts         @antoineFrau
+/tests/e2e/                        @antoineFrau

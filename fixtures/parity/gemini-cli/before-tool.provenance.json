@@ -1,0 +1,11 @@
+{
+  "fixture": "before-tool.json",
+  "sourceContract": "Gemini CLI command hook protocol (BeforeTool), per https://geminicli.com/docs/hooks/reference/",
+  "provider": "gemini-cli",
+  "capturedDate": "2026-07-25",
+  "author": "otel-hook integration owner (agent)",
+  "sanitization": "Tool input path and session id are invented placeholders under a synthetic repository root.",
+  "licenseBasis": "Original synthetic authorship.",
+  "sha256": "a267276fbbaf0511001e7e1bf5f6fec7091804bd8d123536d164fd7bd3e6265f",
+  "notes": "Exercises the real gemini-cli adapter, and pins DIVERGENCE-007: the pinned Python reference rewrites the provider's own BeforeTool event name to Claude Code's PreToolUse."
+}

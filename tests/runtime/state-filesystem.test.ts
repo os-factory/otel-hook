@@ -137,7 +137,18 @@ describe("createFilesystemStateStore", () => {
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const holder = store.withSessionLock("ses_lock", () => gate);
+    let signalAcquired: () => void = () => undefined;
+    const acquired = new Promise<void>((resolve) => {
+      signalAcquired = resolve;
+    });
+    const holder = store.withSessionLock("ses_lock", () => {
+      signalAcquired();
+      return gate;
+    });
+    // Wait for the holder to actually be inside the lock. Without this the
+    // contender below can win the file lock outright under CPU contention, and
+    // the test passes or fails on scheduling rather than on the timeout bound.
+    await acquired;
 
     await expect(
       createStore({ lockTimeoutMillis: 30, lockPollIntervalMillis: 5, lockStaleMillis: 10_000 }).withSessionLock(

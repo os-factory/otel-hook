@@ -11,6 +11,15 @@ export default defineConfig([
       errors: "src/errors/index.ts",
       runtime: "src/runtime/index.ts",
       testing: "src/testing/index.ts",
+      // Curated subpaths (src/public/*) rather than the internal module
+      // barrels, so key-derivation helpers and span-assembly internals stay
+      // out of the published surface.
+      lifecycle: "src/public/lifecycle.ts",
+      state: "src/public/state.ts",
+      telemetry: "src/public/telemetry.ts",
+      diagnostics: "src/public/diagnostics.ts",
+      integration: "src/integration/index.ts",
+      install: "src/install/index.ts",
     },
     format: ["esm"],
     dts: true,

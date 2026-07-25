@@ -1,0 +1,11 @@
+{
+  "fixture": "after-model.json",
+  "sourceContract": "Gemini CLI command hook protocol (AfterModel) carrying a terminal llm_response with usageMetadata",
+  "provider": "gemini-cli",
+  "capturedDate": "2026-07-25",
+  "author": "otel-hook integration owner (agent)",
+  "sanitization": "Prompt and response text are invented single sentences; token counts are invented figures.",
+  "licenseBasis": "Original synthetic authorship.",
+  "sha256": "302cba78029d5477bf6aeaf904a8bdfafa3ab8570404dba784091081ada62c6b",
+  "notes": "Exercises Gemini usageMetadata mapping (cached content and thoughts tokens) against the real adapter."
+}

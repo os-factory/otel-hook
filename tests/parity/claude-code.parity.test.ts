@@ -3,7 +3,10 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import { createClaudeCodeAdapter } from "../../src/providers/claude/adapter.js";
+import { findAdapterParityNote } from "./adapter-parity-notes.js";
 import { findDivergence } from "./divergence-manifest.js";
+import { runThroughRealAdapter } from "./harness/real-adapters.js";
 import { mapClaudeCodeSession } from "./harness/canonical-mapping.js";
 import { isPythonReferenceAvailable, runPythonSession, type PythonSpan } from "./harness/python-spans.js";
 
@@ -254,3 +257,167 @@ describe.skipIf(!availability.available)(
     });
   },
 );
+
+/**
+ * The suite above compares the Python reference against `mapClaudeCodeSession`,
+ * a comparison-only mapper over the public canonical API. That answers "what can
+ * this model express?". The suite below answers the question a consumer actually
+ * cares about — "what does the shipped `claude-code` adapter emit for this exact
+ * payload?" — by replaying the same fixtures through the real adapter and the
+ * real runtime. Where the two answers differ, the difference is named in
+ * `adapter-parity-notes.ts` rather than smoothed over.
+ */
+describe("claude-code parity: the shipped adapter on the same fixtures", () => {
+  it("attributes the session and emits the lifecycle it declares support for", async () => {
+    const payloads = await loadSession();
+    const run = await runThroughRealAdapter("claude-code", payloads);
+
+    // Every event carries the adapter's own provenance, at `exact` confidence
+    // because the caller named the provider.
+    for (const event of run.events) {
+      expect(event.provenance.providerId).toBe("claude-code");
+      expect(event.provenance.adapterId).toBe("claude-code");
+      expect(event.provenance.detectionConfidence).toBe("exact");
+      expect(event.sessionId).toBe("sess-parity-claude-001");
+    }
+    // Sequences are consecutive across the whole session, i.e. across what would
+    // be eight separate hook processes.
+    expect(run.events.map((event) => event.sequence)).toEqual(
+      run.events.map((_event, index) => index),
+    );
+    expect(run.events.map((event) => event.type)).toEqual([
+      "session.start",
+      "prompt.submitted",
+      "tool.start",
+      "tool.end",
+      "compaction.performed",
+      "generation.start",
+      "generation.end",
+    ]);
+  });
+
+  it("never lets a raw path or prompt text reach an event (privacy, DIVERGENCE-005)", async () => {
+    const divergence = findDivergence("DIVERGENCE-005");
+    const payloads = await loadSession();
+    const run = await runThroughRealAdapter("claude-code", payloads);
+
+    const serialized = JSON.stringify(run.events);
+    expect(serialized).not.toContain("/workspace/fixture-repo");
+    expect(serialized).not.toContain("The fixture directory holds synthetic");
+    for (const event of run.events) {
+      expect(event.workspace.workspaceId.startsWith("sha256:")).toBe(true);
+    }
+
+    const prompt = run.events.find((event) => event.type === "prompt.submitted");
+    expect(prompt?.type === "prompt.submitted" ? prompt.content?.disclosure : undefined).toBe("omitted");
+    expect(prompt?.type === "prompt.submitted" ? prompt.content?.text : undefined).toBeUndefined();
+    expect(
+      prompt?.type === "prompt.submitted" ? prompt.content?.characterLength : undefined,
+    ).toBeGreaterThan(0);
+    expect(divergence.dimension).toBe("privacy");
+  });
+
+  it("collapses PreCompact/PostCompact into one compaction event (DIVERGENCE-004)", async () => {
+    const payloads = await loadSession();
+    const run = await runThroughRealAdapter("claude-code", payloads);
+
+    const compactions = run.events.filter((event) => event.type === "compaction.performed");
+    expect(compactions).toHaveLength(1);
+    // PreCompact is an estimate; it is reported as "not applicable" rather than
+    // as a second lifecycle event or an error.
+    expect(run.attributions[4]).toBe("not-applicable");
+    expect(findDivergence("DIVERGENCE-004").dimension).toBe("lifecycle");
+  });
+
+  it("does not carry contextTokensBefore across the PreCompact/PostCompact boundary (ADAPTER-NOTE-002)", async () => {
+    const note = findAdapterParityNote("ADAPTER-NOTE-002");
+    const payloads = await loadSession();
+    const run = await runThroughRealAdapter("claude-code", payloads);
+
+    const compaction = run.events.find((event) => event.type === "compaction.performed");
+    expect(compaction?.type === "compaction.performed" ? compaction.contextTokensAfter : undefined).toBe(
+      42_000,
+    );
+    // The model supports it and the comparison mapper produces it; a stateless
+    // adapter cannot. If this ever becomes 180000, the note must be retired.
+    expect(
+      compaction?.type === "compaction.performed" ? compaction.contextTokensBefore : undefined,
+    ).toBeUndefined();
+    expect(
+      mapClaudeCodeSession(payloads).events.find((event) => event.type === "compaction.performed"),
+    ).toMatchObject({ contextTokensBefore: 180_000 });
+    expect(note.kind).toBe("stateless-adapter");
+  });
+
+  it("reports the PostCompact trigger as unknown rather than guessing it (ADAPTER-NOTE-004)", async () => {
+    const note = findAdapterParityNote("ADAPTER-NOTE-004");
+    const payloads = await loadSession();
+    const run = await runThroughRealAdapter("claude-code", payloads);
+
+    const compaction = run.events.find((event) => event.type === "compaction.performed");
+    expect(compaction?.type === "compaction.performed" ? compaction.trigger : undefined).toBe("unknown");
+    expect(note.kind).toBe("contract-mismatch");
+  });
+
+  it("fails closed on the SessionEnd payload instead of inventing a reason (ADAPTER-NOTE-003)", async () => {
+    const note = findAdapterParityNote("ADAPTER-NOTE-003");
+    const payloads = await loadSession();
+    const run = await runThroughRealAdapter("claude-code", payloads);
+
+    // Last payload in the session is SessionEnd; the adapter rejects it.
+    expect(run.attributions[run.attributions.length - 1]).toBe("failed");
+    expect(run.diagnosticCodes).toContain("invalid-input");
+    expect(run.events.some((event) => event.type === "session.end")).toBe(false);
+    expect(note.kind).toBe("contract-mismatch");
+  });
+
+  it("emits only the usage its declared capabilities promise (ADAPTER-NOTE-001)", async () => {
+    const note = findAdapterParityNote("ADAPTER-NOTE-001");
+    const payloads = await loadSession();
+    const run = await runThroughRealAdapter("claude-code", payloads);
+
+    const generationEnd = run.events.find((event) => event.type === "generation.end");
+    const usage = generationEnd?.type === "generation.end" ? generationEnd.usage : undefined;
+    expect(usage).toBeDefined();
+    // The nested `usage` object is the adapter's declared source, and it is
+    // honoured exactly: 500 input + 120 output, folded inclusively.
+    expect(usage).toMatchObject({
+      temporality: "delta",
+      inputTokens: 500,
+      outputTokens: 120,
+      cacheCreationAccounting: "included-in-input",
+    });
+    // The fixture's *top-level* cache and reasoning fields are outside that
+    // shape. The adapter's capabilities say so up front, which is the whole
+    // point of declaring them.
+    const { capabilities } = createClaudeCodeAdapter();
+    expect(capabilities.reportsReasoningOutput).toBe(false);
+    expect(capabilities.reportsProviderTotal).toBe(false);
+    expect(usage?.reasoningOutputTokens).toBe(0);
+    expect(usage?.providerTotalAgreement).toBe("unreported");
+
+    // The comparison mapper shows the model itself loses nothing, which is what
+    // DIVERGENCE-002 is a claim about.
+    const mapped = mapClaudeCodeSession(payloads).events.find(
+      (event) => event.type === "generation.end",
+    );
+    expect(mapped?.type === "generation.end" ? mapped.usage?.reasoningOutputTokens : undefined).toBe(15);
+    expect(note.kind).toBe("declared-capability");
+  });
+
+  it("keeps every canonical event free of the provider's raw payload", async () => {
+    const payloads = await loadSession();
+    const run = await runThroughRealAdapter("claude-code", payloads);
+
+    for (const event of run.events) {
+      const serialized = JSON.stringify(event);
+      expect(serialized).not.toContain("tool_response");
+      expect(serialized).not.toContain("hook_event_name");
+      // Extensions accept only attribute primitives, so a nested payload cannot
+      // be smuggled through them.
+      for (const value of Object.values(event.extensions)) {
+        expect(typeof (Array.isArray(value) ? value[0] : value)).not.toBe("object");
+      }
+    }
+  });
+});

@@ -90,6 +90,43 @@ const runSmokeTest = async ({ skipBuild = false } = {}) => {
         const binExecutable = path.join(consumerDir, "node_modules", ".bin", binName);
         const { stdout } = await execFileAsync(binExecutable, ["--version"]);
         steps.push(`bin ${binName} (${binPath}) --version: ${stdout.trim()}`);
+
+        // The installed binary must be able to reach every provider adapter it
+        // claims to ship: a subpath that resolves in the tarball says nothing
+        // about whether the bundled CLI can actually construct the adapters.
+        const { stdout: providersJson } = await execFileAsync(binExecutable, ["providers", "--json"]);
+        const providers = JSON.parse(providersJson);
+        if (!Array.isArray(providers) || providers.length === 0) {
+          throw new Error(`bin ${binName} providers --json returned no adapters`);
+        }
+        for (const entry of providers) {
+          if (typeof entry.id !== "string" || typeof entry.maturity !== "string") {
+            throw new Error(`bin ${binName} providers --json entry is missing id/maturity`);
+          }
+        }
+        steps.push(
+          `bin ${binName} providers --json: ${providers.map((entry) => `${entry.id}/${entry.maturity}`).join(" ")}`,
+        );
+
+        // doctor exits 1 with no endpoint configured, which is the healthy
+        // outcome to assert here: it proves the diagnostic path runs end to end
+        // in an installed package rather than only in the source tree.
+        let doctorStdout;
+        try {
+          ({ stdout: doctorStdout } = await execFileAsync(binExecutable, ["doctor", "--json"], {
+            env: { ...process.env, OTEL_HOOK_STATE_DIR: path.join(consumerDir, ".otel-hook-state") },
+          }));
+        } catch (error) {
+          if (typeof error?.stdout !== "string" || error.stdout.length === 0) {
+            throw error;
+          }
+          doctorStdout = error.stdout;
+        }
+        const report = JSON.parse(doctorStdout);
+        if (typeof report.ok !== "boolean" || !Array.isArray(report.checks)) {
+          throw new Error(`bin ${binName} doctor --json returned an unexpected report shape`);
+        }
+        steps.push(`bin ${binName} doctor --json: ${report.checks.length} check(s), ok=${String(report.ok)}`);
       }
     }
 

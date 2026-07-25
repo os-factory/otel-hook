@@ -1,0 +1,8 @@
+{
+  "session_id": "sess-parity-gemini-001",
+  "hook_event_name": "BeforeTool",
+  "cwd": "/workspace/fixture-repo",
+  "timestamp": "2026-07-25T10:00:06.000Z",
+  "tool_name": "read_file",
+  "tool_input": { "path": "src/retry.ts" }
+}

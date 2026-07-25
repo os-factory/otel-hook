@@ -25,7 +25,14 @@ describe("shadow-mode invariants for the python reference runner", () => {
   });
 
   it("always tears down the isolated hook-home directory after a session", () => {
-    expect(RUNNER_SOURCE).toMatch(/rm\(hookHome, \{ recursive: true, force: true \}\)/);
+    // The teardown retries (the reference package can still be flushing state as
+    // its last child exits, which races the directory walk and raises ENOTEMPTY)
+    // and swallows a failure so cleanup of a temp directory cannot fail a parity
+    // run. What must not change: it is `hookHome` that is removed, recursively
+    // and forcibly, in the session's `finally`.
+    expect(RUNNER_SOURCE).toMatch(/rm\(hookHome, \{\s*recursive: true,\s*force: true/);
+    expect(RUNNER_SOURCE).toMatch(/maxRetries: \d+/);
+    expect(RUNNER_SOURCE).toMatch(/} finally \{[\s\S]{0,600}?rm\(hookHome/);
   });
 
   it("pins provider identity via CLI flag rather than relying on process-tree detection", () => {

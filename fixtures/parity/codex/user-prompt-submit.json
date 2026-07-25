@@ -1,0 +1,8 @@
+{
+  "hook_event_name": "UserPromptSubmit",
+  "session_id": "sess-parity-codex-001",
+  "cwd": "/workspace/fixture-repo",
+  "turn_id": "turn-parity-codex-001",
+  "prompt": "Summarize the synthetic fixture directory layout.",
+  "occurred_at": 1700000001000
+}
