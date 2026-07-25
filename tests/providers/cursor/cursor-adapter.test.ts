@@ -233,11 +233,14 @@ describe("cursor adapter: lifecycle contract", () => {
     expect(event.contextTokensAfter).toBeUndefined();
   });
 
-  it("maps beforeReadFile to a tool.start without ever disclosing the raw path", async () => {
+  it("recognizes beforeReadFile but ignores it rather than fabricating an unclosable tool lifecycle", async () => {
     const harness = harnessWithCursor();
-    await ingest(harness, beforeReadFilePayload());
-    const event = eventOfType(harness.sink.events(), "tool.start");
-    expect(event.toolKind).toBe("read");
+    const outcome = await ingest(harness, beforeReadFilePayload());
+    expect(outcome.attribution).toBe("not-applicable");
+    expect(outcome.attributionReason).toBe("adapter-ignored-input");
+    expect(harness.sink.events()).toEqual([]);
+    expect(outcome.hookResponse.contract).toBe("provider-protocol");
+    expect(outcome.hookResponse.stdout).toBe('{"continue":true}');
     expect(batchContains(harness.sink.events(), "/workspace/synthetic-repo-a/src/billing.ts")).toBe(false);
   });
 
@@ -253,16 +256,16 @@ describe("cursor adapter: lifecycle contract", () => {
     expect(batchContains(events, "/workspace/synthetic-repo-a/src/billing.ts")).toBe(false);
   });
 
-  it("maps afterAgentThought to a generation.end scoped to its own derived id", async () => {
+  it("recognizes afterAgentThought but ignores it rather than fabricating a second generation.end", async () => {
     const harness = harnessWithCursor();
     await ingest(harness, afterAgentResponsePayload());
-    await ingest(harness, afterAgentThoughtPayload());
-    const generationEnds = harness.sink.events().filter((event) => event.type === "generation.end");
+    const outcome = await ingest(harness, afterAgentThoughtPayload());
 
-    expect(generationEnds).toHaveLength(2);
-    const thoughtEvent = generationEnds.find((event) => event.generationId !== "gen_0001");
-    expect(thoughtEvent?.generationId).toBe("gen_0001.thought.0");
-    expect(thoughtEvent?.outputContent?.[0]?.text).toBeUndefined();
+    expect(outcome.attribution).toBe("not-applicable");
+    expect(outcome.attributionReason).toBe("adapter-ignored-input");
+    const generationEnds = harness.sink.events().filter((event) => event.type === "generation.end");
+    expect(generationEnds).toHaveLength(1);
+    expect(generationEnds[0]?.generationId).toBe("gen_0001");
     expect(batchContains(harness.sink.events(), "billing module tests")).toBe(false);
   });
 });

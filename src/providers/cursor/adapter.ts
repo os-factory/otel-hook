@@ -291,6 +291,24 @@ export const createCursorAdapter = (options: CursorAdapterOptions = {}): Provide
       };
     }
 
+    if (payload.hookEventName === "afterAgentThought") {
+      return {
+        status: "ignored",
+        reason:
+          "afterAgentThought is a reasoning notification, not a generation lifecycle event; " +
+          "no canonical event type represents it and thought text is never exported",
+      };
+    }
+
+    if (payload.hookEventName === "beforeReadFile") {
+      return {
+        status: "ignored",
+        reason:
+          "beforeReadFile has no corresponding completion callback in the cursor hook protocol; " +
+          "emitting tool.start here would leave a tool lifecycle that never closes",
+      };
+    }
+
     const factory = createEventFactory({
       identity: input.identity,
       sequenceBase: input.sequenceBase,
@@ -585,48 +603,10 @@ export const createCursorAdapter = (options: CursorAdapterOptions = {}): Provide
         break;
       }
 
-      case "beforeReadFile": {
-        const toolCallId =
-          payload.toolCallId ??
-          context.ids.newOpaqueId([sessionId, "read-file", payload.filePath, String(occurredAt)]);
-        factory.build({
-          type: "tool.start",
-          toolCallId,
-          toolName: "read_file",
-          toolKind: "read",
-          ...(payload.generationId === undefined ? {} : { generationId: payload.generationId }),
-          input: context.privacy.describeContent({ kind: "tool-input", text: payload.filePath, label: "read_file" }),
-          occurredAt,
-        });
-        break;
-      }
-
-      case "afterAgentThought": {
-        // Reasoning has no dedicated canonical event type, so it is carried as
-        // a `generation.end` scoped to its own derived generation id (never the
-        // main turn's id) so it cannot be mistaken for the turn's response.
-        const thoughtGenerationId = `${payload.generationId}.thought.${String(payload.thoughtIndex ?? 0)}`;
-        factory.build({
-          type: "generation.end",
-          generationId: thoughtGenerationId,
-          model: toModelDescriptor(payload.model),
-          outcome: "ok",
-          ...(payload.thoughtText === undefined
-            ? {}
-            : {
-                outputContent: [
-                  context.privacy.describeContent({
-                    kind: "reasoning",
-                    role: "assistant",
-                    text: payload.thoughtText,
-                  }),
-                ],
-              }),
-          occurredAt,
-          idDiscriminator: "thought",
-        });
-        break;
-      }
+      // "beforeReadFile" and "afterAgentThought" are handled by the early
+      // `ignored` returns above: the former has no completion callback in the
+      // protocol, and the latter has no canonical event type. Neither case
+      // reaches this switch.
     }
 
     return {
