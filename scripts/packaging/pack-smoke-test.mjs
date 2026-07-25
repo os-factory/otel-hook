@@ -19,6 +19,7 @@ const execFileAsync = promisify(execFile);
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..", "..");
+const NPM_EXECUTABLE = process.platform === "win32" ? "npm.cmd" : "npm";
 
 const readPackageJson = async () =>
   JSON.parse(await readFile(path.join(REPO_ROOT, "package.json"), "utf8"));
@@ -32,13 +33,13 @@ const runSmokeTest = async ({ skipBuild = false } = {}) => {
   const pkg = await readPackageJson();
 
   if (!skipBuild) {
-    await execFileAsync("npm", ["run", "build"], { cwd: REPO_ROOT });
+    await execFileAsync(NPM_EXECUTABLE, ["run", "build"], { cwd: REPO_ROOT });
     steps.push("build: ok");
   }
 
   const packDestination = await mkdtemp(path.join(tmpdir(), "otel-hook-pack-"));
   const { stdout: packStdout } = await execFileAsync(
-    "npm",
+    NPM_EXECUTABLE,
     ["pack", "--json", "--pack-destination", packDestination],
     { cwd: REPO_ROOT },
   );
@@ -69,7 +70,9 @@ const runSmokeTest = async ({ skipBuild = false } = {}) => {
       path.join(consumerDir, "package.json"),
       JSON.stringify({ name: "otel-hook-packaging-smoke", version: "0.0.0", private: true, type: "module" }, null, 2),
     );
-    await execFileAsync("npm", ["install", "--no-audit", "--no-fund", tarballPath], { cwd: consumerDir });
+    await execFileAsync(NPM_EXECUTABLE, ["install", "--no-audit", "--no-fund", tarballPath], {
+      cwd: consumerDir,
+    });
     steps.push("install: ok (installed from packed tarball, not the workspace source)");
 
     for (const specifier of exportSpecifiers(pkg)) {
@@ -87,14 +90,15 @@ const runSmokeTest = async ({ skipBuild = false } = {}) => {
 
     if (pkg.bin) {
       for (const [binName, binPath] of Object.entries(pkg.bin)) {
-        const binExecutable = path.join(consumerDir, "node_modules", ".bin", binName);
-        const { stdout } = await execFileAsync(binExecutable, ["--version"]);
+        const binExecutable = path.join(consumerDir, "node_modules", pkg.name, binPath);
+        const runBin = (args) => execFileAsync(process.execPath, [binExecutable, ...args]);
+        const { stdout } = await runBin(["--version"]);
         steps.push(`bin ${binName} (${binPath}) --version: ${stdout.trim()}`);
 
         // The installed binary must be able to reach every provider adapter it
         // claims to ship: a subpath that resolves in the tarball says nothing
         // about whether the bundled CLI can actually construct the adapters.
-        const { stdout: providersJson } = await execFileAsync(binExecutable, ["providers", "--json"]);
+        const { stdout: providersJson } = await runBin(["providers", "--json"]);
         const providers = JSON.parse(providersJson);
         if (!Array.isArray(providers) || providers.length === 0) {
           throw new Error(`bin ${binName} providers --json returned no adapters`);
@@ -113,7 +117,7 @@ const runSmokeTest = async ({ skipBuild = false } = {}) => {
         // in an installed package rather than only in the source tree.
         let doctorStdout;
         try {
-          ({ stdout: doctorStdout } = await execFileAsync(binExecutable, ["doctor", "--json"], {
+          ({ stdout: doctorStdout } = await execFileAsync(process.execPath, [binExecutable, "doctor", "--json"], {
             env: { ...process.env, OTEL_HOOK_STATE_DIR: path.join(consumerDir, ".otel-hook-state") },
           }));
         } catch (error) {
