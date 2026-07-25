@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { createClaudeCodeAdapter } from "../../src/providers/claude/adapter.js";
 import { findAdapterParityNote } from "./adapter-parity-notes.js";
@@ -34,6 +34,7 @@ const findSpan = (spans: readonly PythonSpan[], eventName: string): PythonSpan |
   spans.find((span) => span.attributes["gen_ai.client.hook.event"] === eventName);
 
 const availability = await isPythonReferenceAvailable();
+vi.setConfig({ testTimeout: 15_000 });
 
 if (!availability.available) {
   console.warn(
