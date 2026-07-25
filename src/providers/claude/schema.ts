@@ -51,8 +51,10 @@ export type SessionStartPayload = z.infer<typeof sessionStartPayloadSchema>;
 export const sessionEndPayloadSchema = z.object({
   ...commonFields,
   hook_event_name: z.literal("SessionEnd"),
-  /** Matcher values: clear | resume | logout | prompt_input_exit | bypass_permissions_disabled | other. */
-  end_reason: z.string().min(1),
+  /** Current Claude Code field; values include clear, logout, prompt_input_exit, and other. */
+  reason: z.string().min(1).optional(),
+  /** Compatibility alias emitted by older wrappers and hook integrations. */
+  end_reason: z.string().min(1).optional(),
 });
 export type SessionEndPayload = z.infer<typeof sessionEndPayloadSchema>;
 
@@ -123,6 +125,7 @@ export const preCompactPayloadSchema = z.object({
   ...commonFields,
   hook_event_name: z.literal("PreCompact"),
   /** Matcher values: manual | auto. */
+  trigger: z.string().min(1).optional(),
   compact_trigger: z.string().min(1).optional(),
   estimated_tokens_removed: z.number().int().min(0).optional(),
 });
@@ -131,6 +134,7 @@ export type PreCompactPayload = z.infer<typeof preCompactPayloadSchema>;
 export const postCompactPayloadSchema = z.object({
   ...commonFields,
   hook_event_name: z.literal("PostCompact"),
+  trigger: z.string().min(1).optional(),
   compact_trigger: z.string().min(1).optional(),
   /** Best-effort/optional: not documented on the public schema, accepted if present. */
   context_tokens_before: z.number().int().min(0).optional(),

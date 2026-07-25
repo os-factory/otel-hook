@@ -83,33 +83,6 @@ export const ADAPTER_PARITY_NOTES: readonly AdapterParityNote[] = [
       "the integration layer through the injected state store, keyed by session.",
   },
   {
-    id: "ADAPTER-NOTE-003",
-    providerId: "claude-code",
-    kind: "contract-mismatch",
-    title: "SessionEnd reason field name disagreement",
-    modelSupports: "session.end carries a mapped reason (completed | aborted | error | timeout | unknown).",
-    adapterEmits:
-      "sessionEndPayloadSchema requires `end_reason`; the parity fixture sends `reason`. The payload fails " +
-      "schema validation, so the invocation is reported as an adapter failure (invalid-input) and no " +
-      "session.end event is emitted at all.",
-    resolution:
-      "A real Claude Code SessionEnd capture must settle which field name upstream sends. Until then this is " +
-      "a release blocker for claiming Claude Code session-end coverage, not a test to relax.",
-  },
-  {
-    id: "ADAPTER-NOTE-004",
-    providerId: "claude-code",
-    kind: "contract-mismatch",
-    title: "PostCompact trigger field name disagreement",
-    modelSupports: "compaction.performed carries trigger = automatic | manual | unknown.",
-    adapterEmits:
-      "The adapter reads `compact_trigger` and maps \"auto\" to automatic; the parity fixture sends " +
-      "`trigger: \"automatic\"`, so the emitted trigger is \"unknown\".",
-    resolution:
-      "Same as ADAPTER-NOTE-003: a real capture must settle the field name. `unknown` is at least honest — " +
-      "it does not assert a trigger the adapter did not read.",
-  },
-  {
     id: "ADAPTER-NOTE-005",
     providerId: "cursor",
     kind: "envelope-bridge",

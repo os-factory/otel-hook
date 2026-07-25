@@ -19,6 +19,10 @@ const UNKNOWN_MODEL: ModelDescriptor = { modelId: "unknown" };
 type SessionEndReason = "completed" | "aborted" | "error" | "timeout" | "unknown";
 
 const SESSION_END_REASON: Readonly<Record<string, SessionEndReason>> = Object.freeze({
+  completed: "completed",
+  aborted: "aborted",
+  error: "error",
+  timeout: "timeout",
   clear: "completed",
   resume: "completed",
   prompt_input_exit: "completed",
@@ -27,12 +31,13 @@ const SESSION_END_REASON: Readonly<Record<string, SessionEndReason>> = Object.fr
   other: "unknown",
 });
 
-const mapSessionEndReason = (raw: string): SessionEndReason => SESSION_END_REASON[raw] ?? "unknown";
+const mapSessionEndReason = (raw: string | undefined): SessionEndReason =>
+  raw === undefined ? "unknown" : (SESSION_END_REASON[raw] ?? "unknown");
 
 type CompactionTrigger = "automatic" | "manual" | "unknown";
 
 const mapCompactTrigger = (raw: string | undefined): CompactionTrigger => {
-  if (raw === "auto") {
+  if (raw === "auto" || raw === "automatic") {
     return "automatic";
   }
   if (raw === "manual") {
@@ -105,7 +110,7 @@ export const parseClaudeCode = (
     case "SessionEnd":
       factory.build({
         type: "session.end",
-        reason: mapSessionEndReason(payload.end_reason),
+        reason: mapSessionEndReason(payload.reason ?? payload.end_reason),
       });
       break;
 
@@ -202,7 +207,7 @@ export const parseClaudeCode = (
     case "PostCompact":
       factory.build({
         type: "compaction.performed",
-        trigger: mapCompactTrigger(payload.compact_trigger),
+        trigger: mapCompactTrigger(payload.trigger ?? payload.compact_trigger),
         ...(payload.context_tokens_before === undefined ? {} : { contextTokensBefore: payload.context_tokens_before }),
         ...(payload.context_tokens_after === undefined ? {} : { contextTokensAfter: payload.context_tokens_after }),
         ...(payload.dropped_message_count === undefined ? {} : { droppedMessageCount: payload.dropped_message_count }),

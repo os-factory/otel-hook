@@ -293,6 +293,7 @@ describe("claude-code parity: the shipped adapter on the same fixtures", () => {
       "compaction.performed",
       "generation.start",
       "generation.end",
+      "session.end",
     ]);
   });
 
@@ -349,26 +350,21 @@ describe("claude-code parity: the shipped adapter on the same fixtures", () => {
     expect(note.kind).toBe("stateless-adapter");
   });
 
-  it("reports the PostCompact trigger as unknown rather than guessing it (ADAPTER-NOTE-004)", async () => {
-    const note = findAdapterParityNote("ADAPTER-NOTE-004");
+  it("accepts the current PostCompact trigger field", async () => {
     const payloads = await loadSession();
     const run = await runThroughRealAdapter("claude-code", payloads);
 
     const compaction = run.events.find((event) => event.type === "compaction.performed");
-    expect(compaction?.type === "compaction.performed" ? compaction.trigger : undefined).toBe("unknown");
-    expect(note.kind).toBe("contract-mismatch");
+    expect(compaction?.type === "compaction.performed" ? compaction.trigger : undefined).toBe("automatic");
   });
 
-  it("fails closed on the SessionEnd payload instead of inventing a reason (ADAPTER-NOTE-003)", async () => {
-    const note = findAdapterParityNote("ADAPTER-NOTE-003");
+  it("accepts the current SessionEnd reason field", async () => {
     const payloads = await loadSession();
     const run = await runThroughRealAdapter("claude-code", payloads);
 
-    // Last payload in the session is SessionEnd; the adapter rejects it.
-    expect(run.attributions[run.attributions.length - 1]).toBe("failed");
-    expect(run.diagnosticCodes).toContain("invalid-input");
-    expect(run.events.some((event) => event.type === "session.end")).toBe(false);
-    expect(note.kind).toBe("contract-mismatch");
+    expect(run.attributions[run.attributions.length - 1]).toBe("attributed");
+    const sessionEnd = run.events.find((event) => event.type === "session.end");
+    expect(sessionEnd?.type === "session.end" ? sessionEnd.reason : undefined).toBe("completed");
   });
 
   it("emits only the usage its declared capabilities promise (ADAPTER-NOTE-001)", async () => {

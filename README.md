@@ -359,16 +359,11 @@ fixing one means updating that test rather than discovering a silent change.
    an orphaned one, but the OTLP mapping pairs `*.start` with `*.end` only within
    one batch. A lone edge is exported flagged `otelhook.span.paired=false` rather
    than merged using a duration read from state.
-4. **Claude Code `SessionEnd` fails schema validation on a `reason` field
-   (release blocker).** The adapter requires `end_reason`; this repository's parity
-   fixture sends `reason`. One of the two is wrong about upstream and a real
-   capture is needed to settle it. Until then, Claude Code session-end coverage
-   cannot be claimed. `ADAPTER-NOTE-003` in
-   `tests/parity/adapter-parity-notes.ts`.
-5. **Claude Code `PostCompact` trigger is reported as `unknown` (release
-   blocker).** The same class of field-name disagreement: the adapter reads
-   `compact_trigger`, the fixture sends `trigger`. `ADAPTER-NOTE-004`.
-6. **Claude Code usage is read only from a nested Anthropic-shaped `usage`
+4. **Claude Code hook field aliases are normalized at the adapter boundary.**
+   Current `reason` / `trigger` fields and legacy `end_reason` /
+   `compact_trigger` wrappers map to the same canonical session and compaction
+   events.
+5. **Claude Code usage is read only from a nested Anthropic-shaped `usage`
    object.** Top-level `cache_read_input_tokens` / `reasoning_output_tokens` and
    `usage.total_tokens` are outside that contract and are not surfaced. This is
    consistent with the adapter's declared capabilities
@@ -376,12 +371,12 @@ fixing one means updating that test rather than discovering a silent change.
    exactly what capability declarations are for — but it means Claude Code cache
    and reasoning figures are unavailable until the provider owner confirms where
    the fields really live. `ADAPTER-NOTE-001`.
-7. **`contextTokensBefore` is lost across the compaction boundary.** The adapter
+6. **`contextTokensBefore` is lost across the compaction boundary.** The adapter
    ignores `PreCompact` and cannot hold cross-invocation state, so only
    `contextTokensAfter` reaches `compaction.performed`. Carrying it forward would
    have to be done by the integration layer through the state store.
    `ADAPTER-NOTE-002`.
-8. **Cursor's payload contract is synthetic (release blocker).**
+7. **Cursor's payload contract is synthetic (release blocker).**
    `src/providers/cursor/payload.ts` documents its shape as invented for this
    repository. Cursor parity therefore runs through a documented envelope bridge
    (`ADAPTER-NOTE-005`), and Cursor cannot be claimed as verified upstream support
