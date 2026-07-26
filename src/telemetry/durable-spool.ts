@@ -11,6 +11,8 @@ export type SerializedSpan = {
   readonly kind: number;
   readonly traceId: string;
   readonly spanId: string;
+  /** Absent on batches spooled before cross-process parenting existed, and on root spans. */
+  readonly parentSpanId?: string;
   readonly startMillis: number;
   readonly endMillis: number;
   readonly attributes: Attributes;
@@ -27,6 +29,151 @@ export type SpoolBatch = {
   readonly enqueuedAt: number;
 };
 
+/** Upper bounds on a replayed batch. A spool file is untrusted input. */
+export const MAX_SPOOLED_SPANS_PER_BATCH = 4_096;
+export const MAX_SPOOLED_STRING_LENGTH = 8_192;
+const MAX_SPOOLED_ATTRIBUTES_PER_SPAN = 256;
+const TRACE_ID_PATTERN = /^[0-9a-f]{32}$/;
+const SPAN_ID_PATTERN = /^[0-9a-f]{16}$/;
+
+const isFiniteNonNegative = (value: unknown): value is number =>
+  typeof value === "number" && Number.isFinite(value) && value >= 0;
+
+const isBoundedString = (value: unknown, maxLength = MAX_SPOOLED_STRING_LENGTH): value is string =>
+  typeof value === "string" && value.length > 0 && value.length <= maxLength;
+
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+/**
+ * Whether one recorded span can be replayed.
+ *
+ * Every field is checked, not just the ones a happy path reads. `assembleReadableSpan`
+ * hands its output straight to the OTLP encoder, which assumes the shapes the type
+ * declares — so a `spanId` of the wrong length, a `startMillis` of `null`, or an
+ * `attributes` value holding a nested object becomes an encoder error deep inside
+ * the exporter rather than a rejected file here. Trace and span ids are further held
+ * to their hex forms, because a malformed id is not a span a collector can place.
+ */
+const isReplayableSpan = (value: unknown): value is SerializedSpan => {
+  if (!isPlainObject(value)) {
+    return false;
+  }
+  if (!isBoundedString(value.name) || !isFiniteNonNegative(value.kind)) {
+    return false;
+  }
+  if (typeof value.traceId !== "string" || !TRACE_ID_PATTERN.test(value.traceId)) {
+    return false;
+  }
+  if (typeof value.spanId !== "string" || !SPAN_ID_PATTERN.test(value.spanId)) {
+    return false;
+  }
+  if (
+    value.parentSpanId !== undefined &&
+    (typeof value.parentSpanId !== "string" || !SPAN_ID_PATTERN.test(value.parentSpanId))
+  ) {
+    return false;
+  }
+  if (!isFiniteNonNegative(value.startMillis) || !isFiniteNonNegative(value.endMillis)) {
+    return false;
+  }
+  if (!isFiniteNonNegative(value.statusCode)) {
+    return false;
+  }
+  if (
+    value.statusMessage !== undefined &&
+    typeof value.statusMessage !== "string"
+  ) {
+    return false;
+  }
+  if (!isPlainObject(value.attributes)) {
+    return false;
+  }
+  const entries = Object.entries(value.attributes);
+  if (entries.length > MAX_SPOOLED_ATTRIBUTES_PER_SPAN) {
+    return false;
+  }
+  return entries.every(([, attribute]) => {
+    if (Array.isArray(attribute)) {
+      // OTLP permits homogeneous primitive arrays; anything nested is not a span
+      // attribute and would fail encoding.
+      return attribute.every(
+        (item) =>
+          (typeof item === "string" && item.length <= MAX_SPOOLED_STRING_LENGTH) ||
+          (typeof item === "number" && Number.isFinite(item)) ||
+          typeof item === "boolean" ||
+          item === null,
+      );
+    }
+    return (
+      (typeof attribute === "string" && attribute.length <= MAX_SPOOLED_STRING_LENGTH) ||
+      (typeof attribute === "number" && Number.isFinite(attribute)) ||
+      typeof attribute === "boolean" ||
+      attribute === undefined
+    );
+  });
+};
+
+export type SpoolBatchRejection =
+  | "not-an-object"
+  | "identity-mismatch"
+  | "resource-attributes-invalid"
+  | "instrumentation-scope-invalid"
+  | "spans-invalid"
+  | "span-field-invalid";
+
+/**
+ * Validate a whole batch read back from disk, before any of it reaches an exporter.
+ *
+ * The identity check alone is not enough. `spans` being anything other than an array
+ * makes the sink's `spans.map(...)` throw, and a throwing send is indistinguishable
+ * from an unreachable collector — so the drain would treat a permanently poisoned
+ * file as a transient failure and stop at it on every pass, wedging the queue head
+ * and every batch behind it forever. Validation is what turns that into a single
+ * quarantined file.
+ */
+export const validateSpoolBatch = (
+  value: unknown,
+  identity: StoreNamespace,
+): { readonly batch: SpoolBatch } | { readonly rejection: SpoolBatchRejection } => {
+  if (!isPlainObject(value)) {
+    return { rejection: "not-an-object" };
+  }
+  if (
+    value.providerId !== identity.providerId ||
+    value.installationId !== identity.installationId
+  ) {
+    return { rejection: "identity-mismatch" };
+  }
+  if (!isPlainObject(value.resourceAttributes)) {
+    // Not merely absent: `replayResource` iterates it, and a string or an array
+    // would silently produce a resource built from its indices.
+    return { rejection: "resource-attributes-invalid" };
+  }
+  if (!isPlainObject(value.instrumentationScope) || !isBoundedString(value.instrumentationScope.name)) {
+    return { rejection: "instrumentation-scope-invalid" };
+  }
+  if (
+    value.instrumentationScope.version !== undefined &&
+    typeof value.instrumentationScope.version !== "string"
+  ) {
+    return { rejection: "instrumentation-scope-invalid" };
+  }
+  if (!Array.isArray(value.spans) || value.spans.length === 0) {
+    return { rejection: "spans-invalid" };
+  }
+  if (value.spans.length > MAX_SPOOLED_SPANS_PER_BATCH) {
+    return { rejection: "spans-invalid" };
+  }
+  if (!value.spans.every(isReplayableSpan)) {
+    return { rejection: "span-field-invalid" };
+  }
+  if (!isFiniteNonNegative(value.enqueuedAt)) {
+    return { rejection: "not-an-object" };
+  }
+  return { batch: value as unknown as SpoolBatch };
+};
+
 export type SpoolEnqueueResult =
   | { readonly spooled: true }
   | { readonly spooled: false; readonly reason: "capacity-exceeded" };
@@ -35,6 +182,15 @@ export type SpoolDrainResult = {
   readonly drained: number;
   readonly remaining: number;
   readonly failed: number;
+  /**
+   * Batches removed from the queue because they were unusable rather than
+   * undeliverable.
+   *
+   * Distinct from `failed`, which means "the collector would not take it, try
+   * later". A quarantined batch will never become deliverable, so counting it
+   * separately is what stops a permanent problem from reading as transient.
+   */
+  readonly quarantined: number;
 };
 
 export type DurableSpoolOptions = StoreNamespace & {
@@ -133,6 +289,7 @@ export const createFileDurableSpool = (options: DurableSpoolOptions): DurableSpo
     const files = await listSorted();
     let drained = 0;
     let failed = 0;
+    let quarantined = 0;
     let index = 0;
 
     for (; index < files.length && index < cap; index += 1) {
@@ -141,19 +298,47 @@ export const createFileDurableSpool = (options: DurableSpoolOptions): DurableSpo
         break;
       }
       const filePath = path.join(spoolDir, fileName);
-      let batch: SpoolBatch;
+
+      /**
+       * Move a file out of the queue, or delete it if quarantine is unavailable.
+       *
+       * Getting it *out of the queue* is the part that matters. A file the drain
+       * cannot use and cannot move would be re-read on every pass, and because the
+       * head is processed first it would block every healthy batch behind it — the
+       * one failure mode a retry queue must not have. So a failed quarantine falls
+       * back to deleting: losing one unusable batch beats losing all the usable
+       * ones queued behind it.
+       */
+      const quarantine = async (rejection: string): Promise<void> => {
+        quarantined += 1;
+        options.logger?.error("durable spool quarantined an unusable batch", {
+          "spool.rejection": rejection,
+          "spool.file": fileName,
+        });
+        try {
+          await rename(filePath, path.join(corruptDir, fileName));
+        } catch {
+          await unlink(filePath).catch(() => undefined);
+        }
+      };
+
+      let parsed: unknown;
       try {
-        const raw = await readFile(filePath, "utf8");
-        batch = JSON.parse(raw) as SpoolBatch;
+        parsed = JSON.parse(await readFile(filePath, "utf8")) as unknown;
       } catch {
-        await rename(filePath, path.join(corruptDir, fileName)).catch(() => undefined);
+        await quarantine("unparseable-json");
         continue;
       }
-      if (batch.providerId !== options.providerId || batch.installationId !== options.installationId) {
-        await rename(filePath, path.join(corruptDir, fileName)).catch(() => undefined);
-        options.logger?.error("durable spool refused a batch with a mismatched identity", {});
+
+      const validation = validateSpoolBatch(parsed, {
+        providerId: options.providerId,
+        installationId: options.installationId,
+      });
+      if ("rejection" in validation) {
+        await quarantine(validation.rejection);
         continue;
       }
+      const batch = validation.batch;
 
       let delivered: boolean;
       try {
@@ -171,7 +356,7 @@ export const createFileDurableSpool = (options: DurableSpoolOptions): DurableSpo
     }
 
     const remaining = (await listSorted()).length;
-    return { drained, remaining, failed };
+    return { drained, remaining, failed, quarantined };
   };
 
   return {

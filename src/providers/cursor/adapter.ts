@@ -21,6 +21,7 @@ import {
   type ProviderParseResult,
 } from "../adapter.js";
 import { createEventFactory } from "../builder.js";
+import { cursorDeliveryIdentity } from "./delivery.js";
 import {
   CURSOR_PROVIDER_ID,
   normalizeCursorPayload,
@@ -67,6 +68,10 @@ export const CURSOR_CAPABILITIES: ProviderCapabilities = Object.freeze({
   emitsSubagentEvents: true,
   emitsCompactionEvents: true,
   requiresHookResponse: true,
+  // Tool, generation, subagent, and session-lifecycle callbacks carry a
+  // replay-stable id; the dedicated shell/MCP/file callbacks and `preCompact` do
+  // not. See `./delivery.ts` for which and why.
+  deliveryIdentifier: "partial",
 });
 
 /** Sentinel used when a payload carries no model information at all. */
@@ -628,5 +633,14 @@ export const createCursorAdapter = (options: CursorAdapterOptions = {}): Provide
     return SILENT_HOOK_RESPONSE;
   };
 
-  return { id, version, capabilities, detect, identify, parse, hookResponse };
+  return {
+    id,
+    version,
+    capabilities,
+    detect,
+    identify,
+    deliveryIdentity: cursorDeliveryIdentity,
+    parse,
+    hookResponse,
+  };
 };

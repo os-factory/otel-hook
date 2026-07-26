@@ -17,6 +17,7 @@ import {
   type ProviderParseResult,
 } from "../adapter.js";
 import { createEventFactory } from "../builder.js";
+import { antigravityDeliveryIdentity } from "./delivery.js";
 import {
   ANTIGRAVITY_SUBAGENT_TOOL_NAME,
   antigravityHookPayloadSchema,
@@ -46,6 +47,9 @@ export const ANTIGRAVITY_CAPABILITIES: ProviderCapabilities = Object.freeze({
   emitsSubagentEvents: false,
   emitsCompactionEvents: false,
   requiresHookResponse: false,
+  // Only the tool pair carries a replay-stable id, and only from the two
+  // verified counters. See `./delivery.ts` for which and why.
+  deliveryIdentifier: "partial",
 });
 
 export type AntigravityAdapterOptions = {
@@ -228,5 +232,14 @@ export const createAntigravityAdapter = (
 
   const hookResponse = (): ProviderHookResponse => SILENT_HOOK_RESPONSE;
 
-  return { id, version, capabilities: ANTIGRAVITY_CAPABILITIES, detect, identify, parse, hookResponse };
+  return {
+    id,
+    version,
+    capabilities: ANTIGRAVITY_CAPABILITIES,
+    detect,
+    identify,
+    deliveryIdentity: antigravityDeliveryIdentity,
+    parse,
+    hookResponse,
+  };
 };

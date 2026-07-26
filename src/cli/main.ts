@@ -2,6 +2,7 @@ import { CLI_USAGE, parseCliArgs } from "./args.js";
 import { writeLine, type CliIo } from "./context.js";
 import { runDoctorCommand } from "./doctor.js";
 import { runProvidersCommand } from "./providers.js";
+import { runRegistrationCommand } from "./registration.js";
 import { runHookCommand } from "./run.js";
 import { VERSION } from "../version.js";
 
@@ -55,5 +56,9 @@ export const runCli = async (io: CliIo): Promise<number> => {
       return runDoctorCommand(parsed.command, io);
     case "providers":
       return Promise.resolve(runProvidersCommand(parsed.command, io));
+    case "setup":
+    case "diagnose":
+    case "uninstall":
+      return runRegistrationCommand(parsed.command, io);
   }
 };

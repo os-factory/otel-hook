@@ -36,4 +36,7 @@ export const CLAUDE_CODE_CAPABILITIES: ProviderCapabilities = Object.freeze({
   // The hook is telemetry-only and must never influence Claude Code's own
   // permission/continuation decisions (ADR 0004: fail-open).
   requiresHookResponse: false,
+  // Tool, subagent, and prompt callbacks carry a replay-stable id; session,
+  // stop, and compaction callbacks do not. See `./delivery.ts` for which and why.
+  deliveryIdentifier: "partial",
 });

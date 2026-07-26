@@ -18,6 +18,7 @@ describe("createLifecycleJanitor", () => {
 
     await spanCorrelator.recordStart({
       sessionId: "ses_1",
+      providerId: "acme-cli",
       scope: "tool",
       scopeKey: "t1",
       eventId: "e1",

@@ -180,6 +180,7 @@ describe("replay invariants across separately constructed hook instances sharing
 
     const startInput = {
       sessionId: "ses_1",
+      providerId: "fixture",
       scope: "tool" as const,
       scopeKey: "call_1",
       eventId: "evt_start",
@@ -187,6 +188,7 @@ describe("replay invariants across separately constructed hook instances sharing
     };
     const endInput = {
       sessionId: "ses_1",
+      providerId: "fixture",
       scope: "tool" as const,
       scopeKey: "call_1",
       eventId: "evt_end",
@@ -198,7 +200,12 @@ describe("replay invariants across separately constructed hook instances sharing
     await correlator.recordStart(startInput); // redelivered start
     const secondEnd = await correlator.recordEnd(endInput); // redelivered end
 
-    expect(firstEnd).toEqual({ status: "matched", startedAt: 1_000, durationMillis: 300 });
-    expect(secondEnd).toEqual({ status: "duplicate" });
+    expect(firstEnd).toMatchObject({ status: "matched", startedAt: 1_000, durationMillis: 300 });
+    // The replay answers with the facts already on disk rather than re-closing
+    // the span, so a redelivered pair cannot report a second duration.
+    expect(secondEnd).toEqual({
+      status: "duplicate",
+      facts: { startedAt: 1_000, endedAt: 1_300 },
+    });
   });
 });

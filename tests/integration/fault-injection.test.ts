@@ -146,10 +146,13 @@ describe("fail-open under lock contention", () => {
       key,
       normalizeUsageOrThrow({ temporality: "delta", inputTokens: 1 }),
     );
-    // The contended call's own write was only queued, never cancelled: giving
-    // up the wait bounds how long the caller blocks, not whether the
-    // operation eventually runs (see async-lock.ts) — so once the holder
-    // releases, both the contended write and this one land, in order.
-    expect(afterRelease.total.inputTokens).toBe(2);
+    // The contended call's work was **cancelled**, not merely queued. Its caller
+    // has already been handed a failure and has reported that nothing happened; if
+    // the write then landed once the holder released, the total would move after
+    // the fact with nobody watching — and a caller that released a delivery claim
+    // on the strength of that failure would have double-counted on retry.
+    //
+    // So exactly one delta is accounted here: this one.
+    expect(afterRelease.total.inputTokens).toBe(1);
   });
 });

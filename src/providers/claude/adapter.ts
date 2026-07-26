@@ -1,5 +1,6 @@
 import { SILENT_HOOK_RESPONSE, type ProviderAdapter, type ProviderHookResponse } from "../adapter.js";
 import { CLAUDE_CODE_CAPABILITIES } from "./capabilities.js";
+import { claudeDeliveryIdentity } from "./delivery.js";
 import { CLAUDE_CODE_PROVIDER_ID, detectClaudeCode } from "./detect.js";
 import { parseClaudeCode } from "./events.js";
 import { identifyClaudeCode } from "./identity.js";
@@ -22,6 +23,7 @@ export const createClaudeCodeAdapter = (options: ClaudeCodeAdapterOptions = {}):
   capabilities: CLAUDE_CODE_CAPABILITIES,
   detect: (input) => detectClaudeCode(input),
   identify: (input, context) => identifyClaudeCode(input, context),
+  deliveryIdentity: (input) => claudeDeliveryIdentity(input),
   parse: (input, context) => parseClaudeCode(input, context),
   hookResponse: (): ProviderHookResponse => SILENT_HOOK_RESPONSE,
 });

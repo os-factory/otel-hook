@@ -97,6 +97,7 @@ describe("antigravity adapter: capabilities and maturity", () => {
       version: "0.1.0",
       lifecycleEvents: ["tool.start", "tool.end"],
       usageTemporality: "delta",
+      deliveryIdentifier: "partial",
     });
     expect(ANTIGRAVITY_CAPABILITIES.reportsCachedInput).toBe(false);
     expect(ANTIGRAVITY_CAPABILITIES.reportsCacheCreation).toBe(false);

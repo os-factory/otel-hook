@@ -1,4 +1,38 @@
 import type { Clock, StateStore } from "../runtime/ports.js";
+import { LockWaitTimeoutError } from "./async-lock.js";
+
+/**
+ * A lock could not be acquired within its wait bound because somebody else holds
+ * it.
+ *
+ * Distinct from "the store is broken" on purpose, and the distinction is
+ * load-bearing for callers that guard a read-modify-write with it. Contention
+ * means a peer is plausibly *inside* the critical section right now, so
+ * proceeding unlocked would produce exactly the lost update the lock exists to
+ * prevent. A store that cannot lock at all — an unwritable directory, a full
+ * disk — protects nothing, because the state the lock guards is equally
+ * unreachable; there proceeding is the fail-open answer and costs nothing.
+ */
+export class StateLockTimeoutError extends Error {
+  public readonly lockKey: string;
+
+  public constructor(key: string, timeoutMillis: number) {
+    super(`state store lock wait for "${key}" exceeded ${String(timeoutMillis)}ms`);
+    this.name = "StateLockTimeoutError";
+    this.lockKey = key;
+  }
+}
+
+/**
+ * Whether a thrown value means "somebody else holds the lock".
+ *
+ * Also true for {@link LockWaitTimeoutError}, the in-process variant, which
+ * carries a second warning for callers: a timed-out wait does not cancel the
+ * queued critical section, so it may still run afterwards. A caller that treats
+ * contention as "retry unlocked" would therefore risk running the section twice.
+ */
+export const isStateLockContention = (thrown: unknown): boolean =>
+  thrown instanceof StateLockTimeoutError || thrown instanceof LockWaitTimeoutError;
 
 /**
  * Optional capability beyond the frozen {@link StateStore} contract: a

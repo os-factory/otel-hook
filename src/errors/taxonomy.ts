@@ -31,6 +31,12 @@ export const otelHookErrorCodeSchema = z.enum([
   "configuration-invalid",
   /** A configured bound (events, batch size) dropped data. */
   "limit-exceeded",
+  /**
+   * No replay-stable delivery identifier was available for a callback while
+   * deduplication was required.
+   */
+  "delivery-identifier-unavailable",
+  "delivery-claim-superseded",
   /** Anything unanticipated. Always reported, never fatal to the host. */
   "internal-error",
 ]);
@@ -165,6 +171,31 @@ export const ERROR_TAXONOMY: Readonly<Record<OtelHookErrorCode, ErrorCodeDescrip
       posture: "fail-open",
       retryable: false,
       summary: "A configured bound was reached and data was dropped.",
+    },
+    "delivery-identifier-unavailable": {
+      code: "delivery-identifier-unavailable",
+      severity: "warning",
+      // Fail-open: the observation is still attributed and exported. Only the
+      // at-most-once guarantee is missing, and refusing the telemetry to protect
+      // a duplicate count would trade a certain loss for a possible one.
+      posture: "fail-open",
+      retryable: false,
+      summary:
+        "No replay-stable delivery identifier was available; this callback was exported without deduplication.",
+    },
+    "delivery-claim-superseded": {
+      code: "delivery-claim-superseded",
+      severity: "warning",
+      // Fail-open, and specifically *not* silent. A peer reclaimed this callback's
+      // claim while this process was still working on it, which means the
+      // configured stale window is shorter than this installation's real worst
+      // case. Both processes may now have exported the callback, so the
+      // at-most-once guarantee did not hold for it — the only honest response is
+      // to say so and let the operator raise the window.
+      posture: "fail-open",
+      retryable: false,
+      summary:
+        "A delivery claim was reclaimed by another process before this one committed; the callback may have been exported twice.",
     },
     "internal-error": {
       code: "internal-error",

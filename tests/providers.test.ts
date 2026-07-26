@@ -228,6 +228,7 @@ describe("adapter contract surface", () => {
         "compaction.performed",
       ],
       usageTemporality: "delta",
+      deliveryIdentifier: "partial",
     });
   });
 

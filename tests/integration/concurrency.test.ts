@@ -43,6 +43,7 @@ describe("concurrency across at least ten identities sharing one filesystem stat
 
       const started = await spanCorrelator.recordStart({
         sessionId,
+        providerId: "acme-cli",
         scope: "tool",
         scopeKey: `call_${index}`,
         eventId: `start_${index}`,
@@ -68,6 +69,7 @@ describe("concurrency across at least ten identities sharing one filesystem stat
 
       const ended = await spanCorrelator.recordEnd({
         sessionId,
+        providerId: "acme-cli",
         scope: "tool",
         scopeKey: `call_${index}`,
         eventId: `end_${index}`,

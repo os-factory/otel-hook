@@ -7,8 +7,19 @@
  */
 export {
   canonicalEventsToReadableSpans,
+  parentScopeRefOf,
+  spanScopeRefOf,
+  startOnlySpanAttributes,
   DEFAULT_INSTRUMENTATION_SCOPE,
+  MAX_RECOVERED_START_ATTRIBUTES,
   type SemanticMappingOptions,
+  type SpanCorrelation,
+  type SpanCorrelationResolver,
+  type SpanDisposition,
+  type SpanFamily,
+  type SpanOrphanClassification,
+  type SpanPairing,
+  type SpanScopeRef,
 } from "../telemetry/semconv.js";
 export {
   createFileDurableSpool,

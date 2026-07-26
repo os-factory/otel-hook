@@ -6,7 +6,7 @@ import type { Clock, Logger, StateRecord, StateValue } from "../runtime/ports.js
 import { stateRecordSchema } from "../runtime/ports.js";
 import { createAsyncLock } from "./async-lock.js";
 import { keyDigest, namespaceSegments, sanitizeSegment, type StoreNamespace } from "./keys.js";
-import type { LockingStateStore } from "./store.js";
+import { StateLockTimeoutError, type LockingStateStore } from "./store.js";
 
 export type FilesystemStateStoreOptions = StoreNamespace & {
   readonly rootDir: string;
@@ -210,7 +210,9 @@ export const createFilesystemStateStore = (
       }
 
       if (options.clock.monotonicMillis() - startedAt >= timeoutMillis) {
-        throw new Error(`filesystem state store lock wait exceeded ${timeoutMillis}ms`);
+        // A typed error, so a caller can tell "a peer holds this" apart from "the
+        // store is unusable" — the two demand opposite responses.
+        throw new StateLockTimeoutError(sessionId, timeoutMillis);
       }
       await sleep(lockPollIntervalMillis);
     }

@@ -1,8 +1,12 @@
 import type { OtelHookConfig } from "../config/schema.js";
 import { summarizeHealth, type DeliveryHealthSnapshot, type OverallHealth } from "../diagnostics/health.js";
-import { errorInfoFromThrown, type OtelHookErrorInfo } from "../errors/index.js";
+import { createErrorInfo, errorInfoFromThrown, type OtelHookErrorInfo } from "../errors/index.js";
 import type { CanonicalEvent } from "../model/events.js";
-import { createCallbackDeduplicator, type CallbackDeduplicator } from "../lifecycle/dedup.js";
+import {
+  createCallbackDeduplicator,
+  type CallbackDeduplicator,
+  type DeliveryClaimOutcome,
+} from "../lifecycle/dedup.js";
 import { createLifecycleJanitor, type LifecycleCleanupReport, type LifecycleJanitor } from "../lifecycle/janitor.js";
 import { createSpanCorrelator, type SpanCorrelator } from "../lifecycle/span-correlator.js";
 import {
@@ -15,17 +19,27 @@ import type { ProviderRegistry } from "../providers/registry.js";
 import { createSystemClock } from "../runtime/clock.js";
 import {
   createOtelHook,
+  isCommittable,
   type HookIngestInput,
   type HookIngestOutcome,
   type OtelHook,
   type UsageObservation,
 } from "../runtime/hook.js";
+import {
+  hostDeliveryIdentity,
+  type DeliveryOrigin,
+  type DeliveryResolution,
+  type DeliveryUnavailableReason,
+  type ResolvedDeliveryIdentity,
+} from "../runtime/delivery.js";
 import { createDeterministicIdGenerator } from "../runtime/ids.js";
 import { createNullLogger } from "../runtime/logger.js";
-import type { Clock, IdGenerator, Logger, TelemetryEmitResult, TelemetrySink } from "../runtime/ports.js";
+import type { Clock, IdGenerator, Logger } from "../runtime/ports.js";
+import { createAsyncLock } from "../state/async-lock.js";
 import { createFilesystemStateStore, type FilesystemStateStore } from "../state/filesystem-store.js";
 import { createFileDurableSpool, type DurableSpool } from "../telemetry/durable-spool.js";
 import { createOtlpTraceSink, type OtlpTelemetrySink } from "../telemetry/otlp-sink.js";
+import type { SpanCorrelation } from "../telemetry/semconv.js";
 
 /**
  * A hook process lives for milliseconds and then exits, but the facts it needs
@@ -36,24 +50,67 @@ import { createOtlpTraceSink, type OtlpTelemetrySink } from "../telemetry/otlp-s
  * unreachable collector refused, and a *bounded* flush so a hanging collector
  * costs the host a known number of milliseconds rather than a stalled agent.
  *
+ * ## Delivery deduplication
+ *
+ * A redelivered callback must not be exported or accounted twice, and it must
+ * stay suppressed across a process restart — which rules out anything held in
+ * memory. Two identities can carry that:
+ *
+ * 1. An explicit, host-supplied delivery id ({@link HookProcessInput.delivery}),
+ *    unique by construction because only the host knows it.
+ * 2. One normalized from payload fields the selected adapter vouches for — a
+ *    `tool_use_id`, an `agent_id`, a `prompt_id`. Adapters declare coverage as
+ *    `deliveryIdentifier` and report components per callback, and the runtime
+ *    digests them into an opaque, installation-and-session-scoped pair.
+ *
+ * Neither `invocationId` nor `eventId` can serve: some adapters seed the former
+ * with a clock reading (Claude Code documents each hook firing as a distinct
+ * invocation), and the latter is seeded with a session sequence number that has
+ * already advanced by the time a redelivery arrives.
+ *
+ * Ownership is taken *before* `ingest` and committed only once the batch is
+ * somewhere durable: a delivery arriving inside the window sees the claim and
+ * stands down, and a batch that reached neither the collector nor the spool
+ * releases its claim for retry instead of committing a loss.
+ *
+ * **This is at-least-once export, not exactly-once.** The collector is a separate
+ * system and there is no transaction spanning an OTLP acceptance and a local state
+ * write, so a process killed after the collector took a batch and before the claim
+ * commits will re-export on redelivery. That ordering is deliberate: a duplicate
+ * carries the same derived trace and span id and can be dropped at the collector,
+ * whereas committing first would turn the same window into silent loss. Local
+ * accounting *is* at-most-once, because it commits under the claim's own lock.
+ *
+ * ## Ordering and locks
+ *
+ * Two locks, always acquired in one order — delivery-scope lock, then state lock —
+ * and never nested one state lock inside another:
+ *
+ * - An in-process lock on the delivery scope serializes same-scope deliveries in
+ *   arrival order, so deduplication never reorders what it lets through.
+ * - `ingest` holds the store's *cross-process* session lock across the session
+ *   state critical section, which is what stops two hook processes from stamping
+ *   two batches with one sequence range. Export happens after that lock is
+ *   released: the span correlator takes the same session lock from inside the sink,
+ *   and it is not reentrant.
+ *
  * ## Deliberate limitations
  *
- * 1. **Redelivery cannot be detected from the payload alone.** Some adapters
- *    derive `invocationId` from a clock reading (Claude Code documents this:
- *    each hook firing is a distinct invocation), so a redelivered payload
- *    produces a *different* invocation id in a later process. `eventId` is no
- *    better: it is seeded with the session sequence number, which has already
- *    advanced by the time a redelivery arrives. Deduplication is therefore
- *    offered only against an explicit, host-supplied delivery id
- *    ({@link HookProcessInput.delivery}) — the one identifier that is stable by
- *    construction. Without it, `process()` does not pretend to dedupe.
- * 2. **Cross-process span pairing is not applied to exported spans.** The
- *    {@link SpanCorrelator} is constructed and exposed, and can already tell a
- *    matched end from an orphaned one, but the OTLP mapping pairs a `*.start`
- *    with a `*.end` only within one batch. A lone edge is exported flagged
- *    `otelhook.span.paired=false` rather than being silently merged using a
- *    duration from state. Merging across processes is a telemetry-layer feature,
- *    not integration glue, so it is named here instead of half-done.
+ * 1. **Deduplication coverage is per provider, and partial for every adapter.** An
+ *    adapter that declares `deliveryIdentifier: "partial"` identifies only the
+ *    callbacks carrying a field that separates a genuine second firing from a
+ *    redelivery — for most that means per-tool-call and per-subagent edges, and for
+ *    the Gemini CLI, whose protocol has no such field at all, only the
+ *    once-per-session edges. The rest are exported without the at-most-once
+ *    guarantee unless the host supplies a delivery id; with `requireCallbackId` the
+ *    runtime says so per callback instead of leaving it to be inferred.
+ * 2. **Cross-process span pairing needs a durable state root.** The
+ *    {@link SpanCorrelator} is wired into the sink, so a `*.end` emitted by a
+ *    later process carries its start time, duration, parent, and start-only
+ *    attributes. That correlation lives entirely in the state store: point two
+ *    invocations at different `stateRootDir`s and each exports a lone,
+ *    explicitly classified orphan instead. A disabled exporter records nothing,
+ *    since there is no span to pair.
  */
 
 export type HookRuntimeDelivery = {
@@ -71,6 +128,61 @@ export type HookProcessInput = HookIngestInput & {
   readonly delivery?: HookRuntimeDelivery;
 };
 
+/**
+ * What deduplication did with this callback.
+ *
+ * Reported rather than inferred: "exported once because it was fresh" and
+ * "exported once because nothing could tell it apart from a redelivery" produce
+ * identical telemetry, and only the first is a guarantee.
+ */
+export type DeliveryReport = {
+  /**
+   * True when a replay-stable identity was established and a claim enforced.
+   *
+   * Not a promise of exactly-once export: see this module's note on crash
+   * semantics. It means a redelivery arriving *while local state is intact* is
+   * suppressed.
+   */
+  readonly deduplicated: boolean;
+  /** Where the identity came from. Absent when none was established. */
+  readonly origin?: DeliveryOrigin;
+  /** How the claim resolved. Absent when no identity was established. */
+  readonly outcome?: DeliveryClaimOutcome;
+  /** Why no identity was established. Absent when one was. */
+  readonly reason?: DeliveryUnavailableReason;
+  /** The adapter's declared coverage, when a provider was selected. */
+  readonly capability?: string;
+  /** Adapter-supplied justifications for a provider-derived identity. */
+  readonly evidence?: readonly string[];
+  /**
+   * True when a claim was released because the batch reached neither the
+   * collector nor the spool, so redelivering this callback is expected to
+   * re-export it rather than be suppressed.
+   */
+  readonly retryable?: boolean;
+  /**
+   * Spans permanently lost on a callback that is nonetheless **committed**.
+   *
+   * Present only for a partial batch: some spans reached the collector or the
+   * spool and some did not. The callback is not retried, because retrying would
+   * re-export the accepted spans, so these observations are gone. Reported as a
+   * number rather than folded into `retryable` because the two demand opposite
+   * responses — a retryable callback needs redelivering, a partial loss needs
+   * investigating.
+   */
+  readonly partialLoss?: number;
+  /**
+   * True when another process reclaimed this callback's claim before this one
+   * committed.
+   *
+   * Deduplication did not hold for this callback: both deliveries may have
+   * exported it. Reported rather than hidden, because the cause is a
+   * configured stale window that is too short for this installation and only an
+   * operator can fix that.
+   */
+  readonly superseded?: boolean;
+};
+
 export type HookProcessOutcome = {
   readonly ingest: HookIngestOutcome;
   /**
@@ -80,6 +192,8 @@ export type HookProcessOutcome = {
    * a redelivered callback still expects its protocol response.
    */
   readonly duplicateDelivery: boolean;
+  /** Why this callback was, or was not, deduplicated. */
+  readonly delivery: DeliveryReport;
   /** Running per-scope totals after applying this invocation's deltas. */
   readonly usageRollups: readonly UsageRollup[];
   /** Cleanup performed opportunistically; absent when no sweep ran. */
@@ -110,7 +224,7 @@ export interface HookRuntime {
   readonly privacy: PrivacyService;
   readonly deduplicator: CallbackDeduplicator;
   readonly usageAccumulator: UsageAccumulator;
-  /** Exposed, not yet applied to exported spans — see this module's note 2. */
+  /** Backs the cross-process pairing the sink applies to every exported span. */
   readonly spanCorrelator: SpanCorrelator;
   readonly janitor: LifecycleJanitor;
   /** Ingest one observation, then apply lifecycle accumulation. Never throws. */
@@ -147,11 +261,31 @@ export type HookRuntimeOptions = {
   /** Sweep expired lifecycle state when a session ends. Default true. */
   readonly sweepOnSessionEnd?: boolean;
   readonly lifecycleMaxAgeMillis?: number;
+  /**
+   * Normalize a delivery identity from the adapter when the host supplies none.
+   * Default true. Set false to keep deduplication strictly opt-in per callback.
+   */
+  readonly deriveDeliveryIdentity?: boolean;
+  /**
+   * Raise `delivery-identifier-unavailable` for every callback that could not be
+   * deduplicated, naming the provider and the capability that is missing. Default
+   * false: without it, an unidentifiable callback is a silent absence of a
+   * guarantee, which is exactly what a host auditing its own coverage cannot see.
+   */
+  readonly requireCallbackId?: boolean;
+  /**
+   * How long an uncommitted claim is respected before a later delivery may
+   * assume the process that took it died. Default 60,000ms.
+   */
+  readonly staleClaimMillis?: number;
+  /** TTL for dedup records specifically. Defaults to `lifecycleMaxAgeMillis`. */
+  readonly deliveryRetentionMillis?: number;
 };
 
 const DEFAULT_FLUSH_TIMEOUT_MILLIS = 2_000;
 const DEFAULT_STATE_LOCK_TIMEOUT_MILLIS = 1_000;
 const DEFAULT_LIFECYCLE_MAX_AGE_MILLIS = 24 * 60 * 60 * 1000;
+const DEFAULT_STALE_CLAIM_MILLIS = 60_000;
 
 const delay = (millis: number): Promise<"timeout"> =>
   new Promise((resolve) => {
@@ -162,25 +296,120 @@ const delay = (millis: number): Promise<"timeout"> =>
 const containsSessionEnd = (events: readonly CanonicalEvent[]): boolean =>
   events.some((event) => event.type === "session.end");
 
+/** Delivery is this module's own concern; `ingest` never sees it. */
+const withoutDelivery = (input: HookProcessInput): HookIngestInput => {
+  const { delivery, ...ingestInput } = input;
+  void delivery;
+  return ingestInput;
+};
+
 /**
- * Sink wrapper that can be told, once per process, to stop exporting.
+ * Smallest stale-claim window that cannot expire while a live process is still
+ * working on the callback it claimed.
  *
- * Suppression happens here rather than before `ingest` on purpose: the adapter
- * still parses, so the provider's protocol response is still correct for a
- * redelivered callback, while the *telemetry* for it is dropped instead of
- * double-counted.
+ * A claim is taken before `ingest` and committed after export, so the window has
+ * to cover the whole of that: waiting for the session state lock, the adapter's
+ * work, then every export attempt the exporter policy permits, then the bounded
+ * flush. If `staleClaimMillis` is shorter than that, a second delivery arriving
+ * mid-flight declares the first one abandoned and *reclaims* it — and then both
+ * processes export the same callback. That is not a smaller guarantee, it is the
+ * opposite of the one being advertised, produced by a configuration value that
+ * looks like a harmless tuning knob.
+ *
+ * So the floor is derived from the same policy the work is bounded by, rather
+ * than being a constant that a later timeout change could silently outgrow. The
+ * multiplier on the export timeout counts the first attempt plus each retry.
  */
-const createSuppressibleSink = (
-  inner: TelemetrySink,
-  isSuppressed: () => boolean,
-): TelemetrySink => ({
-  emit: (events: readonly CanonicalEvent[]): Promise<TelemetryEmitResult> =>
-    isSuppressed()
-      ? Promise.resolve({ accepted: 0, rejected: 0, errors: [] })
-      : inner.emit(events),
-  flush: (): Promise<void> => inner.flush(),
-  shutdown: (): Promise<void> => inner.shutdown(),
-});
+/**
+ * Bounded lock acquisitions between `claim` and `commit`, counted rather than
+ * guessed.
+ *
+ * Each one can cost a full `stateLockTimeoutMillis` under contention, so the floor
+ * has to include all of them. Enumerated so that adding a locked step without
+ * revisiting this number is visibly an omission:
+ *
+ * 1. `ingest` phase 1 — the session-state critical section (read sequence, parse,
+ *    reserve).
+ * 2. `ingest` phase 3 — the usage-accounting critical section.
+ * 3. the span correlator, called from inside the sink during export.
+ * 4. `deduplicator.commit` itself.
+ */
+const POST_CLAIM_LOCK_ACQUISITIONS = 4;
+
+/**
+ * Locked operations the *accounting* phase performs, per usage observation.
+ *
+ * `recordReset` then `accumulateDelta`, each taking the session lock on its own.
+ * Multiplied by the observation cap below rather than by the raw event limit: usage
+ * lands on end-edge events only, so the cap is generous rather than exact.
+ */
+const ACCOUNTING_LOCKS_PER_OBSERVATION = 2;
+
+/**
+ * How many usage observations the floor budgets for.
+ *
+ * Deliberately not `limits.maxEventsPerInvocation` (512 by default): summing 1,024
+ * lock timeouts would put the floor in the tens of minutes, and a floor that large
+ * is its own problem — it delays recovery of genuinely crashed claims by that long.
+ * A real hook callback carries a handful of usage-bearing events, so this is the
+ * conservative-but-useful bound, and the ownership check below is what covers the
+ * case where reality exceeds it: a claim reclaimed under a live holder is *detected*
+ * at commit rather than silently double-counted.
+ */
+const BUDGETED_USAGE_OBSERVATIONS = 8;
+
+/**
+ * Smallest stale-claim window that cannot expire while a live process is still
+ * working on the callback it claimed.
+ *
+ * A claim is taken before `ingest` and committed after accounting, so the window has
+ * to cover the whole of that: every bounded lock acquisition on the way, every
+ * export attempt the exporter policy permits, the spool write that follows a refused
+ * export, and the bounded flush. If `staleClaimMillis` is shorter, a second delivery
+ * arriving mid-flight declares the first one abandoned and *reclaims* it — and then
+ * both processes export the same callback. That is not a smaller guarantee, it is
+ * the opposite of the one being advertised, produced by a value that looks like a
+ * harmless tuning knob.
+ *
+ * Derived from the same policy the work is bounded by, rather than a constant a
+ * later timeout change could silently outgrow. It is a *floor*, not a prediction:
+ * being generous costs only recovery latency after a crash, while being short costs
+ * correctness.
+ */
+export const minimumStaleClaimMillis = (input: {
+  readonly exportTimeoutMillis: number;
+  readonly maxRetryAttempts: number;
+  readonly flushTimeoutMillis: number;
+  readonly stateLockTimeoutMillis: number;
+}): number => {
+  const exportBudget = input.exportTimeoutMillis * (input.maxRetryAttempts + 1);
+  const lockBudget =
+    input.stateLockTimeoutMillis *
+    (POST_CLAIM_LOCK_ACQUISITIONS +
+      ACCOUNTING_LOCKS_PER_OBSERVATION * BUDGETED_USAGE_OBSERVATIONS);
+  // A refused export writes the batch to the spool before returning, and the
+  // janitor may sweep on a session-end callback. Both are bounded but neither has
+  // its own configured timeout, so they share one allowance.
+  const spoolAndSweepAllowance = 2 * input.stateLockTimeoutMillis;
+  // A margin so a value derived from the same numbers is not exactly on the
+  // boundary; process scheduling alone can cost tens of milliseconds.
+  const margin = 1_000;
+  return lockBudget + exportBudget + input.flushTimeoutMillis + spoolAndSweepAllowance + margin;
+};
+
+const DELIVERY_UNAVAILABLE_DETAIL: Readonly<Record<DeliveryUnavailableReason, string>> =
+  Object.freeze({
+    "provider-unattributed":
+      "no provider was attributed, so no adapter could vouch for a replay-stable identifier",
+    "provider-declares-none":
+      "the selected adapter declares deliveryIdentifier=none: no callback of this provider carries a replay-stable identifier, so only --callback-id can deduplicate it",
+    "callback-not-identifiable":
+      "the selected adapter identifies some callbacks but not this one; it carries no field that separates a redelivery from a genuine second firing",
+    "claim-rejected":
+      "the selected adapter offered a delivery identity that failed the contract's own guards",
+    "state-unavailable":
+      "a delivery identity was established but the state store could not record a claim against it",
+  });
 
 export const createHookRuntime = (options: HookRuntimeOptions): HookRuntime => {
   const clock = options.clock ?? createSystemClock();
@@ -189,6 +418,25 @@ export const createHookRuntime = (options: HookRuntimeOptions): HookRuntime => {
   const privacy = options.privacy ?? createPrivacyService(options.config.privacy);
   const flushTimeoutMillis = options.flushTimeoutMillis ?? DEFAULT_FLUSH_TIMEOUT_MILLIS;
   const lifecycleMaxAge = options.lifecycleMaxAgeMillis ?? DEFAULT_LIFECYCLE_MAX_AGE_MILLIS;
+  const stateLockTimeoutMillis = options.stateLockTimeoutMillis ?? DEFAULT_STATE_LOCK_TIMEOUT_MILLIS;
+
+  // Raised, never lowered, and reported when raised: silently honouring a window
+  // shorter than one process's own work would turn suppression into a double
+  // export. See `minimumStaleClaimMillis`.
+  const staleClaimFloor = minimumStaleClaimMillis({
+    exportTimeoutMillis: options.config.exporter.timeoutMillis,
+    maxRetryAttempts: options.config.exporter.maxRetryAttempts,
+    flushTimeoutMillis,
+    stateLockTimeoutMillis,
+  });
+  const requestedStaleClaim = options.staleClaimMillis ?? DEFAULT_STALE_CLAIM_MILLIS;
+  const staleClaimMillis = Math.max(requestedStaleClaim, staleClaimFloor);
+  if (staleClaimMillis > requestedStaleClaim) {
+    logger.warn("staleClaimMillis raised to cover this installation's own export budget", {
+      "delivery.stale_claim_requested_millis": requestedStaleClaim,
+      "delivery.stale_claim_effective_millis": staleClaimMillis,
+    });
+  }
 
   const stateStore = createFilesystemStateStore({
     rootDir: options.stateRootDir,
@@ -196,7 +444,7 @@ export const createHookRuntime = (options: HookRuntimeOptions): HookRuntime => {
     installationId: options.installationId,
     clock,
     logger,
-    lockTimeoutMillis: options.stateLockTimeoutMillis ?? DEFAULT_STATE_LOCK_TIMEOUT_MILLIS,
+    lockTimeoutMillis: stateLockTimeoutMillis,
   });
 
   const spool =
@@ -210,6 +458,12 @@ export const createHookRuntime = (options: HookRuntimeOptions): HookRuntime => {
           logger,
         });
 
+  const spanCorrelator = createSpanCorrelator({
+    stateStore,
+    clock,
+    maxStartAgeMillis: lifecycleMaxAge,
+  });
+
   const sink = createOtlpTraceSink({
     exporter: options.config.exporter,
     ...(options.headers === undefined ? {} : { headers: options.headers }),
@@ -218,11 +472,11 @@ export const createHookRuntime = (options: HookRuntimeOptions): HookRuntime => {
     clock,
     logger,
     ...(spool === undefined ? {} : { spool }),
+    correlate: (events): Promise<readonly SpanCorrelation[]> =>
+      spanCorrelator.correlateBatch(events),
   });
 
-  let suppressExport = false;
-  const hook = createOtelHook({
-    sink: createSuppressibleSink(sink, () => suppressExport),
+  const hookDeps = {
     stateStore,
     config: options.config,
     registry: options.registry,
@@ -230,19 +484,22 @@ export const createHookRuntime = (options: HookRuntimeOptions): HookRuntime => {
     ids,
     privacy,
     logger,
-  });
+    installationId: options.installationId,
+  };
+  const hook = createOtelHook({ ...hookDeps, sink });
 
   const deduplicator = createCallbackDeduplicator({ stateStore, clock });
   const usageAccumulator = createUsageAccumulator({ stateStore, clock });
-  const spanCorrelator = createSpanCorrelator({ stateStore, clock });
   const janitor = createLifecycleJanitor({
     spanCorrelator,
     deduplicator,
     usageAccumulator,
     spanMaxAgeMillis: lifecycleMaxAge,
-    dedupMaxAgeMillis: lifecycleMaxAge,
+    dedupMaxAgeMillis: options.deliveryRetentionMillis ?? lifecycleMaxAge,
     usageMaxAgeMillis: lifecycleMaxAge,
   });
+
+  const deliveryLock = createAsyncLock();
 
   const stateDiagnostic = (thrown: unknown): OtelHookErrorInfo =>
     errorInfoFromThrown(thrown, { code: "state-store-failure", phase: "state", occurredAt: clock.now() });
@@ -276,34 +533,118 @@ export const createHookRuntime = (options: HookRuntimeOptions): HookRuntime => {
     return rollups;
   };
 
-  const process_ = async (input: HookProcessInput): Promise<HookProcessOutcome> => {
-    const diagnostics: OtelHookErrorInfo[] = [];
-    let duplicateDelivery = false;
-
+  /**
+   * Establish this callback's delivery identity.
+   *
+   * A host-supplied id always wins: the host knows things about its own
+   * redelivery that no payload states. Only when there is none does the adapter
+   * get asked, and only if derivation is enabled.
+   */
+  const identifyDelivery = (
+    input: HookProcessInput,
+  ): { readonly identity?: ResolvedDeliveryIdentity; readonly unavailable?: DeliveryResolution } => {
     if (input.delivery !== undefined) {
+      return {
+        identity: hostDeliveryIdentity(input.delivery.callbackId, input.delivery.scope),
+      };
+    }
+    if (options.deriveDeliveryIdentity === false) {
+      return {};
+    }
+    const resolution = hook.resolveDelivery(withoutDelivery(input));
+    return resolution.status === "resolved"
+      ? { identity: resolution.identity }
+      : { unavailable: resolution };
+  };
+
+  const reportUnavailable = (
+    resolution: DeliveryResolution | undefined,
+    diagnostics: OtelHookErrorInfo[],
+  ): DeliveryReport => {
+    if (resolution === undefined || resolution.status === "resolved") {
+      // Either an identity was established, or none was even attempted because the
+      // host supplied its own id or switched derivation off. Neither is a provider
+      // gap, so `requireCallbackId` has nothing to report.
+      return { deduplicated: false };
+    }
+    if (options.requireCallbackId === true) {
+      diagnostics.push(
+        createErrorInfo({
+          code: "delivery-identifier-unavailable",
+          phase: "identity",
+          detail: (resolution.detail ?? DELIVERY_UNAVAILABLE_DETAIL[resolution.reason]).slice(0, 400),
+          details: {
+            "delivery.reason": resolution.reason,
+            ...(resolution.providerId === undefined ? {} : { "provider.id": resolution.providerId }),
+            ...(resolution.capability === undefined
+              ? {}
+              : { "provider.delivery_identifier": resolution.capability }),
+            "delivery.remedy": "pass an explicit host delivery id (--callback-id)",
+          },
+          occurredAt: clock.now(),
+        }),
+      );
+    }
+    return {
+      deduplicated: false,
+      reason: resolution.reason,
+      ...(resolution.capability === undefined ? {} : { capability: resolution.capability }),
+    };
+  };
+
+  const runProcess = async (
+    input: HookProcessInput,
+    identity: ResolvedDeliveryIdentity | undefined,
+    report: DeliveryReport,
+    diagnostics: OtelHookErrorInfo[],
+  ): Promise<HookProcessOutcome> => {
+    let delivery = report;
+    let owned = false;
+    let claimOwner: string | undefined;
+
+    if (identity !== undefined) {
       try {
-        const result = await deduplicator.checkAndMark(
-          input.delivery.scope ?? "delivery",
-          input.delivery.callbackId,
-        );
-        duplicateDelivery = result.duplicate;
+        const claimed = await deduplicator.claim(identity.scope, identity.callbackId, {
+          staleClaimMillis,
+        });
+        owned = claimed.owned;
+        claimOwner = claimed.owner;
+        delivery = {
+          deduplicated: true,
+          origin: identity.origin,
+          outcome: claimed.outcome,
+          ...(identity.evidence.length === 0 ? {} : { evidence: identity.evidence }),
+        };
+        if (claimed.outcome === "reclaimed") {
+          logger.warn("took over a delivery claim no process ever completed", {
+            "delivery.origin": identity.origin,
+            "delivery.attempt": claimed.attempt,
+            "delivery.abandoned_for_millis": claimed.abandonedForMillis ?? 0,
+          });
+        }
+        if (claimed.duplicate) {
+          logger.info("delivery already handled; telemetry suppressed", {
+            "delivery.origin": identity.origin,
+            "delivery.outcome": claimed.outcome,
+          });
+        }
       } catch (thrown) {
         // An unreadable dedup record must not drop telemetry: exporting a
         // possible duplicate is recoverable at the collector, losing a real
-        // observation is not.
+        // observation is not. Deduplication is what lapses here, so
+        // the report says so rather than claiming a guarantee that did not hold.
         diagnostics.push(stateDiagnostic(thrown));
+        delivery = { deduplicated: false, origin: identity.origin, reason: "state-unavailable" };
       }
     }
-    if (duplicateDelivery) {
-      suppressExport = true;
-      logger.info("delivery already handled; telemetry suppressed", {
-        "delivery.callback_id_present": true,
-      });
-    }
 
-    const { delivery, ...ingestInput } = input;
-    void delivery;
-    const ingest = await hook.ingest(ingestInput);
+    const duplicateDelivery = delivery.outcome === "duplicate" || delivery.outcome === "in-flight";
+    // A redelivery is parsed but changes nothing: no export, no sequence advance,
+    // no cumulative-usage rewrite. Suppressing inside `ingest` rather than at the
+    // sink is what makes that true — a discarding sink still let the orchestrator
+    // renumber the session and move the usage baseline, so a redelivered callback
+    // silently shifted every later event's derived id.
+    const ingest = await hook.ingest(withoutDelivery(input), { suppress: duplicateDelivery });
 
     let usageRollups: readonly UsageRollup[] = [];
     if (!duplicateDelivery && ingest.identity !== undefined && ingest.usageObservations.length > 0) {
@@ -314,6 +655,73 @@ export const createHookRuntime = (options: HookRuntimeOptions): HookRuntime => {
       );
     }
 
+    if (owned && identity !== undefined) {
+      // Committing means "this callback is accounted for; never process it again",
+      // so the decision turns on whether *anything* survived rather than whether
+      // everything did — see `DeliveryDurability`.
+      //
+      // A partially delivered batch is terminal, and that is the uncomfortable but
+      // correct answer. Releasing it would retry the whole callback and re-export
+      // every span a collector already accepted, turning a reported loss into a
+      // silent double-count; a duplicated span corrupts a total that nobody can
+      // reconstruct, whereas a reported loss is a number somebody can act on. So
+      // the callback commits and the loss is stated.
+      try {
+        if (isCommittable(ingest.durability)) {
+          const committed = await deduplicator.commit(
+            identity.scope,
+            identity.callbackId,
+            claimOwner,
+          );
+          if (committed.status === "superseded") {
+            // The stale window was shorter than this installation's real worst
+            // case, so a peer took the claim over mid-flight and both of us may have
+            // exported. No floor computation can rule this out, so it is reported
+            // rather than assumed away.
+            delivery = { ...delivery, deduplicated: false, superseded: true };
+            diagnostics.push(
+              createErrorInfo({
+                code: "delivery-claim-superseded",
+                phase: "state",
+                detail:
+                  "another process reclaimed this delivery claim before it was committed; raise staleClaimMillis",
+                details: {
+                  "delivery.origin": identity.origin,
+                  "delivery.attempt": committed.attempt,
+                },
+                occurredAt: clock.now(),
+              }),
+            );
+            logger.warn("delivery claim superseded before commit; deduplication did not hold", {
+              "delivery.origin": identity.origin,
+              "delivery.attempt": committed.attempt,
+            });
+          }
+          if (ingest.durability === "partial") {
+            delivery = { ...delivery, partialLoss: ingest.exportRejected };
+            logger.warn("delivery partially lost; committed to avoid re-exporting accepted spans", {
+              "delivery.origin": identity.origin,
+              "export.accepted": ingest.emitted,
+              "export.rejected": ingest.exportRejected,
+            });
+          }
+        } else {
+          // Nothing survived, so a retry cannot duplicate anything. Released rather
+          // than left to age out, so the next delivery is treated as fresh
+          // immediately instead of standing down for the whole stale window against
+          // a process that is no longer running.
+          await deduplicator.release(identity.scope, identity.callbackId);
+          delivery = { ...delivery, deduplicated: false, retryable: true };
+          logger.warn("delivery not durably recorded; claim released for retry", {
+            "delivery.origin": identity.origin,
+            "export.rejected": ingest.exportRejected,
+          });
+        }
+      } catch (thrown) {
+        diagnostics.push(stateDiagnostic(thrown));
+      }
+    }
+
     let cleanup: LifecycleCleanupReport | undefined;
     if (
       (options.sweepOnSessionEnd ?? true) &&
@@ -322,6 +730,15 @@ export const createHookRuntime = (options: HookRuntimeOptions): HookRuntime => {
     ) {
       try {
         cleanup = await janitor.runOnce(ingest.identity.sessionId);
+        const neverExported = cleanup.span?.expiredOpen ?? 0;
+        if (neverExported > 0) {
+          // A start that aged out without its end never produced a span at all.
+          // Said out loud, because the alternative reading of the same silence is
+          // "nothing happened".
+          logger.warn("expired lifecycle spans were never completed, so never exported", {
+            "lifecycle.expired_open_spans": neverExported,
+          });
+        }
       } catch (thrown) {
         diagnostics.push(stateDiagnostic(thrown));
       }
@@ -330,10 +747,29 @@ export const createHookRuntime = (options: HookRuntimeOptions): HookRuntime => {
     return {
       ingest,
       duplicateDelivery,
+      delivery,
       usageRollups,
       ...(cleanup === undefined ? {} : { cleanup }),
       diagnostics,
     };
+  };
+
+  const process_ = async (input: HookProcessInput): Promise<HookProcessOutcome> => {
+    const diagnostics: OtelHookErrorInfo[] = [];
+    const identified = identifyDelivery(input);
+    const report = reportUnavailable(identified.unavailable, diagnostics);
+
+    if (identified.identity === undefined) {
+      return runProcess(input, undefined, report, diagnostics);
+    }
+
+    // Deliveries sharing a scope run one at a time, in arrival order: a claim
+    // that is only decided after a peer has already exported is not a claim.
+    // Unrelated scopes stay concurrent, and this is an in-process lock layered
+    // over the store's cross-process one, so it never contends with itself.
+    return deliveryLock.run(identified.identity.scope, () =>
+      runProcess(input, identified.identity, report, diagnostics),
+    );
   };
 
   const snapshots = (): readonly DeliveryHealthSnapshot[] => [sink.health()];
