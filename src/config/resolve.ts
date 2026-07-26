@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import { createErrorInfo, type OtelHookErrorInfo } from "../errors/index.js";
 import type { Attributes } from "../model/primitives.js";
+import { describeResourceAttributeNames } from "./resource-attributes.js";
 import {
   DEFAULT_CONFIG,
   otelHookConfigPatchSchema,
@@ -17,6 +18,14 @@ import {
  * beats `file`, which beats `defaults`. There is no partial-merge surprise —
  * merging happens per leaf field, so a file may set an endpoint while the
  * environment sets only a content mode.
+ *
+ * `exporter.resourceAttributes` follows the same rule one level deeper: each
+ * *attribute key* is its own leaf. A file may set `deployment.environment`
+ * while `OTEL_RESOURCE_ATTRIBUTES` adds `service.instance.id` and
+ * `--resource-attr` overrides just one of them; the result is the union, with
+ * the highest-precedence layer winning per key and provenance recorded per key.
+ * A layer cannot *remove* a key a lower layer set — precedence is an override
+ * relation, not a replacement one.
  */
 export const CONFIG_SOURCE_PRECEDENCE = ["defaults", "file", "environment", "inline-override"] as const;
 export type ConfigSource = (typeof CONFIG_SOURCE_PRECEDENCE)[number];
@@ -180,6 +189,12 @@ export const describeResolvedConfig = (config: OtelHookConfig): Attributes => {
     "exporter.protocol": config.exporter.protocol,
     ...(endpointOrigin === undefined ? {} : { "exporter.endpoint_origin": endpointOrigin }),
     "exporter.header_names": [...config.exporter.headerNames],
+    // Names only. A resource attribute *name* is already on the wire in every
+    // exported resource, so disclosing it here adds nothing; a *value* may hold
+    // whatever an operator put in a shell profile, so it never appears.
+    "exporter.resource_attribute_names": [
+      ...describeResourceAttributeNames(config.exporter.resourceAttributes),
+    ],
     "exporter.timeout_millis": config.exporter.timeoutMillis,
     "exporter.max_batch_size": config.exporter.maxBatchSize,
     "exporter.service_name": config.exporter.serviceName,

@@ -9,7 +9,7 @@
 //   node scripts/packaging/pack-smoke-test.mjs [--json] [--skip-build]
 
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -23,6 +23,15 @@ const runNpm = (args, options = {}) =>
   process.env.npm_execpath
     ? execFileAsync(process.execPath, [process.env.npm_execpath, ...args], options)
     : execFileAsync("npm", args, options);
+
+const pathExists = async (target) => {
+  try {
+    await access(target);
+    return true;
+  } catch {
+    return false;
+  }
+};
 
 const readPackageJson = async () =>
   JSON.parse(await readFile(path.join(REPO_ROOT, "package.json"), "utf8"));
@@ -133,6 +142,71 @@ const runSmokeTest = async ({ skipBuild = false } = {}) => {
           throw new Error(`bin ${binName} doctor --json returned an unexpected report shape`);
         }
         steps.push(`bin ${binName} doctor --json: ${report.checks.length} check(s), ok=${String(report.ok)}`);
+
+        // The registration lifecycle must work from an installed package on
+        // every platform this ships to, so it is exercised here rather than
+        // only in the source tree. A dry run against a scratch project root
+        // proves the whole path — planner, scope resolution, formatting,
+        // rendering — without writing into anyone's real configuration.
+        const scratchProject = path.join(consumerDir, "scratch-project");
+        const { stdout: setupJson } = await runBin([
+          "setup",
+          "--provider",
+          "claude-code",
+          "--provider",
+          "codex",
+          "--provider",
+          "gemini-cli",
+          "--scope",
+          "project",
+          "--project-dir",
+          scratchProject,
+          "--dry-run",
+          "--json",
+        ]);
+        const setupReport = JSON.parse(setupJson);
+        if (setupReport.ok !== true || setupReport.dryRun !== true) {
+          throw new Error(`bin ${binName} setup --dry-run --json did not report a clean dry run`);
+        }
+        for (const outcome of setupReport.outcomes) {
+          if (outcome.status !== "planned" || typeof outcome.plannedContents !== "string") {
+            throw new Error(
+              `bin ${binName} setup --dry-run planned nothing for ${String(outcome.providerId)}`,
+            );
+          }
+          JSON.parse(outcome.plannedContents);
+        }
+        if (await pathExists(scratchProject)) {
+          throw new Error(`bin ${binName} setup --dry-run wrote to disk`);
+        }
+        steps.push(
+          `bin ${binName} setup --dry-run --json: planned ${setupReport.outcomes.length} target(s), wrote nothing`,
+        );
+
+        // An unsupported provider must fail loudly and machine-readably rather
+        // than write a guessed configuration shape.
+        let cursorStdout;
+        try {
+          ({ stdout: cursorStdout } = await runBin([
+            "setup",
+            "--provider",
+            "cursor",
+            "--project-dir",
+            scratchProject,
+            "--json",
+          ]));
+          throw new Error(`bin ${binName} setup --provider cursor unexpectedly succeeded`);
+        } catch (error) {
+          if (typeof error?.stdout !== "string" || error.stdout.length === 0) {
+            throw error;
+          }
+          cursorStdout = error.stdout;
+        }
+        const cursorReport = JSON.parse(cursorStdout);
+        if (cursorReport.ok !== false || cursorReport.outcomes[0]?.status !== "unsupported") {
+          throw new Error(`bin ${binName} setup --provider cursor did not report "unsupported"`);
+        }
+        steps.push(`bin ${binName} setup --provider cursor: unsupported, exit 1`);
       }
     }
 

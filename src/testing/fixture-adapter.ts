@@ -11,6 +11,7 @@ import {
   type ProviderAdapter,
   type ProviderCapabilities,
   type ProviderContext,
+  type ProviderDeliveryClaim,
   type ProviderDetection,
   type ProviderDetectionInput,
   type ProviderHookResponse,
@@ -77,6 +78,9 @@ export const DEFAULT_FIXTURE_CAPABILITIES: ProviderCapabilities = Object.freeze(
   emitsSubagentEvents: true,
   emitsCompactionEvents: true,
   requiresHookResponse: false,
+  // The synthetic protocol carries an optional `requestId`, so some payloads are
+  // replay-identifiable and some are not — the mixed case a core test wants.
+  deliveryIdentifier: "partial",
 });
 
 export type FixtureAdapterOptions = {
@@ -90,7 +94,15 @@ export type FixtureAdapterOptions = {
   /** Extra claims merged after the adapter's own, e.g. to force a conflict. */
   readonly extraClaims?: readonly IdentityClaim[];
   /** Throw from the named method, to exercise containment. */
-  readonly throwOn?: "detect" | "identify" | "parse" | "hookResponse";
+  readonly throwOn?: "detect" | "identify" | "parse" | "hookResponse" | "deliveryIdentity";
+  /**
+   * Replace the delivery claim entirely, e.g. to return one the contract's own
+   * component guard must reject.
+   */
+  readonly deliveryIdentity?: (
+    input: ProviderIdentityInput,
+    context: ProviderContext,
+  ) => ProviderDeliveryClaim | undefined;
   /** Emit a provider-protocol stdout response instead of staying silent. */
   readonly hookResponse?: (
     input: ProviderHookResponseInput,
@@ -176,6 +188,33 @@ export const createFixtureAdapter = (options: FixtureAdapterOptions = {}): Provi
       },
     });
     return [claim, ...(options.extraClaims ?? [])];
+  };
+
+  /**
+   * The synthetic protocol's `requestId` names one request, so it identifies a
+   * delivery; a payload without one is deliberately left unidentifiable, which is
+   * what lets a core test exercise both branches with the same adapter.
+   */
+  const deliveryIdentity = (
+    input: ProviderIdentityInput,
+    context: ProviderContext,
+  ): ProviderDeliveryClaim | undefined => {
+    if (options.throwOn === "deliveryIdentity") {
+      throw new Error("fixture adapter deliveryIdentity failure");
+    }
+    if (options.deliveryIdentity !== undefined) {
+      return options.deliveryIdentity(input, context);
+    }
+    const parsed = syntheticPayloadSchema.safeParse(input.payload);
+    if (!parsed.success || parsed.data.requestId === undefined) {
+      return undefined;
+    }
+    return {
+      sessionId: parsed.data.sessionId,
+      sourceEventName: parsed.data.event,
+      components: [parsed.data.requestId],
+      evidence: ["payload.requestId names one synthetic request"],
+    };
   };
 
   const parse = (input: ProviderParseInput, context: ProviderContext): ProviderParseResult => {
@@ -348,5 +387,5 @@ export const createFixtureAdapter = (options: FixtureAdapterOptions = {}): Provi
     return SILENT_HOOK_RESPONSE;
   };
 
-  return { id, version, capabilities, detect, identify, parse, hookResponse };
+  return { id, version, capabilities, detect, identify, deliveryIdentity, parse, hookResponse };
 };

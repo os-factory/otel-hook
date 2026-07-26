@@ -1,4 +1,8 @@
-import { describeProviderCatalog, type ProviderCatalogEntry } from "../providers/defaults.js";
+import {
+  DELIVERY_IDENTIFIER_SUMMARY,
+  describeProviderCatalog,
+  type ProviderCatalogEntry,
+} from "../providers/defaults.js";
 import { findRegistrationSupport } from "../install/index.js";
 import type { CliProvidersCommand } from "./args.js";
 import { writeLine, type CliIo } from "./context.js";
@@ -57,6 +61,12 @@ export const runProvidersCommand = (command: CliProvidersCommand, io: CliIo): nu
       )}`,
     );
     writeLine(io.stdout, `  stdout protocol    ${entry.requiresHookResponse ? "required" : "silent"}`);
+    writeLine(
+      io.stdout,
+      `  delivery dedup     ${entry.deliveryIdentifier} — ${
+        DELIVERY_IDENTIFIER_SUMMARY[entry.deliveryIdentifier]
+      }`,
+    );
     writeLine(
       io.stdout,
       `  registration       ${entry.registrationSupported ? "supported" : "unsupported"} — ${entry.registrationNote}`,

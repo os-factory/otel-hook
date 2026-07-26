@@ -10,13 +10,25 @@
  */
 export interface AsyncLock {
   /**
-   * `timeoutMillis` bounds how long the caller waits to acquire the key; it
-   * does not bound `fn` after acquisition or cancel a queued operation.
-   * Letting a timed-out caller skip the queue
-   * would let it run concurrently with whoever still holds the key, which
-   * defeats the point of a mutex. So a slow holder can make a waiter give up
-   * on an answer while its own turn still arrives later, in order, and still
-   * takes effect — the timeout bounds *waiting*, never *exclusivity*.
+   * `timeoutMillis` bounds how long the caller waits to *acquire* the key.
+   *
+   * Two guarantees, and the boundary between them is the whole contract:
+   *
+   * - **A timed-out caller's `fn` never runs.** Giving up on the wait cancels the
+   *   queued operation. It has to: a caller that has been told "I could not take
+   *   the lock" will report contention and move on, and if `fn` then ran anyway it
+   *   would mutate state after the caller had already declared that nothing
+   *   happened. That is worse than either outcome on its own — the state changes
+   *   and nobody is watching.
+   * - **Work is never cancelled after acquisition.** Once `fn` has started the
+   *   timeout is irrelevant; interrupting a read-modify-write partway through is
+   *   exactly the corruption a mutex exists to prevent. So the timeout bounds
+   *   *waiting*, never *exclusivity* and never *completion*.
+   *
+   * Cancellation does not let a waiter skip the queue: the cancelled slot still
+   * settles in order, so everyone behind it keeps its place. A cancelled call
+   * rejects with {@link LockWaitTimeoutError}, the same error a timed-out wait
+   * produces, because from the caller's side they are one condition.
    */
   run<T>(key: string, fn: () => Promise<T>, timeoutMillis?: number): Promise<T>;
 }
@@ -36,11 +48,34 @@ export const createAsyncLock = (): AsyncLock => {
 
   const run = async <T>(key: string, fn: () => Promise<T>, timeoutMillis?: number): Promise<T> => {
     const previous = tail.get(key) ?? Promise.resolve();
-    const acquired = previous.then(
+    const queued = previous.then(
       () => undefined,
       () => undefined,
     );
-    const current = acquired.then(fn);
+
+    /**
+     * `entered` flips synchronously, immediately before `fn` is invoked, and
+     * `cancelled` is only ever set from the timer while `entered` is false.
+     *
+     * That ordering is what makes the two guarantees exclusive rather than racy.
+     * Microtasks drain before timers, so if this slot's turn has arrived at all,
+     * the callback below has already run and set `entered` before any timer
+     * callback can observe it — there is no window in which the timer sees a
+     * not-yet-entered slot that is in fact about to run.
+     */
+    let cancelled = false;
+    let entered = false;
+
+    const current = queued.then((): T | Promise<T> => {
+      if (cancelled) {
+        // The waiter gave up before its turn came, so `fn` is skipped entirely.
+        // The slot still settles here, in order, so nothing behind it is reordered.
+        throw new LockWaitTimeoutError(key, timeoutMillis ?? 0);
+      }
+      entered = true;
+      return fn();
+    });
+
     const swallowed = current.then(
       () => undefined,
       () => undefined,
@@ -59,12 +94,17 @@ export const createAsyncLock = (): AsyncLock => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<never>((_resolve, reject) => {
       timer = setTimeout(() => {
+        if (!entered) {
+          cancelled = true;
+        }
         reject(new LockWaitTimeoutError(key, timeoutMillis));
       }, timeoutMillis);
       timer.unref?.();
     });
     try {
-      await Promise.race([acquired, timeout]);
+      // Raced against the queue gate, not against `current`: once the slot is
+      // entered the caller waits for `fn` however long it takes.
+      await Promise.race([queued, timeout]);
     } finally {
       if (timer !== undefined) {
         clearTimeout(timer);

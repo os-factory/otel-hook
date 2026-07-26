@@ -258,6 +258,8 @@ export const runHookCommand = async (command: CliRunCommand, io: CliIo): Promise
       ? {}
       : { flushTimeoutMillis: command.policy.flushTimeoutMillis }),
     ...(command.policy.spoolDisabled === true ? { enableSpool: false } : {}),
+    ...(command.requireCallbackId === true ? { requireCallbackId: true } : {}),
+    ...(command.noDeriveCallbackId === true ? { deriveDeliveryIdentity: false } : {}),
   });
 
   let outcome: HookProcessOutcome | undefined;
@@ -307,6 +309,16 @@ export const runHookCommand = async (command: CliRunCommand, io: CliIo): Promise
       "events.emitted": outcome.ingest.emitted,
       "events.dropped": outcome.ingest.dropped,
       "delivery.duplicate": outcome.duplicateDelivery,
+      "delivery.deduplicated": outcome.delivery.deduplicated,
+      ...(outcome.delivery.origin === undefined
+        ? {}
+        : { "delivery.origin": outcome.delivery.origin }),
+      ...(outcome.delivery.outcome === undefined
+        ? {}
+        : { "delivery.outcome": outcome.delivery.outcome }),
+      ...(outcome.delivery.reason === undefined
+        ? {}
+        : { "delivery.unavailable_reason": outcome.delivery.reason }),
       "usage.rollups": outcome.usageRollups.length,
       "hook_response.contract": hookResponse.contract,
     });

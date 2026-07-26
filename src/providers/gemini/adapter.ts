@@ -55,6 +55,10 @@ export const DEFAULT_GEMINI_CAPABILITIES: ProviderCapabilities = Object.freeze({
   emitsSubagentEvents: false,
   emitsCompactionEvents: true,
   requiresHookResponse: false,
+  // Nothing in this protocol identifies a callback across a redelivery: there is
+  // no request, turn, or tool-call id, and `session_id` repeats across resume and
+  // clear. See `./delivery.ts` for the field-by-field reasoning.
+  deliveryIdentifier: "none",
 });
 
 export type GeminiAdapterOptions = {
@@ -399,7 +403,15 @@ export const createGeminiCliAdapter = (options: GeminiAdapterOptions = {}): Prov
 
   const hookResponse = (): ProviderHookResponse => SILENT_HOOK_RESPONSE;
 
-  return { id, version, capabilities, detect, identify, parse, hookResponse };
+  return {
+    id,
+    version,
+    capabilities,
+    detect,
+    identify,
+    parse,
+    hookResponse,
+  };
 };
 
 const normalizeUsageOrWarn = (

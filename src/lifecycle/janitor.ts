@@ -16,7 +16,15 @@ export type LifecycleJanitorOptions = {
   readonly maxEntriesPerComponent?: number;
 };
 
-export type LifecycleSweepStats = { readonly removed: number; readonly scanned: number };
+export type LifecycleSweepStats = {
+  readonly removed: number;
+  readonly scanned: number;
+  /**
+   * Span records dropped with a start and no end — spans that were never
+   * exported. Reported only by the span sweep; see `SpanCleanupResult`.
+   */
+  readonly expiredOpen?: number;
+};
 
 export type LifecycleCleanupReport = {
   readonly span?: LifecycleSweepStats;
@@ -47,7 +55,12 @@ export const createLifecycleJanitor = (options: LifecycleJanitorOptions): Lifecy
     const scope = { maxEntries, ...(sessionId === undefined ? {} : { sessionId }) };
     const [span, dedup, usage] = await Promise.all([
       options.spanCorrelator?.cleanup(spanMaxAge, scope),
-      options.deduplicator?.cleanup(dedupMaxAge, scope),
+      // Deduplication is deliberately swept across every scope rather than the
+      // ending session's: a delivery scope is a host-chosen namespace or a
+      // digest of provider/installation/session, never a session id, so scoping
+      // this sweep by `sessionId` would match nothing and let records accumulate
+      // forever. The sweep is TTL-driven and still bounded by `maxEntries`.
+      options.deduplicator?.cleanup(dedupMaxAge, { maxEntries }),
       options.usageAccumulator?.cleanup(usageMaxAge, scope),
     ]);
     return {

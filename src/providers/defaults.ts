@@ -7,7 +7,12 @@ import { CODEX_PROVIDER_ID } from "./codex/version.js";
 import { createCursorAdapter } from "./cursor/adapter.js";
 import { CURSOR_PROVIDER_ID } from "./cursor/payload.js";
 import { createGeminiCliAdapter, GEMINI_PROVIDER_ID } from "./gemini/adapter.js";
-import { describeAdapter, type AdapterDescription, type ProviderAdapter } from "./adapter.js";
+import {
+  describeAdapter,
+  type AdapterDescription,
+  type DeliveryIdentifierSupport,
+  type ProviderAdapter,
+} from "./adapter.js";
 import { createProviderRegistry, type ProviderRegistry } from "./registry.js";
 
 /**
@@ -145,6 +150,14 @@ export type ProviderCatalogEntry = AdapterDescription & {
   readonly emitsSubagentEvents: boolean;
   readonly emitsCompactionEvents: boolean;
 };
+
+/** How each adapter's declared delivery-identifier coverage reads to a human. */
+export const DELIVERY_IDENTIFIER_SUMMARY: Readonly<Record<DeliveryIdentifierSupport, string>> =
+  Object.freeze({
+    none: "no callback carries a replay-stable identifier",
+    partial: "some callbacks carry a replay-stable identifier",
+    all: "every recognized callback carries a replay-stable identifier",
+  });
 
 /**
  * Machine-readable capability catalog, for `otel-hook providers --json` and for

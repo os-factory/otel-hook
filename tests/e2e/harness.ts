@@ -202,27 +202,32 @@ export const PROVIDER_CASES: readonly ProviderCase[] = [
   },
   {
     providerId: "gemini-cli",
+    // An *end* edge. A lone `*.start` is deliberately not exported — the end edge
+    // emits the one complete span for a scope — so a start-only payload would give
+    // this end-to-end assertion no bytes on the wire to check.
     payload: (sessionId) => ({
       session_id: sessionId,
-      hook_event_name: "BeforeTool",
+      hook_event_name: "AfterTool",
       cwd: "/workspace/fixture-repo",
       timestamp: "2026-07-25T10:00:06.000Z",
       tool_name: "read_file",
       tool_input: { path: GEMINI_SECRET },
+      tool_response: { llmContent: GEMINI_SECRET },
     }),
     expectedStdout: "",
     secret: GEMINI_SECRET,
   },
   {
     providerId: "antigravity",
+    // An *end* edge, for the same reason as the gemini-cli case above.
     payload: (sessionId) => ({
-      hookEventName: "PreToolUse",
+      hookEventName: "PostToolUse",
       conversationId: sessionId,
       workspacePaths: ["/workspace/fixture-repo"],
       stepIdx: 3,
       invocationNum: 1,
       toolName: "run_command",
-      toolInput: { command: ANTIGRAVITY_SECRET },
+      toolResponse: { stdout: ANTIGRAVITY_SECRET },
     }),
     expectedStdout: "",
     secret: ANTIGRAVITY_SECRET,

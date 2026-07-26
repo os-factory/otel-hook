@@ -65,3 +65,40 @@ source.
 ## Changelog
 
 - 2026-07-25 — initial policy: Node >=20, schema version 1, ESM-only.
+- 2026-07-26 — **breaking change to the provider adapter contract.**
+  `ProviderCapabilities` gained a required `deliveryIdentifier` field
+  (`none | partial | all`), and `ProviderAdapter` gained an optional
+  `deliveryIdentity` method. A third-party adapter must declare the capability to
+  compile; declaring `"none"` reproduces the previous behaviour exactly. Rationale
+  and alternatives in [ADR 0007](adr/0007-replay-stable-delivery-deduplication.md).
+- **A lone `*.start` no longer produces an OTLP record.** A lifecycle span id is
+  derived from its scope, so both edges computed the same id and exporting on both
+  put two records with one identity on the wire — which OTLP cannot reconcile,
+  since it has no span update. The end edge now exports the single completed span.
+  A consumer that counted start-edge records will see fewer spans and correct
+  durations; a span whose end never arrives is not exported at all, and the sweep
+  counts those (`expiredOpen`). See
+  [docs/state-retention.md](state-retention.md).
+- **`HookIngestOutcome` gained `exportRejected`**, and `ingest` gained an optional
+  `HookIngestOptions` second parameter. Both are additive for callers reading the
+  outcome; an implementer of the `OtelHook` interface must supply the field.
+- **`SpanCleanupResult` gained a required `expiredOpen`**, and `SpanStartResult`
+  gained a `published` variant for a start whose scope was already exported.
+- **`HookIngestOutcome` gained a required `durability`** (`DeliveryDurability`),
+  and `DeliveryReport` gained `partialLoss`. A partially delivered callback is now
+  *committed* rather than released, so a consumer that treated any rejection as
+  retryable will see fewer retries and an explicit loss count instead.
+- **Usage accounting moved after export.** `usageObservations` is empty for a
+  callback whose telemetry was fully lost or suppressed, where it was previously
+  populated regardless. The cumulative baseline is no longer advanced for those
+  callbacks, which is what makes a retry recover the same difference.
+- **`AsyncLock.run` cancels a queued operation whose caller timed out waiting.**
+  Previously the operation still ran afterwards and its result was discarded. Any
+  caller that relied on a timed-out write eventually landing must now treat the
+  rejection as final — which is the point: state no longer changes after the caller
+  has reported that it did not.
+- **`SemanticMappingOptions` gained `correlationAvailable`.** Omitted, an unpaired
+  start is deferred exactly as before; set to `false` it is exported as an
+  explicitly labelled fallback under a discriminated span id, so a start that
+  nothing recorded is never dropped silently.
+  No canonical schema version bump: no event type or field changed.

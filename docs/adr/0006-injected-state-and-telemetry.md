@@ -51,6 +51,11 @@ wall clock, random ids, the network, and the filesystem.
   explicit rather than assumed.
 - Usage accounting is only as good as the state store. That is visible in
   diagnostics (`state-store-failure`) instead of being papered over.
+- So is cross-process span pairing. The telemetry layer declares what it needs
+  (`SpanCorrelation`, plain data) and the lifecycle layer resolves it from the
+  store, so the sink never reaches into state itself. A host with no durable
+  store still exports every span, each labelled with why it is unpaired
+  (`otelhook.span.orphan`). Layout and retention: `docs/state-retention.md`.
 
 ## Alternatives considered
 

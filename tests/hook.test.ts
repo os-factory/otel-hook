@@ -543,8 +543,11 @@ describe("OtelHook usage derivation", () => {
     await harness.hook.ingest(
       ingestInput({ ...sessionStart, event: "session.end", usage: cumulativeUsage(100, 20) }),
     );
-    // Fail the sequence read and the usage read for the next invocation.
-    harness.stateStore.failNext(2);
+    // Fail every state operation the next invocation performs, up to and including
+    // the usage-baseline read. In transaction order those are: the sequence read,
+    // the sequence reservation write, and then — after export — the baseline read
+    // that usage accounting starts from.
+    harness.stateStore.failNext(3);
     const outcome = await harness.hook.ingest(
       ingestInput({ ...sessionStart, event: "session.end", usage: cumulativeUsage(150, 25) }),
     );

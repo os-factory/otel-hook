@@ -231,20 +231,46 @@ describe("hook runtime: delivery deduplication", () => {
     expect(second.duplicateDelivery).toBe(false);
   });
 
-  it("does not claim to dedupe when no callback id is supplied", async () => {
+  it("does not claim to dedupe a callback the provider cannot identify", async () => {
     const stateRootDir = await scratchDir();
     const { runtime } = await buildRuntime({ stateRootDir });
+    // `Stop` is the documented gap: Claude Code can fire it more than once for one
+    // prompt, so `prompt_id` is not a delivery identity, and the adapter says so
+    // rather than suppressing a genuine second stop and losing its usage.
     const payload = claudePayload("ses-no-callback");
 
     const first = await runtime.process({ payload, transport: "hook-stdin", providerHint: "claude-code" });
     const second = await runtime.process({ payload, transport: "hook-stdin", providerHint: "claude-code" });
 
-    // Documented limitation: without a host delivery id, a redelivered payload is
-    // indistinguishable from a new observation, because the Claude Code adapter's
-    // invocation id embeds a clock reading by design.
     expect(first.duplicateDelivery).toBe(false);
     expect(second.duplicateDelivery).toBe(false);
+    expect(first.delivery).toEqual({
+      deduplicated: false,
+      reason: "callback-not-identifiable",
+      capability: "partial",
+    });
     expect(first.ingest.identity?.invocationId).not.toBe(second.ingest.identity?.invocationId);
+  });
+
+  it("does dedupe a callback the provider can identify, with no host id at all", async () => {
+    const stateRootDir = await scratchDir();
+    const { runtime } = await buildRuntime({ stateRootDir });
+    // A tool callback carries `tool_use_id`, which is stable across a redelivery.
+    const payload = {
+      hook_event_name: "PostToolUse",
+      session_id: "ses-derived",
+      cwd: "/workspace/demo",
+      tool_name: "Read",
+      tool_use_id: "tool-1",
+      tool_response: { content: "synthetic" },
+    };
+
+    const first = await runtime.process({ payload, transport: "hook-stdin", providerHint: "claude-code" });
+    const second = await runtime.process({ payload, transport: "hook-stdin", providerHint: "claude-code" });
+
+    expect(first.delivery).toMatchObject({ deduplicated: true, origin: "provider", outcome: "fresh" });
+    expect(second.duplicateDelivery).toBe(true);
+    expect(second.ingest.emitted).toBe(0);
   });
 });
 

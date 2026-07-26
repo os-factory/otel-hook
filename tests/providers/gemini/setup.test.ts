@@ -55,7 +55,10 @@ describe("mergeGeminiHookRegistration", () => {
     expect(result.settings.someUnrelatedSetting).toBe(true);
   });
 
-  it("adds a second matcher entry rather than merging into an unrelated matcher", () => {
+  // `name` is this vocabulary's idempotency key, so a re-registration under a
+  // different matcher *moves* the entry. Leaving the old one behind would fire
+  // the hook twice for every tool the two matchers both select.
+  it("moves its own registration when the matcher changes rather than adding a second", () => {
     const first = mergeGeminiHookRegistration({}, { ...registration, events: ["BeforeTool"], matcher: "read_file" });
     const second = mergeGeminiHookRegistration(first.settings, {
       ...registration,
@@ -64,19 +67,42 @@ describe("mergeGeminiHookRegistration", () => {
     });
 
     expect(second.changed).toBe(true);
-    expect(second.settings.hooks?.BeforeTool).toHaveLength(2);
+    expect(second.settings.hooks?.BeforeTool).toEqual([
+      {
+        matcher: "write_file",
+        hooks: [{ name: "otel-hook-gemini", type: "command", command: "otel-hook gemini-cli" }],
+      },
+    ]);
   });
 
-  it("distinguishes registrations by name, command, and timeout", () => {
+  it("rewrites its own registration in place when the command or timeout changes", () => {
     const first = mergeGeminiHookRegistration({}, { ...registration, events: ["SessionStart"] });
     const second = mergeGeminiHookRegistration(first.settings, {
       ...registration,
+      command: "/usr/local/bin/otel-hook run --provider gemini-cli",
       events: ["SessionStart"],
       timeout: 5000,
     });
 
     expect(second.changed).toBe(true);
-    expect(second.settings.hooks?.SessionStart?.[0]?.hooks).toHaveLength(2);
+    expect(second.settings.hooks?.SessionStart?.[0]?.hooks).toEqual([
+      {
+        name: "otel-hook-gemini",
+        type: "command",
+        command: "/usr/local/bin/otel-hook run --provider gemini-cli",
+        timeout: 5000,
+      },
+    ]);
+  });
+
+  it("collapses duplicate registrations of itself left behind by an older version", () => {
+    const entry = { name: "otel-hook-gemini", type: "command", command: "otel-hook gemini-cli" };
+    const existing = { hooks: { SessionStart: [{ matcher: "*", hooks: [entry, { ...entry, timeout: 30 }] }] } };
+
+    const result = mergeGeminiHookRegistration(existing, { ...registration, events: ["SessionStart"] });
+
+    expect(result.changed).toBe(true);
+    expect(result.settings.hooks?.SessionStart?.[0]?.hooks).toEqual([entry]);
   });
 
   it("tolerates a non-object existing settings value by starting fresh", () => {

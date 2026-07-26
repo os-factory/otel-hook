@@ -1,6 +1,7 @@
 import { createErrorInfo, type OtelHookErrorInfo } from "../errors/index.js";
 import { detectionConfidenceSchema } from "../model/primitives.js";
 import { contentModeSchema } from "../privacy/policy.js";
+import { parseResourceAttributesValue } from "./resource-attributes.js";
 import type { OtelHookConfigPatch } from "./schema.js";
 
 export type EnvironmentRecord = Readonly<Record<string, string | undefined>>;
@@ -30,7 +31,10 @@ export const ENVIRONMENT_VARIABLES = Object.freeze({
   exporterProtocol: "OTEL_HOOK_EXPORTER_PROTOCOL",
   exporterTimeoutMillis: "OTEL_HOOK_EXPORTER_TIMEOUT_MS",
   serviceName: "OTEL_HOOK_SERVICE_NAME",
+  otlpServiceName: "OTEL_SERVICE_NAME",
   serviceNamespace: "OTEL_HOOK_SERVICE_NAMESPACE",
+  /** Standard W3C-Baggage-encoded resource attributes (percent-encoded values). */
+  resourceAttributes: "OTEL_RESOURCE_ATTRIBUTES",
   contentMode: "OTEL_HOOK_CONTENT_MODE",
   allowRawContent: "OTEL_HOOK_ALLOW_RAW_CONTENT",
   hashSalt: "OTEL_HOOK_HASH_SALT",
@@ -107,8 +111,63 @@ export const parseEnvironmentConfig = (env: EnvironmentRecord): EnvironmentConfi
     readString(ENVIRONMENT_VARIABLES.exporterEndpoint) ??
     readString(ENVIRONMENT_VARIABLES.otlpEndpoint);
   const timeoutMillis = readInteger(ENVIRONMENT_VARIABLES.exporterTimeoutMillis);
-  const serviceName = readString(ENVIRONMENT_VARIABLES.serviceName);
-  const serviceNamespace = readString(ENVIRONMENT_VARIABLES.serviceNamespace);
+
+  const resourceRaw = readString(ENVIRONMENT_VARIABLES.resourceAttributes);
+  const resource =
+    resourceRaw === undefined ? undefined : parseResourceAttributesValue(resourceRaw);
+  for (const detail of resource?.warnings ?? []) {
+    warn(ENVIRONMENT_VARIABLES.resourceAttributes, detail);
+  }
+  const resourceAttributes = resource?.attributes ?? {};
+
+  /**
+   * Resolve one service field from its sources, highest precedence first.
+   *
+   * `service.name` inside `OTEL_RESOURCE_ATTRIBUTES` is honoured — that is the
+   * shape a migrating deployment already has — but it is the *weakest* source,
+   * and a disagreement with a dedicated variable is reported rather than
+   * applied silently. Only variable names are named; values are not, because
+   * this warning is written to a log the operator may ship elsewhere.
+   */
+  const resolveServiceField = (
+    sources: readonly { readonly variable: string; readonly value: string | undefined }[],
+  ): string | undefined => {
+    const present = sources.filter(
+      (source): source is { variable: string; value: string } => source.value !== undefined,
+    );
+    const winner = present[0];
+    if (winner === undefined) {
+      return undefined;
+    }
+    for (const loser of present.slice(1)) {
+      if (loser.value !== winner.value) {
+        warn(loser.variable, `overridden by ${winner.variable}, which sets a different value`);
+      }
+    }
+    return winner.value;
+  };
+
+  const serviceName = resolveServiceField([
+    { variable: ENVIRONMENT_VARIABLES.serviceName, value: readString(ENVIRONMENT_VARIABLES.serviceName) },
+    {
+      variable: ENVIRONMENT_VARIABLES.otlpServiceName,
+      value: readString(ENVIRONMENT_VARIABLES.otlpServiceName),
+    },
+    {
+      variable: `service.name in ${ENVIRONMENT_VARIABLES.resourceAttributes}`,
+      value: resource?.serviceName,
+    },
+  ]);
+  const serviceNamespace = resolveServiceField([
+    {
+      variable: ENVIRONMENT_VARIABLES.serviceNamespace,
+      value: readString(ENVIRONMENT_VARIABLES.serviceNamespace),
+    },
+    {
+      variable: `service.namespace in ${ENVIRONMENT_VARIABLES.resourceAttributes}`,
+      value: resource?.serviceNamespace,
+    },
+  ]);
 
   const protocolRaw = readString(ENVIRONMENT_VARIABLES.exporterProtocol);
   let protocol: "http/protobuf" | "http/json" | "none" | undefined;
@@ -161,6 +220,7 @@ export const parseEnvironmentConfig = (env: EnvironmentRecord): EnvironmentConfi
     ...(timeoutMillis === undefined ? {} : { timeoutMillis }),
     ...(serviceName === undefined ? {} : { serviceName }),
     ...(serviceNamespace === undefined ? {} : { serviceNamespace }),
+    ...(Object.keys(resourceAttributes).length === 0 ? {} : { resourceAttributes }),
   };
 
   const limits = {

@@ -30,6 +30,7 @@ import {
   type CodexHookPayload,
   type CodexUsage,
 } from "./payload.js";
+import { codexDeliveryIdentity } from "./delivery.js";
 import { classifyCodexToolKind } from "./tool-kind.js";
 import { codexUsageToReport } from "./usage.js";
 import { CODEX_ADAPTER_VERSION, CODEX_PROVIDER_ID } from "./version.js";
@@ -62,6 +63,9 @@ export const CODEX_CAPABILITIES: ProviderCapabilities = Object.freeze({
   emitsSubagentEvents: true,
   emitsCompactionEvents: true,
   requiresHookResponse: false,
+  // Tool, subagent, and per-turn callbacks carry a replay-stable id; session and
+  // compaction callbacks do not. See `./delivery.ts` for which and why.
+  deliveryIdentifier: "partial",
 });
 
 const asRecord = (value: unknown): Record<string, unknown> | undefined =>
@@ -474,6 +478,7 @@ export const createCodexAdapter = (): ProviderAdapter => ({
   capabilities: CODEX_CAPABILITIES,
   detect,
   identify,
+  deliveryIdentity: codexDeliveryIdentity,
   parse,
   hookResponse,
 });

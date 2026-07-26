@@ -1,4 +1,3 @@
-import { createServer, type IncomingHttpHeaders, type Server } from "node:http";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
@@ -12,37 +11,8 @@ import { createFixedClock } from "../../src/runtime/clock.js";
 import { createFileDurableSpool } from "../../src/telemetry/durable-spool.js";
 import { createOtlpTraceSink } from "../../src/telemetry/otlp-sink.js";
 import { createTestIdentity } from "../../src/testing/index.js";
-
-/**
- * A real (ephemeral, local-only) HTTP server standing in for a collector, so
- * the sink's actual OTLP HTTP/protobuf delivery path runs end to end instead
- * of only against the in-memory test double. Not a daemon: it is created and
- * torn down within a single test.
- */
-type CapturedRequest = { readonly headers: IncomingHttpHeaders; readonly body: Buffer };
-
-const startCapturingCollector = async (
-  respond: (request: CapturedRequest) => { readonly status: number },
-): Promise<{ readonly url: string; readonly server: Server; readonly requests: CapturedRequest[] }> => {
-  const requests: CapturedRequest[] = [];
-  const server = createServer((req, res) => {
-    const chunks: Buffer[] = [];
-    req.on("data", (chunk: Buffer) => chunks.push(chunk));
-    req.on("end", () => {
-      const request = { headers: req.headers, body: Buffer.concat(chunks) };
-      requests.push(request);
-      const { status } = respond(request);
-      res.writeHead(status);
-      res.end();
-    });
-  });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const address = server.address();
-  if (address === null || typeof address === "string") {
-    throw new Error("failed to bind capturing collector");
-  }
-  return { url: `http://127.0.0.1:${address.port}/v1/traces`, server, requests };
-};
+import { startCapturingCollector } from "../helpers/collector.js";
+import { decodeExportedSpans } from "../helpers/otlp.js";
 
 const identity = createTestIdentity();
 let index = 0;
@@ -68,8 +38,8 @@ afterEach(async () => {
 
 describe("OTLP HTTP/protobuf delivery against a real local collector", () => {
   it("sends a well-formed protobuf ExportTraceServiceRequest and reports success", async () => {
-    const collector = await startCapturingCollector(() => ({ status: 200 }));
-    closers.push(() => new Promise<void>((resolve) => collector.server.close(() => resolve())));
+    const collector = await startCapturingCollector();
+    closers.push(() => collector.close());
 
     const sink = createOtlpTraceSink({
       exporter: { ...DEFAULT_EXPORTER_POLICY, endpoint: collector.url, timeoutMillis: 5_000 },
@@ -90,6 +60,18 @@ describe("OTLP HTTP/protobuf delivery against a real local collector", () => {
     // real protobuf-encoded request rather than JSON or garbage.
     expect(request?.body[0]).toBe(0x0a);
 
+    // Span identity is binary on the wire, so decode it: a substring assertion
+    // could never show that the span really carries a trace, a span, and a
+    // parent of the right widths.
+    const [span] = decodeExportedSpans(request?.body ?? Buffer.alloc(0));
+    expect(span?.name).toBe("prompt");
+    expect(span?.traceId).toMatch(/^[0-9a-f]{32}$/);
+    expect(span?.spanId).toMatch(/^[0-9a-f]{16}$/);
+    // Every event of a session hangs under that session's span, even a
+    // point-in-time one whose session span belongs to another process.
+    expect(span?.parentSpanId).toMatch(/^[0-9a-f]{16}$/);
+    expect(span?.attributes["session.id"]).toBe(identity.sessionId);
+
     expect(sink.health()).toMatchObject({ healthy: true, totalAccepted: 1, totalRejected: 0 });
     await sink.shutdown();
   });
@@ -99,7 +81,7 @@ describe("OTLP HTTP/protobuf delivery against a real local collector", () => {
     closers.push(() => rm(rootDir, { recursive: true, force: true }));
 
     const collector = await startCapturingCollector(() => ({ status: 503 }));
-    closers.push(() => new Promise<void>((resolve) => collector.server.close(() => resolve())));
+    closers.push(() => collector.close());
 
     const clock = createFixedClock();
     const spool = createFileDurableSpool({ rootDir, providerId: "acme-cli", installationId: "install-1", clock });
@@ -121,7 +103,7 @@ describe("OTLP HTTP/protobuf delivery against a real local collector", () => {
     // The collector recovers; a later drain should deliver the spooled batch.
     let up = false;
     const recoveredCollector = await startCapturingCollector(() => (up ? { status: 200 } : { status: 503 }));
-    closers.push(() => new Promise<void>((resolve) => recoveredCollector.server.close(() => resolve())));
+    closers.push(() => recoveredCollector.close());
     up = true;
 
     const drainSink = createOtlpTraceSink({
@@ -132,7 +114,7 @@ describe("OTLP HTTP/protobuf delivery against a real local collector", () => {
       spool,
     });
     const drainResult = await drainSink.drainSpool();
-    expect(drainResult).toEqual({ drained: 1, remaining: 0, failed: 0 });
+    expect(drainResult).toEqual({ drained: 1, remaining: 0, failed: 0, quarantined: 0 });
     expect(recoveredCollector.requests).toHaveLength(1);
     expect(await spool.size()).toBe(0);
 

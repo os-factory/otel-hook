@@ -6,6 +6,7 @@ import {
   DEFAULT_PRIVACY_POLICY,
   privacyPolicySchema,
 } from "../privacy/policy.js";
+import { EMPTY_RESOURCE_ATTRIBUTES, resourceAttributesSchema } from "./resource-attributes.js";
 
 /**
  * Runtime exporter policy.
@@ -29,6 +30,15 @@ export const exporterPolicySchema = z.strictObject({
   maxRetryAttempts: z.number().int().min(0).max(10),
   serviceName: nonEmptyStringSchema,
   serviceNamespace: nonEmptyStringSchema.optional(),
+  /**
+   * Custom attributes merged into the exported OTLP Resource.
+   *
+   * Bounded and validated, and refusing `service.name`/`service.namespace`,
+   * which are the two fields above. Distinct from an invocation's
+   * `consumerAttributes`: this describes the emitting deployment, carries no
+   * identity, and is the same for every span this process exports.
+   */
+  resourceAttributes: resourceAttributesSchema,
 });
 export type ExporterPolicy = z.infer<typeof exporterPolicySchema>;
 
@@ -79,6 +89,7 @@ export const DEFAULT_EXPORTER_POLICY: ExporterPolicy = Object.freeze({
   maxQueueSize: 2048,
   maxRetryAttempts: 2,
   serviceName: "coding-agent",
+  resourceAttributes: EMPTY_RESOURCE_ATTRIBUTES,
 });
 
 export const DEFAULT_DETECTION_POLICY: DetectionPolicy = Object.freeze({

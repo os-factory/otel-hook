@@ -1,115 +1,197 @@
 /**
- * Pure, idempotent registration planners for provider hook configuration.
+ * Registration lifecycle: pure planners, plus the safe application of a plan.
  *
- * Nothing in this module reads or writes the filesystem. A planner takes the
- * *already parsed* contents of a provider's configuration document and returns
- * the document to write back, plus whether anything actually changed. Applying
- * it — reading the file, writing it atomically, deciding where it lives — is the
- * caller's job, for two reasons:
+ * Two layers, deliberately separated:
  *
- * 1. ADR 0003: a provider adapter must never touch the filesystem, and a hook
- *    installer that silently rewrites a developer's editor settings is exactly
- *    the kind of side effect that makes telemetry untrustworthy.
- * 2. A pure merge is testable against every "already registered", "registered
- *    with different options", and "unrelated hooks present" case without a
- *    temporary directory.
+ * - **Planners** (`providers/<id>/registration.ts`, re-exported here) are pure.
+ *   They take the *already parsed* contents of a provider's configuration
+ *   document and return the document to write back plus whether anything
+ *   changed. ADR 0003 keeps a provider adapter away from the filesystem, and a
+ *   pure merge is testable against every "already registered", "registered with
+ *   an older command", and "unrelated hooks present" case without a temporary
+ *   directory.
+ * - **Lifecycle** (`lifecycle.ts`) reads and writes real files: locking a
+ *   third party's config for the read-merge-write, preserving its formatting,
+ *   writing atomically, and refusing rather than clobbering when the document
+ *   is not what the provider documents.
  *
  * Registration is only offered for providers whose configuration contract this
  * repository has verified. {@link PROVIDER_REGISTRATION_SUPPORT} names the
- * others and says why — an invented settings shape written into a real
- * `settings.json` is worse than no installer at all.
+ * others and says exactly what would unblock them — an invented settings shape
+ * written into a real `settings.json` is worse than no installer at all.
  */
 import { ANTIGRAVITY_PROVIDER_ID } from "../providers/antigravity/adapter.js";
 import {
   mergeAntigravityHookRegistration,
+  readAntigravityHookRegistrations,
+  removeAntigravityHookRegistration,
   type AntigravityHookCommandEntry,
   type MergeAntigravityHookRegistrationInput,
   type MergeAntigravityHookRegistrationResult,
+  type RemoveAntigravityHookRegistrationInput,
 } from "../providers/antigravity/registration.js";
 import { CLAUDE_CODE_PROVIDER_ID } from "../providers/claude/detect.js";
+import {
+  CLAUDE_HOOK_EVENTS_MODELLED,
+  CLAUDE_REGISTRABLE_HOOK_EVENTS,
+  CLAUDE_UNREGISTERED_HOOK_EVENTS,
+  mergeClaudeHookRegistration,
+  readClaudeHookRegistrations,
+  removeClaudeHookRegistration,
+  type ClaudeHookRegistrationOptions,
+  type ClaudeHookRemovalOptions,
+} from "../providers/claude/registration.js";
+import {
+  CODEX_HOOK_EVENTS_MODELLED,
+  CODEX_REGISTRABLE_HOOK_EVENTS,
+  CODEX_UNREGISTERED_HOOK_EVENTS,
+  mergeCodexHookRegistration,
+  readCodexHookRegistrations,
+  readCodexHooksFeatureFlag,
+  removeCodexHookRegistration,
+  type CodexHookRegistrationOptions,
+  type CodexHookRemovalOptions,
+  type CodexHooksFeatureFlag,
+} from "../providers/codex/registration.js";
 import { CODEX_PROVIDER_ID } from "../providers/codex/version.js";
-import { CURSOR_PROVIDER_ID } from "../providers/cursor/payload.js";
 import { GEMINI_PROVIDER_ID } from "../providers/gemini/adapter.js";
 import {
   mergeGeminiHookRegistration,
+  readGeminiHookRegistrations,
+  removeGeminiHookRegistration,
   type GeminiHookCommandEntry,
   type GeminiHookMatcherEntry,
   type GeminiHooksSettings,
   type MergeGeminiHookResult,
   type RegisterGeminiHookOptions,
+  type RemoveGeminiHookOptions,
 } from "../providers/gemini/setup.js";
+import {
+  mergeNestedHookRegistration,
+  readNestedHookRegistrations,
+  removeNestedHookRegistrations,
+  type CommandHookEntry,
+  type HookDocumentAction,
+  type HookDocumentChange,
+  type HookDocumentConflict,
+  type HookGroupEntry,
+  type HookHandlerPredicate,
+  type MergeNestedHookInput,
+  type NestedHookDocumentResult,
+  type RemoveNestedHookInput,
+} from "../providers/hook-document.js";
+import { findRegistrationPlanner, managedHookPredicate } from "./planners.js";
+import { findRegistrationSupport } from "./support.js";
 
 export {
+  CLAUDE_HOOK_EVENTS_MODELLED,
+  CLAUDE_REGISTRABLE_HOOK_EVENTS,
+  CLAUDE_UNREGISTERED_HOOK_EVENTS,
+  CODEX_HOOK_EVENTS_MODELLED,
+  CODEX_REGISTRABLE_HOOK_EVENTS,
+  CODEX_UNREGISTERED_HOOK_EVENTS,
   mergeAntigravityHookRegistration,
+  mergeClaudeHookRegistration,
+  mergeCodexHookRegistration,
   mergeGeminiHookRegistration,
+  mergeNestedHookRegistration,
+  readAntigravityHookRegistrations,
+  readClaudeHookRegistrations,
+  readCodexHookRegistrations,
+  readCodexHooksFeatureFlag,
+  readGeminiHookRegistrations,
+  readNestedHookRegistrations,
+  removeAntigravityHookRegistration,
+  removeClaudeHookRegistration,
+  removeCodexHookRegistration,
+  removeGeminiHookRegistration,
+  removeNestedHookRegistrations,
   type AntigravityHookCommandEntry,
+  type ClaudeHookRegistrationOptions,
+  type ClaudeHookRemovalOptions,
+  type CodexHookRegistrationOptions,
+  type CodexHookRemovalOptions,
+  type CodexHooksFeatureFlag,
+  type CommandHookEntry,
   type GeminiHookCommandEntry,
   type GeminiHookMatcherEntry,
   type GeminiHooksSettings,
+  type HookDocumentAction,
+  type HookDocumentChange,
+  type HookDocumentConflict,
+  type HookGroupEntry,
+  type HookHandlerPredicate,
   type MergeAntigravityHookRegistrationInput,
   type MergeAntigravityHookRegistrationResult,
   type MergeGeminiHookResult,
+  type MergeNestedHookInput,
+  type NestedHookDocumentResult,
   type RegisterGeminiHookOptions,
+  type RemoveAntigravityHookRegistrationInput,
+  type RemoveGeminiHookOptions,
+  type RemoveNestedHookInput,
 };
 
-export type ProviderRegistrationSupport = {
-  readonly providerId: string;
-  readonly supported: boolean;
-  /** Why registration is or is not offered, in one reviewable sentence. */
-  readonly reason: string;
-  /** Name of the planner to call, when supported. */
-  readonly helper?: string;
-};
+export {
+  checkManagedMarker,
+  DEFAULT_MANAGED_COMMAND_MARKER,
+  MANAGED_HOOK_NAME,
+  MANAGED_MARKER_REJECTION_DETAIL,
+  MANAGED_MARKER_TOKEN,
+  REGISTRATION_PLANNERS,
+  findRegistrationPlanner,
+  managedHookPredicate,
+  type ManagedMarkerRejection,
+  type ProviderRegistrationPlanner,
+  type RegistrationPlanInput,
+  type RegistrationRemovalInput,
+} from "./planners.js";
 
-/**
- * Per-provider registration availability.
- *
- * `supported: false` is a statement about *this repository's* verified
- * knowledge, not about the provider: Cursor's payload contract in this package
- * is explicitly synthetic, and no Codex hook-configuration format has been
- * confirmed here, so neither has a settings shape that could be written without
- * guessing. Claude Code's hook *payloads* are modelled, but the adapter's event
- * list is its own protocol reconstruction and includes names
- * (`PostToolUseFailure`, `StopFailure`, `PermissionRequest`) that no verified
- * settings schema in this repository lists as registrable events.
- */
-export const PROVIDER_REGISTRATION_SUPPORT: readonly ProviderRegistrationSupport[] = Object.freeze([
-  Object.freeze({
-    providerId: ANTIGRAVITY_PROVIDER_ID,
-    supported: true,
-    reason:
-      "the five documented camelCase command hooks and the hook-file shape are recorded by the antigravity adapter",
-    helper: "mergeAntigravityHookRegistration",
-  }),
-  Object.freeze({
-    providerId: CLAUDE_CODE_PROVIDER_ID,
-    supported: false,
-    reason:
-      "the adapter models Claude Code hook payloads, not a verified settings.json hook-event vocabulary; " +
-      "registering a reconstructed event name would write an entry the host may never fire",
-  }),
-  Object.freeze({
-    providerId: CODEX_PROVIDER_ID,
-    supported: false,
-    reason: "no Codex hook-configuration document shape has been verified in this repository",
-  }),
-  Object.freeze({
-    providerId: CURSOR_PROVIDER_ID,
-    supported: false,
-    reason:
-      "the cursor payload contract in this package is explicitly synthetic (see providers/cursor/payload.ts), " +
-      "so no real settings shape is known",
-  }),
-  Object.freeze({
-    providerId: GEMINI_PROVIDER_ID,
-    supported: true,
-    reason: "the Gemini CLI settings.json hooks schema and event vocabulary are recorded by the gemini adapter",
-    helper: "mergeGeminiHookRegistration",
-  }),
-]);
+export {
+  PROVIDER_REGISTRATION_SUPPORT,
+  SUPPORTED_REGISTRATION_PROVIDER_IDS,
+  findRegistrationSupport,
+  type ProviderRegistrationSupport,
+} from "./support.js";
 
-export const findRegistrationSupport = (providerId: string): ProviderRegistrationSupport | undefined =>
-  PROVIDER_REGISTRATION_SUPPORT.find((entry) => entry.providerId === providerId);
+export {
+  PROVIDERS_WITHOUT_VERIFIED_LOCATION,
+  PROVIDERS_WITH_VERIFIED_LOCATION,
+  PROVIDER_INSTALL_LOCATIONS,
+  REGISTRATION_SCOPES,
+  findInstallLocation,
+  resolveInstallPath,
+  type InstallLocation,
+  type RegistrationScope,
+  type ScopeRoots,
+} from "./scopes.js";
+
+export {
+  DEFAULT_DOCUMENT_FORMAT,
+  detectDocumentFormat,
+  readJsonDocument,
+  renderJsonDocument,
+  writeDocumentAtomically,
+  type JsonDocumentFormat,
+  type ReadDocumentResult,
+} from "./document.js";
+
+export {
+  FileLockTimeoutError,
+  lockPathFor,
+  withFileLock,
+  type FileLockOptions,
+} from "./file-lock.js";
+
+export {
+  defaultHookCommand,
+  runRegistrationLifecycle,
+  type RegistrationAction,
+  type RegistrationLifecycleRequest,
+  type RegistrationOutcome,
+  type RegistrationOutcomeStatus,
+  type RegistrationReport,
+} from "./lifecycle.js";
 
 export type PlanProviderRegistrationInput =
   | {
@@ -122,6 +204,20 @@ export type PlanProviderRegistrationInput =
       readonly providerId: typeof ANTIGRAVITY_PROVIDER_ID;
       readonly existing?: unknown;
       readonly options: Omit<MergeAntigravityHookRegistrationInput, "existing">;
+    }
+  | {
+      readonly providerId: typeof CLAUDE_CODE_PROVIDER_ID;
+      readonly existing?: unknown;
+      readonly options: Omit<ClaudeHookRegistrationOptions, "existing" | "identifies"> & {
+        readonly identifies?: HookHandlerPredicate;
+      };
+    }
+  | {
+      readonly providerId: typeof CODEX_PROVIDER_ID;
+      readonly existing?: unknown;
+      readonly options: Omit<CodexHookRegistrationOptions, "existing" | "identifies"> & {
+        readonly identifies?: HookHandlerPredicate;
+      };
     }
   | {
       readonly providerId: string;
@@ -137,8 +233,16 @@ export type PlanProviderRegistrationResult =
       readonly document: Record<string, unknown>;
       /** False when the document already contained exactly this registration. */
       readonly changed: boolean;
+      readonly changes: readonly HookDocumentChange[];
     }
-  | { readonly status: "unsupported"; readonly providerId: string; readonly reason: string };
+  | {
+      /** The document is not the shape this provider documents; nothing was changed. */
+      readonly status: "conflict";
+      readonly providerId: string;
+      readonly conflicts: readonly HookDocumentConflict[];
+    }
+  | { readonly status: "unsupported"; readonly providerId: string; readonly reason: string }
+  | { readonly status: "invalid"; readonly providerId: string; readonly reason: string };
 
 /**
  * Plan one provider's hook registration.
@@ -149,37 +253,50 @@ export type PlanProviderRegistrationResult =
 export const planProviderRegistration = (
   input: PlanProviderRegistrationInput,
 ): PlanProviderRegistrationResult => {
-  if (input.providerId === GEMINI_PROVIDER_ID) {
-    const merged: MergeGeminiHookResult = mergeGeminiHookRegistration(
-      input.existing,
-      input.options as RegisterGeminiHookOptions,
-    );
-    return {
-      status: "planned",
-      providerId: input.providerId,
-      document: { ...merged.settings },
-      changed: merged.changed,
-    };
-  }
-
-  if (input.providerId === ANTIGRAVITY_PROVIDER_ID) {
-    const options = input.options as Omit<MergeAntigravityHookRegistrationInput, "existing">;
-    const merged = mergeAntigravityHookRegistration({
-      ...options,
-      ...(input.existing === undefined ? {} : { existing: input.existing }),
-    });
-    return {
-      status: "planned",
-      providerId: input.providerId,
-      document: merged.config,
-      changed: merged.changed,
-    };
-  }
-
   const support = findRegistrationSupport(input.providerId);
+  const planner = findRegistrationPlanner(input.providerId);
+  if (planner === undefined || support?.supported !== true) {
+    return {
+      status: "unsupported",
+      providerId: input.providerId,
+      reason: support?.reason ?? `no registration planner is available for provider "${input.providerId}"`,
+    };
+  }
+
+  const options = (input.options ?? {}) as {
+    readonly command?: unknown;
+    readonly events?: readonly string[];
+    readonly matcher?: string;
+    readonly timeout?: number;
+    readonly timeoutSeconds?: number;
+    readonly identifies?: HookHandlerPredicate;
+  };
+  if (typeof options.command !== "string" || options.command.length === 0) {
+    return {
+      status: "invalid",
+      providerId: input.providerId,
+      reason: `planning a "${input.providerId}" registration requires a non-empty options.command`,
+    };
+  }
+
+  const timeoutSeconds = options.timeoutSeconds ?? options.timeout;
+  const result = planner.merge({
+    ...(input.existing === undefined ? {} : { existing: input.existing }),
+    command: options.command,
+    ...(options.events === undefined ? {} : { events: options.events }),
+    ...(options.matcher === undefined ? {} : { matcher: options.matcher }),
+    ...(timeoutSeconds === undefined ? {} : { timeoutSeconds }),
+    identifies: options.identifies ?? managedHookPredicate(options.command),
+  });
+
+  if (result.conflicts.length > 0) {
+    return { status: "conflict", providerId: input.providerId, conflicts: result.conflicts };
+  }
   return {
-    status: "unsupported",
+    status: "planned",
     providerId: input.providerId,
-    reason: support?.reason ?? `no registration planner is available for provider "${input.providerId}"`,
+    document: result.document,
+    changed: result.changed,
+    changes: result.changes,
   };
 };

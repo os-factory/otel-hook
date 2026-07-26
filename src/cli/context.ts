@@ -89,6 +89,12 @@ export const policyFlagsToPatch = (policy: CliPolicyFlags): OtelHookConfigPatch 
     // and are handed straight to the sink, so a resolved-config snapshot (which
     // is logged and exported) cannot leak a credential.
     ...(headerNames.length === 0 ? {} : { headerNames }),
+    // Resource attribute *values* do belong in configuration: unlike a header
+    // value they are exported on every span by design, so there is nothing to
+    // keep out of the snapshot. The snapshot still reports names only.
+    ...(Object.keys(policy.resourceAttributes).length === 0
+      ? {}
+      : { resourceAttributes: policy.resourceAttributes }),
   };
   const privacy = policy.contentMode === undefined ? {} : { contentMode: policy.contentMode };
   const diagnostics = policy.logLevel === undefined ? {} : { logLevel: policy.logLevel };

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import * as library from "../src/index.js";
+import * as config from "../src/config/index.js";
 import * as model from "../src/model/index.js";
 import * as providers from "../src/providers/index.js";
 import * as testing from "../src/testing/index.js";
@@ -31,6 +32,15 @@ describe("public surface", () => {
       "createOtelHook",
       "resolveConfig",
       "parseEnvironmentConfig",
+      // Custom OTLP resource attributes: typed, bounded, and parseable from
+      // the standard environment variable.
+      "resourceAttributesSchema",
+      "parseResourceAttributesValue",
+      "checkResourceAttributeKey",
+      "sanitizeResourceAttributes",
+      "describeResourceAttributeNames",
+      "RESERVED_RESOURCE_ATTRIBUTE_KEYS",
+      "MAX_RESOURCE_ATTRIBUTES",
       "ERROR_TAXONOMY",
       "createErrorInfo",
       "OtelHookError",
@@ -57,6 +67,13 @@ describe("public surface", () => {
       "createFileDurableSpool",
       "createOtlpTraceSink",
       "canonicalEventsToReadableSpans",
+      // Cross-process span correlation: the pure classifiers a host needs to
+      // write its own resolver, plus the record version its state carries.
+      "spanScopeRefOf",
+      "parentScopeRefOf",
+      "startOnlySpanAttributes",
+      "MAX_RECOVERED_START_ATTRIBUTES",
+      "SPAN_RECORD_VERSION",
       "createHealthTracker",
       "summarizeHealth",
       "createHookRuntime",
@@ -70,6 +87,20 @@ describe("public surface", () => {
     expect(model.CANONICAL_SCHEMA_VERSION).toBe(1);
     expect(providers.BUILT_IN_PROVIDERS).toEqual([]);
     expect(typeof testing.createTestHook).toBe("function");
+  });
+
+  it("keeps resource attributes typed exporter policy, distinct from consumer attributes", () => {
+    // Two separate contracts with no shared name: one describes the emitting
+    // deployment (configuration), the other one invocation (identity).
+    expect(typeof config.resourceAttributesSchema.parse).toBe("function");
+    expect(library.DEFAULT_CONFIG.exporter.resourceAttributes).toEqual({});
+    expect(library.otelHookConfigPatchSchema.safeParse({
+      exporter: { consumerAttributes: { tenant: "acme" } },
+    }).success).toBe(false);
+    expect(
+      library.invocationIdentitySchema.unwrap().shape.consumerAttributes,
+    ).not.toBe(config.resourceAttributesSchema);
+    expect(Object.keys(library.exporterPolicySchema.shape)).not.toContain("consumerAttributes");
   });
 
   it("exposes every curated subpath with its own entry point", () => {
@@ -111,6 +142,35 @@ describe("public surface", () => {
     expect(library).not.toHaveProperty("assembleReadableSpan");
   });
 
+  it("keeps the correlation contract usable without the state layout", () => {
+    // A host can classify its own events and build a resolver...
+    const event = model.parseCanonicalEvent({
+      schemaVersion: model.CANONICAL_SCHEMA_VERSION,
+      eventId: "e1",
+      invocationId: "inv_1",
+      sessionId: "ses_1",
+      sequence: 0,
+      occurredAt: 1_000,
+      provenance: testing.createTestProvenance(),
+      workspace: model.unknownWorkspaceIdentity(),
+      extensions: {},
+      type: "tool.start",
+      toolCallId: "call_1",
+      toolName: "read_file",
+      toolKind: "read",
+      generationId: "gen_1",
+    });
+    expect(telemetry.spanScopeRefOf(event)).toEqual({ family: "tool", scopeKey: "call_1" });
+    expect(telemetry.parentScopeRefOf(event)).toEqual({ family: "generation", scopeKey: "gen_1" });
+    expect(telemetry.startOnlySpanAttributes(event)).toMatchObject({
+      "otelhook.tool.kind": "read",
+    });
+
+    // ...without being handed the on-disk key space that carries it.
+    expect(lifecycle).not.toHaveProperty("spanKey");
+    expect(library).not.toHaveProperty("spanKey");
+  });
+
   it("exposes no mutable module-level identity, session, tracer, or workspace", () => {
     const suspicious = /^(current|active|global|shared|default)?(identity|session|tracer|workspace|invocation)/i;
     const offenders = Object.entries(library).filter(([name, value]) => {
@@ -136,6 +196,8 @@ describe("public surface", () => {
     expect(Object.isFrozen(library.DETECTION_CONFIDENCE_RANK)).toBe(true);
     expect(Object.isFrozen(library.EMPTY_DELTA_USAGE)).toBe(true);
     expect(Object.isFrozen(library.SILENT_HOOK_RESPONSE)).toBe(true);
+    expect(Object.isFrozen(library.RESERVED_RESOURCE_ATTRIBUTE_KEYS)).toBe(true);
+    expect(Object.isFrozen(library.EMPTY_RESOURCE_ATTRIBUTES)).toBe(true);
   });
 
   it("describes every error code with a severity and a failure posture", () => {

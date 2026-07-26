@@ -92,8 +92,15 @@ describe("performance benchmarks", () => {
   it(`maps a batch of ${OPERATION_COUNT} canonical events to spans well within budget`, () => {
     const identity = createTestIdentity();
     const resource = resourceFromAttributes({ "service.name": "perf-test" });
-    const events = Array.from({ length: OPERATION_COUNT }, (_, index) =>
-      parseCanonicalEvent({
+    // Start/end pairs rather than lone starts: an unpaired start is deliberately
+    // not exported, so a batch of them would map to nothing and measure nothing.
+    // Pairs also exercise the grouping path, which is where an O(n^2) regression
+    // would actually show up.
+    const scopeCount = OPERATION_COUNT / 2;
+    const events = Array.from({ length: OPERATION_COUNT }, (_, index) => {
+      const scope = Math.floor(index / 2);
+      const isStart = index % 2 === 0;
+      return parseCanonicalEvent({
         schemaVersion: CANONICAL_SCHEMA_VERSION,
         invocationId: identity.invocationId,
         sessionId: identity.sessionId,
@@ -103,18 +110,19 @@ describe("performance benchmarks", () => {
         eventId: `e${index}`,
         sequence: index,
         occurredAt: 1_000 + index,
-        type: "tool.start",
-        toolCallId: `call_${index}`,
+        toolCallId: `call_${scope}`,
         toolName: "read_file",
-        toolKind: "read",
-      }),
-    );
+        ...(isStart
+          ? { type: "tool.start", toolKind: "read" }
+          : { type: "tool.end", outcome: "ok" }),
+      });
+    });
 
     const startedAt = performance.now();
     const spans = canonicalEventsToReadableSpans(events, { resource });
     const elapsedMillis = performance.now() - startedAt;
     console.log(`semconv mapping: ${OPERATION_COUNT} events in ${elapsedMillis.toFixed(1)}ms`);
-    expect(spans).toHaveLength(OPERATION_COUNT);
+    expect(spans).toHaveLength(scopeCount);
     expect(elapsedMillis).toBeLessThan(2_000);
   });
 });

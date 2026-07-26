@@ -1,3 +1,12 @@
+import {
+  mergeNestedHookRegistration,
+  readNestedHookRegistrations,
+  removeNestedHookRegistrations,
+  type HookDocumentChange,
+  type HookDocumentConflict,
+  type HookHandlerPredicate,
+  type NestedHookDocumentResult,
+} from "../hook-document.js";
 import { GEMINI_HOOK_EVENT_NAMES, type GeminiHookEventName } from "./schema.js";
 
 /**
@@ -6,6 +15,16 @@ import { GEMINI_HOOK_EVENT_NAMES, type GeminiHookEventName } from "./schema.js";
  * the existing settings, pass the parsed value in, and write the returned
  * value back — so the merge logic stays pure and testable, and this package
  * never needs a filesystem handle (see ADR 0003).
+ *
+ * Gemini CLI's settings share the nested `hooks -> event -> [{matcher, hooks}]`
+ * shape that Claude Code and the Codex CLI document, so the merge itself is
+ * delegated to `providers/hook-document.ts`; what stays here is the part that is
+ * specific to Gemini — the event vocabulary, the `"*"` matcher default, and the
+ * `name` field that serves as this vocabulary's identity key.
+ *
+ * The scopes are `~/.gemini/settings.json` (user-global) and
+ * `.gemini/settings.json` (project), as written by `o11y-dev/opentelemetry-hooks`
+ * v0.14.0 (`setup.sh`, `setup_gemini`).
  */
 
 export type GeminiHookCommandEntry = {
@@ -34,6 +53,12 @@ export type RegisterGeminiHookOptions = {
   /** Defaults to every documented Gemini CLI hook event. */
   readonly events?: readonly GeminiHookEventName[];
   readonly timeout?: number;
+  /**
+   * Recognizes registrations this tool owns. Defaults to `name` equality — the
+   * documented idempotency key — but an installer that has to find entries an
+   * older version wrote under a different name can widen it.
+   */
+  readonly identifies?: HookHandlerPredicate;
 };
 
 export type MergeGeminiHookResult = {
@@ -41,10 +66,11 @@ export type MergeGeminiHookResult = {
   /** False when every requested event already had this exact registration. */
   readonly changed: boolean;
   readonly registeredEvents: readonly GeminiHookEventName[];
+  /** Per-event outcome, for a caller that reports what it is about to do. */
+  readonly changes: readonly HookDocumentChange[];
+  /** Non-empty when the document's `hooks` value is not the documented shape. */
+  readonly conflicts: readonly HookDocumentConflict[];
 };
-
-const isPlainRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
 
 const buildCommandEntry = (options: RegisterGeminiHookOptions): GeminiHookCommandEntry => ({
   name: options.name,
@@ -53,73 +79,69 @@ const buildCommandEntry = (options: RegisterGeminiHookOptions): GeminiHookComman
   ...(options.timeout === undefined ? {} : { timeout: options.timeout }),
 });
 
-const isSameRegistration = (entry: GeminiHookCommandEntry, options: RegisterGeminiHookOptions): boolean =>
-  entry.name === options.name &&
-  entry.type === "command" &&
-  entry.command === options.command &&
-  entry.timeout === options.timeout;
-
-const isMatcherEntry = (value: unknown): value is GeminiHookMatcherEntry =>
-  isPlainRecord(value) && Array.isArray(value.hooks);
-
-const readMatcherEntries = (value: unknown): GeminiHookMatcherEntry[] =>
-  Array.isArray(value) ? value.filter(isMatcherEntry) : [];
+/**
+ * Identity is the hook's `name`, exactly as {@link RegisterGeminiHookOptions}
+ * documents it: re-running setup after the command string changed (a new
+ * install path, a new endpoint flag) must *rewrite* the existing entry, not
+ * leave a stale one firing beside it.
+ */
+const identifiesByName =
+  (name: string): HookHandlerPredicate =>
+  (handler): boolean =>
+    handler.name === name;
 
 /**
  * Merge this adapter's hook registration into an existing (parsed)
  * `settings.json` value, once per requested event.
  *
- * Re-running with identical options is a no-op (`changed: false`): the merge
- * looks for a matcher entry with the same `matcher` string, then for a command
- * entry with the same `name`/`command`/`timeout` within it, and only appends
- * when neither exists. Existing hooks from other tools, and settings fields
- * outside `hooks`, are preserved untouched.
+ * Re-running with identical options is a no-op (`changed: false`). Existing
+ * hooks from other tools, matchers a developer narrowed by hand, and settings
+ * fields outside `hooks` are all preserved untouched.
  */
 export const mergeGeminiHookRegistration = (
   existing: unknown,
   options: RegisterGeminiHookOptions,
 ): MergeGeminiHookResult => {
-  const base = isPlainRecord(existing) ? { ...existing } : {};
-  const matcher = options.matcher ?? "*";
   const events = options.events ?? GEMINI_HOOK_EVENT_NAMES;
-
-  const existingHooks = isPlainRecord(base.hooks) ? base.hooks : {};
-  const nextHooks: Record<string, readonly GeminiHookMatcherEntry[]> = {};
-  for (const [event, value] of Object.entries(existingHooks)) {
-    nextHooks[event] = readMatcherEntries(value);
-  }
-  let changed = false;
-  const registeredEvents: GeminiHookEventName[] = [];
-
-  for (const event of events) {
-    const entries: GeminiHookMatcherEntry[] = [...(nextHooks[event] ?? [])];
-    const matcherIndex = entries.findIndex((entry) => (entry.matcher ?? "*") === matcher);
-
-    if (matcherIndex === -1) {
-      entries.push({ matcher, hooks: [buildCommandEntry(options)] });
-      changed = true;
-    } else {
-      const matcherEntry = entries[matcherIndex];
-      if (matcherEntry === undefined) {
-        continue;
-      }
-      const alreadyRegistered = matcherEntry.hooks.some((hook) => isSameRegistration(hook, options));
-      if (!alreadyRegistered) {
-        entries[matcherIndex] = {
-          ...matcherEntry,
-          hooks: [...matcherEntry.hooks, buildCommandEntry(options)],
-        };
-        changed = true;
-      }
-    }
-
-    nextHooks[event] = entries;
-    registeredEvents.push(event);
-  }
+  const merged = mergeNestedHookRegistration({
+    existing,
+    events,
+    entry: buildCommandEntry(options),
+    matcher: options.matcher ?? "*",
+    identifies: options.identifies ?? identifiesByName(options.name),
+  });
 
   return {
-    settings: { ...base, hooks: nextHooks },
-    changed,
-    registeredEvents,
+    settings: merged.document,
+    changed: merged.changed,
+    registeredEvents: merged.conflicts.length > 0 ? [] : events,
+    changes: merged.changes,
+    conflicts: merged.conflicts,
   };
 };
+
+export type RemoveGeminiHookOptions = {
+  /** Restrict removal to these events. Omitted means every event in the document. */
+  readonly events?: readonly GeminiHookEventName[];
+  /** Recognizes handlers this tool wrote, across versions. */
+  readonly identifies: HookHandlerPredicate;
+};
+
+/**
+ * Reverse {@link mergeGeminiHookRegistration}.
+ *
+ * An emptied matcher group, an emptied event, and an emptied `hooks` key are all
+ * dropped, which is what makes setup-then-uninstall restore the original
+ * document exactly.
+ */
+export const removeGeminiHookRegistration = (
+  existing: unknown,
+  options: RemoveGeminiHookOptions,
+): NestedHookDocumentResult =>
+  removeNestedHookRegistrations({
+    existing,
+    ...(options.events === undefined ? {} : { events: options.events }),
+    identifies: options.identifies,
+  });
+
+export const readGeminiHookRegistrations = readNestedHookRegistrations;

@@ -93,6 +93,28 @@ describe("CLI argument parsing", () => {
     ]);
   });
 
+  it("parses the delivery-deduplication policy flags", () => {
+    const defaults = expectRun(["run"]);
+    expect(defaults.requireCallbackId).toBeUndefined();
+    expect(defaults.noDeriveCallbackId).toBeUndefined();
+
+    const strict = expectRun(["run", "--require-callback-id", "--no-derive-callback-id"]);
+    expect(strict.requireCallbackId).toBe(true);
+    expect(strict.noDeriveCallbackId).toBe(true);
+
+    // Both are boolean: a value is a mistake, not a scope.
+    expect(expectErrors(["run", "--require-callback-id=yes"])[0]).toContain("does not take a value");
+  });
+
+  it("keeps the delivery flags off the non-hook commands", () => {
+    expect(expectErrors(["providers", "--require-callback-id"])[0]).toContain(
+      'flag --require-callback-id is not accepted by "providers"',
+    );
+    expect(expectErrors(["doctor", "--no-derive-callback-id"])[0]).toContain(
+      'flag --no-derive-callback-id is not accepted by "doctor"',
+    );
+  });
+
   it("validates enumerated flags", () => {
     expect(expectErrors(["run", "--protocol", "grpc"])[0]).toContain("expects http/protobuf");
     expect(expectErrors(["run", "--transport", "carrier-pigeon"])[0]).toContain(

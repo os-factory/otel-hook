@@ -82,7 +82,7 @@ describe("durable spool: identity isolation", () => {
     await spoolA.enqueue(batchFor("someone-else", "install-1"));
 
     const delivered = await spoolA.drain(() => Promise.resolve(true));
-    expect(delivered).toEqual({ drained: 0, remaining: 0, failed: 0 });
+    expect(delivered).toEqual({ drained: 0, remaining: 0, failed: 0, quarantined: 1 });
     expect(await spoolA.size()).toBe(0);
   });
 
