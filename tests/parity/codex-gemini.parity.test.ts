@@ -14,7 +14,7 @@
  *    relabels the provider would be asserting agreement with a mistranslation.
  *  - For Codex, the pinned reference attaches `gen_ai.client.version` read from
  *    whichever `codex` binary happens to be on the *host's* PATH rather than from
- *    the payload (DIVERGENCE-008). That value is host-dependent (absent on a
+ *    the payload (DIVERGENCE-010). That value is host-dependent (absent on a
  *    machine without the CLI installed, and wrong for any replayed payload), so no
  *    reproducible parity assertion can be written on Codex provenance.
  *
@@ -250,10 +250,10 @@ describe("codex: shipped adapter semantics", () => {
 });
 
 describe.skipIf(!availability.available)(
-  "codex: the pinned reference reads the client version off the host PATH (DIVERGENCE-008)",
+  "codex: the pinned reference reads the client version off the host PATH (DIVERGENCE-010)",
   () => {
     it("ignores the payload's codex_version and reports the host binary's instead", async () => {
-      const divergence = findDivergence("DIVERGENCE-008");
+      const divergence = findDivergence("DIVERGENCE-010");
       const payloads = await loadSession("codex", ["session-start.json"]);
       const result = await runPythonSession("codex", payloads);
       expect(result.available).toBe(true);

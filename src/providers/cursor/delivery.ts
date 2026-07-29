@@ -84,8 +84,14 @@ const deliveryComponents = (
  */
 export const CURSOR_DELIVERY_GAPS: Readonly<Record<string, string>> = Object.freeze({
   preCompact: "no compaction id; payload `trigger` does not separate two genuine compactions",
+  afterAgentResponse:
+    "generation_id alone would collide with stop for the same generation; Cursor fires both with the same token snapshot",
   afterAgentThought:
     "payload.thoughtIndex absent; generationId alone names the generation, not one thought within it",
+  subagentStart:
+    "subagentStop carries no subagent id, so the pair cannot be correlated and neither edge is identified",
+  subagentStop:
+    "subagentStop carries no subagent id, so the pair cannot be correlated and neither edge is identified",
   beforeShellExecution:
     "payload.toolCallId absent; the only remaining field is the command line, which is content and may not become an id",
   afterShellExecution:

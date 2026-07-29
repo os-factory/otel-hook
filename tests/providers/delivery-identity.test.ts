@@ -612,13 +612,10 @@ describe("delivery identity: per-callback gap diagnostics", () => {
       "sessionStart",
       "sessionEnd",
       "beforeSubmitPrompt",
-      "afterAgentResponse",
       "stop",
-      "beforeToolUse",
-      "afterToolUse",
-      "toolUseFailed",
-      "subagentStart",
-      "subagentStop",
+      "preToolUse",
+      "postToolUse",
+      "postToolUseFailure",
     ],
     "gemini-cli": [],
     antigravity: ["PreInvocation", "PostInvocation", "PreToolUse", "PostToolUse"],
@@ -672,7 +669,7 @@ describe("delivery identity: per-callback gap diagnostics", () => {
     const gemini = adapterFor("gemini-cli");
     expect(gemini.capabilities.deliveryIdentifier).toBe("none");
     expect(readDeliveryGap(gemini, "SessionStart")).toContain("resume");
-    expect(readDeliveryGap(gemini, "BeforeTool")).toContain("tool-call id");
+    expect(readDeliveryGap(gemini, "BeforeTool")).toContain("callId");
   });
 
   it("refuses a gap reason that carries a filesystem path or a newline", () => {

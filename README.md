@@ -870,7 +870,7 @@ fixing one means updating that test rather than discovering a silent change.
     Claude Code's `PreToolUse` (`DIVERGENCE-007`), and reads Codex's
     `gen_ai.client.version` from whichever `codex` binary is on the *host's* PATH
     rather than from the payload's own `codex_version` — host-dependent, and wrong
-    for a replayed payload (`DIVERGENCE-008`).
+    for a replayed payload (`DIVERGENCE-010`).
     `tests/parity/codex-gemini.parity.test.ts` establishes our own semantics and
     pins both divergences instead of asserting agreement.
 10. **Only OTLP HTTP/protobuf traces are exported.** `http/json` falls back to a

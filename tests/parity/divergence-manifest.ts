@@ -180,7 +180,7 @@ export const DIVERGENCE_MANIFEST: readonly DivergenceEntry[] = [
       "cachedInputTokens=28384 and uncachedInputTokens=15475",
   },
   {
-    id: "DIVERGENCE-008",
+    id: "DIVERGENCE-010",
     title: "Codex client version is read from a host binary on PATH, not from the payload",
     dimension: "lifecycle",
     pythonBehavior:

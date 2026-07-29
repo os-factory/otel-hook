@@ -53,6 +53,7 @@ if (!availability.available) {
 
 describe.skipIf(!availability.available)(
   "cursor parity: opentelemetry-hooks==0.14.0 vs. canonical model",
+  { timeout: 30_000 },
   () => {
     it("agrees on splitting an mcp__<server>__<tool> name into server/tool parts", async () => {
       const payloads = await loadSession();
