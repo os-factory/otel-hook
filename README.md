@@ -9,10 +9,11 @@ accounted for usage, and exported over OTLP.
 
 ## Status
 
-**Published as `0.1.0`.** Install with `npm install -g @osfactory/otel-hook` or
-`npx @osfactory/otel-hook`. See [docs/release-checklist.md](docs/release-checklist.md)
-and [Known limitations](#known-limitations) for what this release intentionally
-does and does not claim.
+**Published on npm.** Install with `npm install -g @osfactory/otel-hook` or
+`npx @osfactory/otel-hook`. Releases are cut automatically from Conventional
+Commit PR titles on `main` — see [docs/release-checklist.md](docs/release-checklist.md).
+[Known limitations](#known-limitations) document what a given release
+intentionally does and does not claim.
 
 ## Principles
 

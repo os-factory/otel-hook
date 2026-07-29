@@ -34,6 +34,12 @@ const ALLOWED_LICENSES = new Set([
   // Weak-copyleft, dev-only transitive dependency (vitest -> vite ->
   // lightningcss); never bundled into dist/ or shipped to consumers.
   "MPL-2.0",
+  // Dev-only transitive of semantic-release (@semantic-release/npm -> npm);
+  // never bundled into dist/ or shipped to consumers.
+  "Artistic-2.0",
+  // Dev-only transitive of the SPDX license tooling pulled in by
+  // semantic-release; attribution-only, never bundled into dist/.
+  "CC-BY-3.0",
 ]);
 
 const normalizeLicense = (license) => {

@@ -48,15 +48,33 @@ sanitized, and its license basis. If you're adding a fixture that models a
 real provider's hook protocol, base it on that protocol's *publicly
 documented field names*, not on anything captured from an actual session.
 
-## Commit style
+## Commit / PR title style (required for releases)
 
-Conventional commit prefixes (`feat:`, `fix:`, `chore:`, `docs:`, `test:`,
-`ci:`) scoped to what changed, e.g. `test(parity): add cursor MCP fixture`.
+Releases are cut automatically when PRs merge to `main`.
+[semantic-release](https://semantic-release.gitbook.io/) reads
+[Conventional Commits](https://www.conventionalcommits.org/) from the
+**squash-merge title** (that title becomes the commit on `main`).
+
+| Prefix | Release |
+| ------ | ------- |
+| `fix:` | Patch |
+| `feat:` | Minor |
+| `feat!:` / `BREAKING CHANGE:` footer | Major |
+| `chore:`, `docs:`, `test:`, `refactor:`, `ci:`, `style:` | No release |
+| any type with `(ci)` scope | No release |
+
+Examples: `feat: add cursor registration planner`,
+`fix(gemini): treat AfterModel usage as cumulative`,
+`docs: refresh registration evidence`.
+
 Keep a commit's changes inside one ownership area where possible so review
-stays scoped.
+stays scoped. Maintainer release mechanics (npm token, dry-run):
+[docs/release-checklist.md](docs/release-checklist.md).
 
 ## Pull requests
 
+- The PR title must be conventional — CI enforces this
+  (`.github/workflows/pr-title.yml`).
 - Run `npm run check` locally first; CI re-runs it plus cross-platform and
   security jobs (see `.github/workflows/`), but a failing `check` locally will
   fail there too.
