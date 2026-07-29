@@ -1,0 +1,26 @@
+{
+  "session_id": "sess-parity-gemini-001",
+  "transcript_path": "/workspace/fixture-repo/.gemini-sessions/sess-parity-gemini-001.json",
+  "cwd": "/workspace/fixture-repo",
+  "hook_event_name": "AfterModel",
+  "timestamp": "2026-07-25T10:00:04.000Z",
+  "llm_request": {
+    "model": "gemini-2.5-pro",
+    "messages": [{ "role": "user", "content": "Refactor the retry helper to use exponential backoff." }],
+    "config": { "temperature": 0.4, "maxOutputTokens": 8192 }
+  },
+  "llm_response": {
+    "text": "Rewrote the delay calculation",
+    "candidates": [
+      {
+        "content": { "role": "model", "parts": ["Rewrote the delay calculation"] },
+        "index": 0
+      }
+    ],
+    "usageMetadata": {
+      "promptTokenCount": 512,
+      "candidatesTokenCount": 40,
+      "totalTokenCount": 552
+    }
+  }
+}

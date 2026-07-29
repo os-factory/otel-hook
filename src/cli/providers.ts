@@ -46,7 +46,14 @@ export const runProvidersCommand = (command: CliProvidersCommand, io: CliIo): nu
     writeLine(io.stdout, `  adapter version    ${entry.version}`);
     writeLine(io.stdout, `  maturity           ${entry.maturity}`);
     writeLine(io.stdout, `  lifecycle events   ${entry.lifecycleEvents.join(", ")}`);
-    writeLine(io.stdout, `  usage temporality  ${entry.usageTemporality}`);
+    writeLine(
+      io.stdout,
+      `  usage temporality  ${entry.usageTemporality}${
+        entry.cumulativeUsageSeries === undefined
+          ? ""
+          : ` (series: ${entry.cumulativeUsageSeries})`
+      }`,
+    );
     writeLine(
       io.stdout,
       `  usage reported     cached-input=${String(entry.reportsCachedInput)} ` +

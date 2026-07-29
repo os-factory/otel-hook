@@ -1,0 +1,12 @@
+{
+  "fixture": "stop-usage-attached.json",
+  "sourceContract": "Claude Code hook JSON protocol (Stop), read from the shipped CLI's own hook-input schemas, with a wrapping harness's `usage` object shaped exactly as `message.usage` appears in Claude Code session transcripts",
+  "provider": "claude-code",
+  "providerVersionObserved": "2.1.220",
+  "capturedDate": "2026-07-29",
+  "author": "otel-hook claude-code provider owner (agent)",
+  "sanitization": "Shape only. Every value is invented: session/prompt/agent ids are fabricated, the assistant message is a placeholder sentence, paths are under a fictional /workspace/contract-repo, and inference_geo is a placeholder rather than a real region. The token counts are round numbers chosen to satisfy the observed invariants (cache_creation TTL buckets summing to cache_creation_input_tokens, iterations summing to the outer counters, fresh input_tokens far below cache_read_input_tokens); they are not measurements copied from any capture.",
+  "licenseBasis": "Original synthetic authorship: field names reproduce a third-party CLI's documented hook contract, all values are this repository's own.",
+  "sha256": "ead0dac64737ea3fb26f347e16ffbc1876798c82c0c114257bc0b2ca24527280",
+  "notes": "The reference shape for docs/claude-code-usage-contract.md findings 1-4: usage is harness-attached (no hook callback reports tokens upstream), input_tokens is the fresh portion only, and both cache_creation and iterations[] are breakdowns to reconcile rather than addends. Exercised by tests/providers/claude/usage-contract.test.ts."
+}

@@ -1,6 +1,7 @@
 {
   "session_id": "ses_gemini_demo_1",
   "hook_event_name": "AfterModel",
+  "transcript_path": "/workspace/demo-repo/.gemini-sessions/ses_gemini_demo_1.json",
   "cwd": "/workspace/demo-repo",
   "timestamp": "2026-07-25T10:00:05.000Z",
   "llm_request": {
@@ -14,20 +15,20 @@
     }
   },
   "llm_response": {
+    "text": "Looking at the retry helper, I rewrote the delay calculation to use exponential backoff with jitter.",
     "candidates": [
       {
         "content": {
           "role": "model",
-          "parts": [{ "text": "Looking at the retry helper, I rewrote the delay calculation to use exponential backoff with jitter." }]
+          "parts": ["Looking at the retry helper, I rewrote the delay calculation to use exponential backoff with jitter."]
         },
-        "finishReason": "STOP"
+        "finishReason": "STOP",
+        "index": 0
       }
     ],
     "usageMetadata": {
       "promptTokenCount": 512,
-      "cachedContentTokenCount": 128,
-      "candidatesTokenCount": 96,
-      "thoughtsTokenCount": 40,
+      "candidatesTokenCount": 136,
       "totalTokenCount": 648
     }
   }

@@ -1,0 +1,10 @@
+{
+  "session_id": "ses_gemini_demo_1",
+  "hook_event_name": "BeforeTool",
+  "transcript_path": "/workspace/demo-repo/.gemini-sessions/ses_gemini_demo_1.json",
+  "cwd": "/workspace/demo-repo",
+  "timestamp": "2026-07-25T10:00:14.000Z",
+  "tool_name": "run_shell_command",
+  "tool_input": { "command": "npx prettier --write src/retry.ts" },
+  "original_request_name": "write_file"
+}

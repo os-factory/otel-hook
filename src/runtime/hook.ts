@@ -58,6 +58,13 @@ export const usageScopeSchema = z.enum(["session", "generation", "subagent"]);
 export type UsageScope = z.infer<typeof usageScopeSchema>;
 
 /**
+ * Which series a provider's cumulative counters accumulate over. Mirrors
+ * `ProviderCapabilities.cumulativeUsageSeries`, defaulting to `event-scope`
+ * for the adapters that do not declare one.
+ */
+export type CumulativeUsageSeries = "event-scope" | "session-lifetime";
+
+/**
  * Delta usage derived for one event.
  *
  * Events keep whatever the provider reported. Deltas are produced alongside them
@@ -291,6 +298,30 @@ const usageKey = (sessionId: string, scope: UsageScope, scopeKey: string): strin
   `usage:${sessionId}:${scope}:${scopeKey}`;
 
 /**
+ * Where the cumulative baseline for an observation is stored.
+ *
+ * This is deliberately *not* the same thing as the observation's own scope. The
+ * derived delta belongs to the event that reported it — a turn's token spend is
+ * attributed to that turn — but the snapshot it must be diffed against belongs
+ * to whichever series the provider is actually accumulating.
+ *
+ * For a `session-lifetime` provider (Codex: every hook carries the session-wide
+ * `total_token_usage`), keying the baseline by `generationId` would mean every
+ * turn's snapshot found no predecessor and was emitted whole, billing the entire
+ * session again on each turn. Redirecting `generation` to the session series
+ * makes successive turns diff against each other.
+ */
+const baselineScopeOf = (
+  scope: UsageScope,
+  scopeKey: string,
+  sessionId: string,
+  series: CumulativeUsageSeries,
+): { readonly scope: UsageScope; readonly scopeKey: string } =>
+  series === "session-lifetime" && scope === "generation"
+    ? { scope: "session", scopeKey: sessionId }
+    : { scope, scopeKey };
+
+/**
  * Minimal orchestrator wiring detection, identity, parsing, privacy checks,
  * usage derivation, and export.
  *
@@ -369,6 +400,7 @@ export const createOtelHook = (deps: OtelHookDependencies): OtelHook => {
     events: readonly CanonicalEvent[],
     diagnostics: OtelHookErrorInfo[],
     suppress: boolean,
+    series: CumulativeUsageSeries,
   ): Promise<readonly UsageObservation[]> => {
     const observations: UsageObservation[] = [];
     for (const event of events) {
@@ -389,7 +421,8 @@ export const createOtelHook = (deps: OtelHookDependencies): OtelHook => {
         continue;
       }
 
-      const key = usageKey(event.sessionId, scoped.scope, scoped.scopeKey);
+      const baselineScope = baselineScopeOf(scoped.scope, scoped.scopeKey, event.sessionId, series);
+      const key = usageKey(event.sessionId, baselineScope.scope, baselineScope.scopeKey);
       let baseline: CanonicalUsage | undefined;
       try {
         const record = await deps.stateStore.read(key);
@@ -869,6 +902,20 @@ export const createOtelHook = (deps: OtelHookDependencies): OtelHook => {
         };
       }
 
+      if (parsed.warnings !== undefined && parsed.warnings.length > 0) {
+        // An adapter reports a warning when it understood the payload but had to
+        // decline part of it — a counter outside its declared capabilities, a
+        // breakdown that disagrees with the total it itemizes. Not a diagnostic:
+        // the observation is intact and nothing failed, so raising an error-severity
+        // code would misreport a healthy invocation. But not nothing either, which
+        // is what these were before: a harness whose attached field is being ignored
+        // has no other way to find out.
+        logger.warn("adapter declined part of the payload it understood", {
+          "provider.id": detection.providerId,
+          "adapter.warnings": parsed.warnings.slice(0, 8).map((warning) => warning.slice(0, 200)),
+        });
+      }
+
       const screened = screenEvents(parsed.events, identity, sequenceBase, diagnostics);
 
       let batch: readonly CanonicalEvent[] = screened.kept;
@@ -1014,7 +1061,13 @@ export const createOtelHook = (deps: OtelHookDependencies): OtelHook => {
           usageObservations = await withOptionalSessionLock(
             deps.stateStore,
             identity.sessionId,
-            () => deriveUsage(batch, diagnostics, false),
+            () =>
+              deriveUsage(
+                batch,
+                diagnostics,
+                false,
+                adapter.capabilities.cumulativeUsageSeries ?? "event-scope",
+              ),
           );
         } catch (thrown) {
           // The accounting could not be committed. The telemetry is already out, so

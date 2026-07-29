@@ -1,0 +1,11 @@
+{
+  "fixture": "stop-turn-2.json",
+  "sourceContract": "Codex CLI hook JSON protocol (Stop) for a second turn of the same session, carrying the advanced session-wide cumulative total_token_usage",
+  "provider": "codex",
+  "capturedDate": "2026-07-29",
+  "author": "otel-hook integration owner (agent)",
+  "sanitization": "Token counts are round invented figures chosen to advance monotonically over stop.json, not a measurement of any real turn; model id is the publicly documented name only.",
+  "licenseBasis": "Original synthetic authorship.",
+  "sha256": "88330dc753d800ddc0759dba3b15211282a533673dff4d9373ae68c1df0cd874",
+  "notes": "Second point on the session's cumulative curve (13500 -> 22500). Exists so a multi-turn replay proves the derived delta is the 9000-token difference rather than the whole 22500 snapshot re-counted under a new turn_id."
+}

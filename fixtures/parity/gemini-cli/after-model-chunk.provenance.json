@@ -1,0 +1,12 @@
+{
+  "fixture": "after-model-chunk.json",
+  "sourceContract": "Gemini CLI command hook protocol (AfterModel), non-final streaming chunk carrying a cumulative usageMetadata snapshot",
+  "provider": "gemini-cli",
+  "providerVersionObserved": "google-gemini/gemini-cli@3499c84 (2026-07-28)",
+  "capturedDate": "2026-07-29",
+  "author": "otel-hook integration owner (agent)",
+  "sanitization": "Prompt and response text are invented single sentences; token counts are invented figures; the session id and repository root are synthetic placeholders.",
+  "licenseBasis": "Original synthetic authorship.",
+  "sha256": "f420d668df07b9a9c8332f43492694dfb78be8ecb8e224608090297b092fcc0c",
+  "notes": "Pairs with after-model.json to pin the streaming contract: AfterModel fires per chunk and more than one chunk may carry usageMetadata. The counts are a snapshot of the response so far (512/40/552, then 512/136/648), so the two chunks together must be billed 512 input once, not 1024."
+}

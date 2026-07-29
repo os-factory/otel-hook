@@ -1,0 +1,8 @@
+{
+  "hook_event_name": "PostCompact",
+  "session_id": "ses-contract-claude-0004",
+  "transcript_path": "/workspace/contract-repo/.transcripts/session.jsonl",
+  "cwd": "/workspace/contract-repo",
+  "trigger": "auto",
+  "compact_summary": "Synthetic placeholder standing in for the conversation summary this adapter never reads."
+}

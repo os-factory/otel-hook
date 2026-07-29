@@ -1,0 +1,11 @@
+{
+  "fixture": "subagent-stop.json",
+  "sourceContract": "Codex CLI hook JSON protocol (SubagentStop) reporting a delegated agent's own cumulative usage and completion status",
+  "provider": "codex",
+  "capturedDate": "2026-07-29",
+  "author": "otel-hook integration owner (agent)",
+  "sanitization": "Subagent id and token counts are invented placeholders, not a measurement of any real delegation.",
+  "licenseBasis": "Original synthetic authorship.",
+  "sha256": "51a470b50cd081a35ea24780bab1bc4bef25d11a70e212bc35714f20183acdc9",
+  "notes": "Deliberately reports a smaller total (4800) than the parent session's running total at the same moment (22500), so a test can prove the subagent keeps its own baseline series and does not produce a spurious reset or a negative delta against the session curve."
+}

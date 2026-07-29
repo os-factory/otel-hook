@@ -13,6 +13,13 @@
  * There is no request id, no turn id, and no tool-call id anywhere in the
  * vocabulary.
  *
+ * The tool-call gap is a projection, not an absence: the CLI's own
+ * `ToolCallRequestInfo` carries a `callId`, but `HookEventHandler`'s
+ * `fireBeforeToolEvent` / `fireAfterToolEvent` build their inputs from
+ * `tool_name`, `tool_input`, `mcp_context`, and `original_request_name` only, so
+ * the id never crosses into the hook. Exposing it is what would unblock
+ * deduplication for the two highest-volume events.
+ *
  * ## Why a timestamp is not an identity
  *
  * `timestamp` is provider-recorded rather than read from a clock when the hook
@@ -61,14 +68,15 @@ export const GEMINI_UNIDENTIFIABLE_CALLBACKS: Readonly<Record<string, string>> =
     "fires again within the same session_id on resume and clear (payload `source`), so session_id names a class of firings rather than one",
   SessionEnd: "the closing side of the same problem: a cleared session ends under the same session_id",
   BeforeTool:
-    "no tool-call id; two calls to one tool can share a millisecond, so (timestamp, tool_name) would suppress a genuine second call",
+    "ToolCallRequestInfo.callId exists but is not projected into the hook input; two calls to one tool can share a millisecond, so (timestamp, tool_name) would suppress a genuine second call",
   AfterTool:
-    "no tool-call id; two calls to one tool can share a millisecond, so (timestamp, tool_name) would suppress a genuine second call",
+    "ToolCallRequestInfo.callId exists but is not projected into the hook input; two calls to one tool can share a millisecond, so (timestamp, tool_name) would suppress a genuine second call",
   BeforeAgent: "no turn id; fires once per turn with only a millisecond separating turns",
   AfterAgent: "no turn id; fires once per turn with only a millisecond separating turns",
   PreCompress: "no compaction id; can fire repeatedly within one session",
   BeforeModel: "no request id",
-  AfterModel: "fires per streaming chunk, so several genuine firings share one request and often one millisecond",
+  AfterModel:
+    "fires per streaming chunk with the same llm_request each time, so several genuine firings share one request and often one millisecond",
   BeforeToolSelection: "no request id",
   Notification: "produces no canonical event",
 });

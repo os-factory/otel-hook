@@ -1,0 +1,16 @@
+{
+  "hook_event_name": "Stop",
+  "session_id": "ses-contract-claude-0003",
+  "transcript_path": "/workspace/contract-repo/.transcripts/session.jsonl",
+  "cwd": "/workspace/contract-repo",
+  "prompt_id": "prompt-contract-0003",
+  "stop_hook_active": false,
+  "usage": {
+    "input_tokens": 500,
+    "output_tokens": 120,
+    "cache_read_input_tokens": 300,
+    "cache_creation_input_tokens": 20,
+    "total_tokens": 620,
+    "reasoning_output_tokens": 15
+  }
+}

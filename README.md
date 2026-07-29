@@ -34,10 +34,18 @@ indistinguishable in the data.
 | Provider id   | Agent              | Maturity     | stdout protocol | Usage temporality | Registration                 |
 | ------------- | ------------------ | ------------ | --------------- | ----------------- | ---------------------------- |
 | `claude-code` | Claude Code        | stable       | silent          | delta             | `setup` (global and project) |
-| `codex`       | OpenAI Codex CLI   | stable       | silent          | cumulative        | `setup` (global and project) |
+| `codex`       | OpenAI Codex CLI   | stable       | silent          | cumulative[^1]    | `setup` (global and project) |
 | `cursor`      | Cursor             | stable       | provider JSON   | delta             | unsupported                  |
-| `gemini-cli`  | Gemini CLI         | stable       | silent          | delta             | `setup` (global and project) |
+| `gemini-cli`  | Gemini CLI         | stable       | silent          | cumulative        | `setup` (global and project) |
 | `antigravity` | Google Antigravity | experimental | silent          | delta             | `setup --settings-file`      |
+
+[^1]: Codex's counters are cumulative over the **whole session**, not per turn:
+    every usage-bearing hook stamps the rollout's running `total_token_usage`.
+    Deltas are therefore diffed against the session's previous snapshot rather
+    than per `turn_id`, which is what keeps a three-turn session from billing its
+    first turn three times. `otel-hook providers` prints this as
+    `usage temporality  cumulative (series: session-lifetime)`; see
+    [docs/usage-semantics.md](docs/usage-semantics.md#which-series-a-cumulative-report-continues).
 
 `antigravity` is registered but marked `experimental`: parts of its field and
 lifecycle mapping are reconstructions pending confirmation against real captures.
@@ -732,9 +740,14 @@ fixing one means updating that test rather than discovering a silent change.
    `eventId` can substitute: some adapters seed the former with a clock reading,
    and the latter is seeded with a session sequence number that has already
    advanced by the time a redelivery arrives. What each adapter cannot identify:
-   - **Claude Code** — `Stop`, `StopFailure` (Claude Code can fire `Stop` more
-     than once per prompt when a hook continues the turn, so `prompt_id` is not a
-     delivery identity), `SessionStart`, `SessionEnd`, `PreCompact`, `PostCompact`.
+   - **Claude Code** — `StopFailure`, `SessionStart`, `SessionEnd`, `PreCompact`,
+     `PostCompact`, plus any `Stop` or `SubagentStop` that fired because a hook
+     continued the turn. Claude Code can fire `Stop` more than once per prompt, so
+     `prompt_id` alone is not a delivery identity; the `stop_hook_active` flag
+     separates the once-per-prompt stop (`false`, deduplicated — it carries the
+     turn's usage) from a continuation (`true`, deliberately left unidentifiable,
+     because two continuations are indistinguishable and suppressing one would lose
+     real tokens).
    - **Codex** — `SessionStart`, `PreCompact`, `PostCompact`, and any tool
      callback whose optional `tool_call_id` is absent (`tool_name` is not a
      substitute: two calls to the same tool in one turn would collapse into one).
@@ -781,19 +794,27 @@ fixing one means updating that test rather than discovering a silent change.
    Current `reason` / `trigger` fields and legacy `end_reason` /
    `compact_trigger` wrappers map to the same canonical session and compaction
    events.
-5. **Claude Code usage is read only from a nested Anthropic-shaped `usage`
-   object.** Top-level `cache_read_input_tokens` / `reasoning_output_tokens` and
-   `usage.total_tokens` are outside that contract and are not surfaced. This is
-   consistent with the adapter's declared capabilities
-   (`reportsReasoningOutput: false`, `reportsProviderTotal: false`) — which is
-   exactly what capability declarations are for — but it means Claude Code cache
-   and reasoning figures are unavailable until the provider owner confirms where
-   the fields really live. `ADAPTER-NOTE-001`.
-6. **`contextTokensBefore` is lost across the compaction boundary.** The adapter
-   ignores `PreCompact` and cannot hold cross-invocation state, so only
-   `contextTokensAfter` reaches `compaction.performed`. Carrying it forward would
-   have to be done by the integration layer through the state store.
-   `ADAPTER-NOTE-002`.
+5. **Claude Code reports no reasoning-token counter and no provider total.**
+   Confirmed against real captures at 2.1.220 — 0 of 4,999 `usage` objects carried
+   either — so `reportsReasoningOutput: false` and `reportsProviderTotal: false`
+   are settled exclusions rather than open questions, and a consumer can tell
+   "this provider does not report reasoning tokens" from "this turn used none".
+   Cache read and cache creation *are* reported, at
+   `usage.cache_read_input_tokens` and `usage.cache_creation_input_tokens` (whose
+   TTL split is a breakdown, reconciled and never added). No hook callback carries
+   a token counter at all, so `usage` is read only when a wrapping harness
+   attaches it. A harness that attaches an excluded counter anyway is told which
+   field was declined. `ADAPTER-NOTE-001`; see
+   [docs/claude-code-usage-contract.md](docs/claude-code-usage-contract.md).
+6. **`contextTokensBefore` is an explicit exclusion for Claude Code.** Neither
+   compaction callback reports a context size upstream (`PreCompact` carries
+   `trigger` and `custom_instructions`; `PostCompact` carries `trigger` and
+   `compact_summary`), so there is no provider-stated figure for injected state to
+   carry across the boundary. Both figures are emitted when one harness attaches
+   them to `PostCompact`, which carries both ends in a single callback; a
+   `context_tokens_before` on `PreCompact` alone is declined explicitly rather
+   than dropped silently. `compact_summary` is never read — it is conversation
+   content. `ADAPTER-NOTE-002`.
 7. **Cursor's payload contract is synthetic (release blocker).**
    `src/providers/cursor/payload.ts` documents its shape as invented for this
    repository. Cursor parity therefore runs through a documented envelope bridge
@@ -812,11 +833,30 @@ fixing one means updating that test rather than discovering a silent change.
     `opentelemetry-hooks==0.14.0` reference rewrites Gemini's `BeforeTool` into
     Claude Code's `PreToolUse` (`DIVERGENCE-007`), and reads Codex's
     `gen_ai.client.version` from whichever `codex` binary is on the *host's* PATH
-    rather than from the payload — host-dependent, and wrong for a replayed
-    payload. `tests/parity/codex-gemini.parity.test.ts` establishes our own
-    semantics and pins the divergence instead of asserting agreement.
+    rather than from the payload's own `codex_version` — host-dependent, and wrong
+    for a replayed payload (`DIVERGENCE-008`).
+    `tests/parity/codex-gemini.parity.test.ts` establishes our own semantics and
+    pins both divergences instead of asserting agreement.
 10. **Only OTLP HTTP/protobuf traces are exported.** `http/json` falls back to a
     disabled sink with a warning, and there is no metrics or logs pipeline.
+11. **Gemini CLI cache and reasoning tokens never reach a hook.** The CLI's hook
+    translator rebuilds `usageMetadata` as exactly
+    `{ promptTokenCount, candidatesTokenCount, totalTokenCount }`, so
+    `cachedContentTokenCount` and `thoughtsTokenCount` — both present on the SDK
+    response it reads — are dropped before any hook runs. The adapter declares
+    `reportsCachedInput: false` and `reportsReasoningOutput: false` accordingly,
+    and still maps both counters in case a later translator version stops
+    stripping them. Unblocking this needs a change upstream, not here.
+
+    Relatedly, `AfterModel` fires once **per streaming chunk**, and a chunk's
+    counters are a snapshot of the response so far rather than that chunk's
+    increment — the CLI's own `loggingStreamWrapper` keeps `lastUsageMetadata`
+    and never sums. The adapter therefore reports `cumulative` temporality, so
+    several usage-bearing chunks of one stream diff against a single
+    generation-scoped baseline and are billed once in total. Asserted in
+    `tests/providers/gemini/usage.test.ts`,
+    `tests/providers/gemini/integration.test.ts`, and
+    `tests/parity/codex-gemini.parity.test.ts`.
 
 ## Architecture decisions
 
