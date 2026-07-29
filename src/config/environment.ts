@@ -30,6 +30,11 @@ export const ENVIRONMENT_VARIABLES = Object.freeze({
   otlpEndpoint: "OTEL_EXPORTER_OTLP_ENDPOINT",
   exporterProtocol: "OTEL_HOOK_EXPORTER_PROTOCOL",
   exporterTimeoutMillis: "OTEL_HOOK_EXPORTER_TIMEOUT_MS",
+  logsEnabled: "OTEL_HOOK_LOGS_ENABLED",
+  logsEndpoint: "OTEL_HOOK_LOGS_ENDPOINT",
+  /** Standard per-signal endpoint; the weaker source of the two. */
+  otlpLogsEndpoint: "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+  logsIncludeContent: "OTEL_HOOK_LOGS_INCLUDE_CONTENT",
   serviceName: "OTEL_HOOK_SERVICE_NAME",
   otlpServiceName: "OTEL_SERVICE_NAME",
   serviceNamespace: "OTEL_HOOK_SERVICE_NAMESPACE",
@@ -213,6 +218,18 @@ export const parseEnvironmentConfig = (env: EnvironmentRecord): EnvironmentConfi
   const maxArrayLength = readInteger(ENVIRONMENT_VARIABLES.maxArrayLength);
   const maxEventsPerInvocation = readInteger(ENVIRONMENT_VARIABLES.maxEventsPerInvocation);
 
+  const logsEnabled = readBoolean(ENVIRONMENT_VARIABLES.logsEnabled);
+  const logsIncludeContent = readBoolean(ENVIRONMENT_VARIABLES.logsIncludeContent);
+  const logsEndpoint =
+    readString(ENVIRONMENT_VARIABLES.logsEndpoint) ??
+    readString(ENVIRONMENT_VARIABLES.otlpLogsEndpoint);
+
+  const logs = {
+    ...(logsEnabled === undefined ? {} : { enabled: logsEnabled }),
+    ...(logsEndpoint === undefined ? {} : { endpoint: logsEndpoint }),
+    ...(logsIncludeContent === undefined ? {} : { includeContent: logsIncludeContent }),
+  };
+
   const exporter = {
     ...(exporterEnabled === undefined ? {} : { enabled: exporterEnabled }),
     ...(endpoint === undefined ? {} : { endpoint }),
@@ -221,6 +238,7 @@ export const parseEnvironmentConfig = (env: EnvironmentRecord): EnvironmentConfi
     ...(serviceName === undefined ? {} : { serviceName }),
     ...(serviceNamespace === undefined ? {} : { serviceNamespace }),
     ...(Object.keys(resourceAttributes).length === 0 ? {} : { resourceAttributes }),
+    ...(Object.keys(logs).length === 0 ? {} : { logs }),
   };
 
   const limits = {

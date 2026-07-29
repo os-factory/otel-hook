@@ -378,7 +378,7 @@ lower-level orchestrator without the filesystem and lifecycle wiring, use
 | `@osfactory/otel-hook/runtime`     | `OtelHook`, ports, clock, ids, logger, in-memory implementations               |
 | `@osfactory/otel-hook/lifecycle`   | Span correlator, callback deduplicator, usage accumulator, janitor             |
 | `@osfactory/otel-hook/state`       | Filesystem and bounded-memory state stores, session locking                    |
-| `@osfactory/otel-hook/telemetry`   | OTLP sink, durable spool, canonical-event-to-span mapping                      |
+| `@osfactory/otel-hook/telemetry`   | OTLP trace and log sinks, durable spools, canonical-event-to-span and -to-log mappings |
 | `@osfactory/otel-hook/diagnostics` | Delivery health tracking and summaries                                        |
 | `@osfactory/otel-hook/integration` | `createHookRuntime`: state + lifecycle + OTLP wired for short-lived hooks       |
 | `@osfactory/otel-hook/install`     | Pure hook-registration planners, plus the locked/atomic apply lifecycle       |
@@ -499,6 +499,73 @@ absent state costs a span its pairing, never the export. Retention, bounds, and
 what happens when the record shape changes are in
 [docs/state-retention.md](docs/state-retention.md).
 
+## Logs
+
+A span reports that a tool call happened and whether it failed. It cannot report
+what was *in* it — span attributes are a flat bounded map, one record per span. A
+conversation turn is a sequence of distinct pieces of content, each with its own
+role, length, and disclosure decision, so there is an optional OTLP logs pipeline
+alongside the traces one.
+
+**Off by default.** An installation that upgrades must not silently start sending a
+second stream to a collector whose receivers and quotas were sized for traces:
+
+```bash
+otel-hook run --provider claude-code --endpoint http://localhost:4318/v1/traces --logs
+# or: OTEL_HOOK_LOGS_ENABLED=1
+```
+
+One record per content fact, plus one per event that carries none, keyed by
+`otelhook.log.signal`:
+
+```text
+session  prompt  response  reasoning
+tool  shell  file-operation  mcp  delegation
+compaction  error
+```
+
+Which signals a provider can populate is *derived* from the `lifecycleEvents` it
+already declares, not maintained as a second list — a stale capability declaration
+is worse than none, because a consumer cannot tell "reports no tool output" from
+"nobody updated it". The mapping is versioned (`LOG_MAPPING_VERSION`, carried on
+every record as `otelhook.log.mapping_version`).
+
+Records carry the same identity attributes as spans and the **same derived trace and
+span ids**, so a record lands in its span's trace without either signal knowing about
+the other. Both ids come from the event's own `(providerId, sessionId)`, so two
+sessions in one batch derive two trace ids — cross-session contamination is
+structurally impossible rather than checked for. A record on a `*.start` edge points
+*forward* to the span id the end edge will publish, since that edge exports no span
+at all.
+
+**Content is disabled by default, behind three gates.** All three must be open for a
+body to appear:
+
+| Gate | Default |
+| --- | --- |
+| `privacy.contentMode` ≠ `omit` | `omit` |
+| `exporter.logs.includeContent` (`--logs-content`) | `false` |
+| `privacy.allowRawContent`, for `raw` only | `false` |
+
+`includeContent` is a separate switch because spans carry no content in *any* mode:
+an installation that set `contentMode` to get a hash and a length has never had
+content on the wire, and reusing that setting to also mean "publish prompts" would
+change what an existing configuration discloses without anybody editing it. A
+withheld body says which gate stopped it (`otelhook.content.withheld`:
+`privacy-policy` | `logs-content-disabled` | `raw-not-permitted`) rather than being
+a bare absence. The measurable description — length, byte length, salted hash,
+secrets-redacted count — is present in every mode.
+
+Delivery mirrors the trace sink: HTTP/protobuf, bounded batching, retries, bounded
+flush, idempotent shutdown, and a **separate** durable spool at
+`spool-logs`, so a logs outage cannot consume the capacity the primary signal's
+retries need. The endpoint is derived from `--endpoint` (a trailing `/v1/traces`
+becomes `/v1/logs`) unless `--logs-endpoint` states one. Health is reported per
+signal, because a collector with no logs receiver leaves traces perfectly healthy.
+
+The full mapping table, attribute vocabulary, bounds, and durability matrix are in
+[docs/canonical-log-mapping.md](docs/canonical-log-mapping.md).
+
 ## Privacy
 
 Content is omitted by default; only lengths and a stable salted hash are
@@ -508,6 +575,10 @@ path cannot reach an event regardless of content mode. Secret-looking keys are
 replaced recursively at every depth, and depth, string, array, object, and
 per-invocation event counts are bounded
 ([ADR 0005](docs/adr/0005-central-privacy-service.md)).
+
+Spans carry no content in any content mode. The only pipeline that can carry it is
+the optional [logs](#logs) one, and only with its own `includeContent` switch also
+set — one policy, one privacy service, two gates.
 
 The CLI additionally narrows the environment adapters can observe to an
 allow-list of `OTEL_*` and agent-specific prefixes, minus the OTLP `*_HEADERS`
@@ -591,6 +662,28 @@ Precedence, lowest to highest: `defaults` → `file` → `environment` →
 `inline-override`, merged per leaf field with per-field provenance. An unusable
 layer is rejected rather than partially applied, and the CLI then falls back to
 `DEFAULT_CONFIG` with a diagnostic rather than exiting.
+
+### The logs signal
+
+`exporter.logs` is its own sub-object, merged per leaf like everything else, so a
+file may enable the signal while the environment sets only the endpoint:
+
+| Field | Default | Flag | Variable |
+| --- | --- | --- | --- |
+| `enabled` | `false` | `--logs` / `--no-logs` | `OTEL_HOOK_LOGS_ENABLED` |
+| `endpoint` | derived from `endpoint` | `--logs-endpoint` | `OTEL_HOOK_LOGS_ENDPOINT`, then `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` |
+| `includeContent` | `false` | `--logs-content` | `OTEL_HOOK_LOGS_INCLUDE_CONTENT` |
+| `maxBatchSize` | `128` | — | — |
+
+Everything else — protocol, headers, timeout, service identity, resource
+attributes — is shared with the traces signal, which is why `logs` is nested under
+`exporter` rather than being a second top-level section that could drift.
+
+Two combinations are reported as notes rather than errors, because both are things
+an operator lands on by setting one switch and forgetting the other: logs enabled
+with no endpoint and none derivable, and `includeContent` set while `contentMode` is
+`omit` (so there is nothing disclosed to carry — the symptom, every body withheld,
+otherwise looks like a bug).
 
 ### Resource attributes
 
@@ -873,8 +966,9 @@ fixing one means updating that test rather than discovering a silent change.
     for a replayed payload (`DIVERGENCE-010`).
     `tests/parity/codex-gemini.parity.test.ts` establishes our own semantics and
     pins both divergences instead of asserting agreement.
-10. **Only OTLP HTTP/protobuf traces are exported.** `http/json` falls back to a
-    disabled sink with a warning, and there is no metrics or logs pipeline.
+10. **Only OTLP HTTP/protobuf is exported, for traces and logs.** `http/json` falls
+    back to a disabled sink with a warning, and there is no metrics pipeline. The
+    logs pipeline is off by default; see [Logs](#logs).
 11. **Gemini CLI cache and reasoning tokens never reach a hook.** The CLI's hook
     translator rebuilds `usageMetadata` as exactly
     `{ promptTokenCount, candidatesTokenCount, totalTokenCount }`, so
@@ -893,6 +987,18 @@ fixing one means updating that test rather than discovering a silent change.
     `tests/providers/gemini/usage.test.ts`,
     `tests/providers/gemini/integration.test.ts`, and
     `tests/parity/codex-gemini.parity.test.ts`.
+12. **MCP tool calls are recognized by a naming convention, not a declared fact.**
+    The `mcp` log signal is assigned when a canonical tool name matches `mcp__…`,
+    which is the shape Claude Code, Codex, and Gemini CLI payloads carry. Cursor's
+    dedicated MCP callbacks produce `<server>:<tool>` names and therefore classify as
+    `tool` — under-reporting, never a wrong claim. Fixing it properly needs a
+    canonical field an adapter can populate from a *verified* contract, which is
+    blocked on the same Cursor evidence gap as limitation 7. Asserted in
+    `tests/runtime/telemetry-log-records.test.ts`.
+13. **A `tool.end` log record cannot refine past `tool`.** Only the start edge
+    carries `toolKind`, so the same `Bash` call is signal `shell` on its start and
+    `tool` on its end. The span for that scope *does* carry the kind, recovered from
+    state by the correlator, so the detail is available — just not on that record.
 
 ## Architecture decisions
 

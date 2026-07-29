@@ -5,7 +5,9 @@ import { createPrivacyService } from "../privacy/service.js";
 import { describeProviderCatalog } from "../providers/defaults.js";
 import { createSystemClock } from "../runtime/clock.js";
 import { createFilesystemStateStore } from "../state/filesystem-store.js";
+import { createFileDurableLogSpool } from "../telemetry/durable-log-spool.js";
 import { createFileDurableSpool } from "../telemetry/durable-spool.js";
+import { describeLogsDeliverability } from "../telemetry/otlp-log-sink.js";
 import { createOtlpTraceSink } from "../telemetry/otlp-sink.js";
 import type { CliDoctorCommand } from "./args.js";
 import {
@@ -41,6 +43,8 @@ export type DoctorReport = {
     readonly installationId: string;
     readonly writable: boolean;
     readonly spooledBatches?: number;
+    /** Queued log batches awaiting retry. Absent when logs or spooling are off. */
+    readonly spooledLogBatches?: number;
   };
   readonly providers: readonly {
     readonly id: string;
@@ -112,6 +116,7 @@ export const collectDoctorReport = async (
   });
 
   let spooledBatches: number | undefined;
+  let spooledLogBatches: number | undefined;
   if (command.policy.spoolDisabled !== true) {
     const spool = createFileDurableSpool({
       rootDir: stateRootDir,
@@ -124,6 +129,23 @@ export const collectDoctorReport = async (
       spooledBatches = await spool.size();
     } catch {
       spooledBatches = undefined;
+    }
+    if (resolved.config.exporter.logs.enabled) {
+      // Only probed when logs are on: `size()` creates the queue directory, and a
+      // doctor run must not leave a tree behind for a signal this installation
+      // never emits.
+      const logSpool = createFileDurableLogSpool({
+        rootDir: stateRootDir,
+        providerId: DOCTOR_STATE_NAMESPACE,
+        installationId,
+        clock,
+        logger,
+      });
+      try {
+        spooledLogBatches = await logSpool.size();
+      } catch {
+        spooledLogBatches = undefined;
+      }
     }
   }
 
@@ -152,6 +174,32 @@ export const collectDoctorReport = async (
           ? "exporter is enabled but no endpoint is configured"
           : `protocol ${resolved.config.exporter.protocol} is not supported by this build`,
   });
+  /**
+   * The logs signal, reported separately and never as a failure when it is simply
+   * off.
+   *
+   * `ok` is true for a deliberately disabled pipeline, because `doctor` exiting
+   * non-zero on the default configuration would make the check useless. What it
+   * distinguishes is "off" from "asked for and unroutable", which is the state an
+   * operator cannot otherwise see: the sink degrades to a no-op that accepts
+   * everything, so a wrong endpoint looks exactly like success.
+   */
+  const logs = describeLogsDeliverability(resolved.config.exporter);
+  checks.push({
+    name: "logs-exporter",
+    ok: logs.status === "configured" || logs.reason === "logs-disabled",
+    detail:
+      logs.status === "configured"
+        ? `OTLP HTTP/protobuf logs exporter is configured${logs.derivedEndpoint ? " (endpoint derived from the trace endpoint)" : ""}; content ${
+            resolved.config.exporter.logs.includeContent ? "permitted" : "disabled"
+          }`
+        : logs.reason === "logs-disabled"
+          ? "logs are disabled; only traces are exported"
+          : logs.reason === "no-endpoint"
+            ? "logs are enabled but no endpoint is configured and none could be derived"
+            : `logs are enabled but unroutable: ${logs.reason}`,
+  });
+
   const health = summarizeHealth([sink.health()]);
   await sink.shutdown();
 
@@ -189,6 +237,7 @@ export const collectDoctorReport = async (
       installationId,
       writable,
       ...(spooledBatches === undefined ? {} : { spooledBatches }),
+      ...(spooledLogBatches === undefined ? {} : { spooledLogBatches }),
     },
     providers: providers.map((entry) => ({
       id: entry.id,
@@ -217,6 +266,9 @@ export const runDoctorCommand = async (command: CliDoctorCommand, io: CliIo): Pr
   writeLine(io.stdout, `installation id: ${report.state.installationId}`);
   if (report.state.spooledBatches !== undefined) {
     writeLine(io.stdout, `spooled batches: ${String(report.state.spooledBatches)}`);
+  }
+  if (report.state.spooledLogBatches !== undefined) {
+    writeLine(io.stdout, `spooled log batches: ${String(report.state.spooledLogBatches)}`);
   }
   for (const note of report.configNotes) {
     writeLine(io.stdout, `note: ${note}`);

@@ -30,6 +30,26 @@ currently `1`). Per [ADR 0002](adr/0002-versioned-canonical-model.md):
   guessing at its shape — this library will never ship a minor/patch release
   that silently changes what an existing `schemaVersion` means.
 
+## Canonical log mapping version
+
+Every exported OTLP log record carries `otelhook.log.mapping_version`
+(`LOG_MAPPING_VERSION`, currently `1`). It is versioned separately from the
+canonical schema because it describes a *projection* of the model, not the model:
+a new event type changes what appears in the stream without changing what any
+existing attribute means, and a consumer pinning the projection should not be
+forced to re-read on every model addition.
+
+- **Adding an attribute**, or a new value to the `otelhook.log.signal`
+  vocabulary, does not require a bump.
+- **Re-interpreting an existing attribute or signal value** requires a bump.
+- **Removing or renaming an attribute** requires a bump.
+
+The mapping table, the attribute vocabulary, and the per-adapter signal
+capability declarations are in
+[docs/canonical-log-mapping.md](canonical-log-mapping.md). Signal capabilities are
+*derived* from an adapter's `lifecycleEvents`, so they are not a separately
+versioned contract an adapter can let go stale.
+
 ## Public API surface
 
 The supported public surface is exactly what's re-exported from the entry
@@ -102,3 +122,18 @@ source.
   explicitly labelled fallback under a discriminated span id, so a start that
   nothing recorded is never dropped silently.
   No canonical schema version bump: no event type or field changed.
+- **An OTLP logs pipeline was added, off by default** (log mapping version 1).
+  `ExporterPolicy` gained a required `logs` sub-object (`LogsPolicy`); a caller
+  hand-building an `ExporterPolicy` without running it through the schema must
+  supply it, and `DEFAULT_LOGS_POLICY` reproduces the previous behaviour exactly
+  (nothing is exported on the logs signal). `HookRuntime` gained `logSink` and an
+  optional `logSpool`; `HookRuntime.health()` now reports two telemetry subsystems,
+  so `DeliverySubsystem` gained `telemetry-log-sink`. Enabling the signal is not
+  enough to disclose content: `exporter.logs.includeContent` is a second gate on top
+  of `privacy.contentMode`, and `raw` still requires `allowRawContent`.
+  `HookIngestOutcome.emitted` and `exportRejected` now count records across *every*
+  wired signal, so a run with logs enabled reports spans plus log records — which is
+  what makes `durability` correct across them. Both were already record counts
+  rather than event counts, and with logs off (the default) neither value changes.
+  No canonical schema version bump: no event type or field changed. See
+  [docs/canonical-log-mapping.md](canonical-log-mapping.md).

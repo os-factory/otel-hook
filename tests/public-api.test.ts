@@ -67,6 +67,20 @@ describe("public surface", () => {
       "createFileDurableSpool",
       "createOtlpTraceSink",
       "canonicalEventsToReadableSpans",
+      // The logs signal: its versioned mapping, its sink, its own retry queue, and
+      // the fanout that keeps both signals correlating to the same spans.
+      "canonicalEventsToLogRecords",
+      "canonicalEventTraceIdentities",
+      "createFileDurableLogSpool",
+      "createOtlpLogSink",
+      "createSignalFanout",
+      "shareCorrelationPerBatch",
+      "describeLogsDeliverability",
+      "logSignalOf",
+      "logSignalsForLifecycleEvents",
+      "LOG_MAPPING_VERSION",
+      "LOG_SIGNALS",
+      "NO_LOG_CONTENT",
       // Cross-process span correlation: the pure classifiers a host needs to
       // write its own resolver, plus the record version its state carries.
       "spanScopeRefOf",
@@ -107,9 +121,47 @@ describe("public surface", () => {
     expect(typeof lifecycle.createLifecycleJanitor).toBe("function");
     expect(typeof state.createFilesystemStateStore).toBe("function");
     expect(typeof telemetry.createOtlpTraceSink).toBe("function");
+    expect(typeof telemetry.createOtlpLogSink).toBe("function");
     expect(typeof diagnostics.summarizeHealth).toBe("function");
     expect(typeof integration.createHookRuntime).toBe("function");
     expect(typeof install.planProviderRegistration).toBe("function");
+  });
+
+  it("versions the canonical log mapping and freezes its signal vocabulary", () => {
+    // Consumers pin the version; a change to what an existing attribute or signal
+    // *means* has to bump it.
+    expect(telemetry.LOG_MAPPING_VERSION).toBe(1);
+    expect(telemetry.LOG_SIGNALS).toContain("mcp");
+    expect(telemetry.LOG_SIGNALS).toContain("shell");
+    expect(telemetry.LOG_SIGNALS).toContain("file-operation");
+    expect(Object.isFrozen(library.NO_LOG_CONTENT)).toBe(true);
+    // The default content policy is the disabled one, in the exported constant too.
+    expect(library.NO_LOG_CONTENT).toEqual({ includeContent: false, allowRawContent: false });
+  });
+
+  it("declares log-signal coverage for every registered adapter, derived from its lifecycle events", () => {
+    // Derived from the one declaration an adapter already makes, so a provider
+    // cannot ship a stale second list — and a consumer can tell "this provider
+    // reports no tool output" from "nobody updated the declaration".
+    for (const entry of providers.describeProviderCatalog()) {
+      const signals = telemetry.logSignalsForLifecycleEvents(
+        entry.lifecycleEvents as readonly model.CanonicalEventType[],
+      );
+      expect(new Set(signals).size, entry.id).toBe(signals.length);
+      for (const signal of signals) {
+        expect(telemetry.LOG_SIGNALS, entry.id).toContain(signal);
+      }
+    }
+  });
+
+  it("keeps log-record assembly out of the curated subpath, as span assembly is", () => {
+    // Publishing it would freeze the spool's on-disk record layout and give hosts a
+    // way around the canonical-event boundary.
+    expect(telemetry).not.toHaveProperty("assembleReadableSpan");
+    for (const name of ["validateLogSpoolBatch", "validateSpoolBatch", "createSpoolQueue"]) {
+      expect(telemetry, name).not.toHaveProperty(name);
+      expect(library, name).not.toHaveProperty(name);
+    }
   });
 
   it("registers all five providers, keeping the experimental one visibly labelled", () => {

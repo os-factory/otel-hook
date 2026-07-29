@@ -51,6 +51,18 @@ export type CliPolicyFlags = {
   readonly spoolDisabled?: boolean;
   readonly flushTimeoutMillis?: number;
   readonly includeExperimental?: boolean;
+  /** Enable the OTLP logs signal alongside traces. Off unless asked for. */
+  readonly logsEnabled?: boolean;
+  /** Full logs URL. Derived from `endpoint` when absent. */
+  readonly logsEndpoint?: string;
+  /**
+   * Permit disclosed content text in a log body.
+   *
+   * A separate flag from `--content-mode` because they answer different questions:
+   * that one decides what the privacy service discloses at all, this one decides
+   * whether the logs pipeline may carry it. Both are needed for a body to appear.
+   */
+  readonly logsIncludeContent?: boolean;
 };
 
 /**
@@ -159,6 +171,7 @@ const VALUE_FLAGS = new Set([
   "--state-dir",
   "--installation-id",
   "--flush-timeout-ms",
+  "--logs-endpoint",
   "--max-input-bytes",
   "--scope",
   "--project-dir",
@@ -175,6 +188,9 @@ const BOOLEAN_FLAGS = new Set([
   "--json",
   "--no-export",
   "--no-spool",
+  "--logs",
+  "--no-logs",
+  "--logs-content",
   "--include-experimental",
   "--no-experimental",
   "--dry-run",
@@ -366,6 +382,16 @@ const parsePolicy = (tokens: Tokenized, errors: string[]): CliPolicyFlags => {
   const installationId = single(tokens, "--installation-id", errors);
   const timeoutMillis = integer(tokens, "--timeout-ms", errors, { min: 1, max: 600_000 });
   const flushTimeoutMillis = integer(tokens, "--flush-timeout-ms", errors, { min: 1, max: 60_000 });
+  const logsEndpoint = single(tokens, "--logs-endpoint", errors);
+
+  const logsEnabled = tokens.booleans.has("--logs")
+    ? true
+    : tokens.booleans.has("--no-logs")
+      ? false
+      : undefined;
+  if (tokens.booleans.has("--logs") && tokens.booleans.has("--no-logs")) {
+    errors.push("flags --logs and --no-logs cannot both be given");
+  }
 
   return {
     ...(configFile === undefined ? {} : { configFile }),
@@ -384,6 +410,9 @@ const parsePolicy = (tokens: Tokenized, errors: string[]): CliPolicyFlags => {
     ...(tokens.booleans.has("--no-spool") ? { spoolDisabled: true } : {}),
     ...(flushTimeoutMillis === undefined ? {} : { flushTimeoutMillis }),
     ...(includeExperimental === undefined ? {} : { includeExperimental }),
+    ...(logsEnabled === undefined ? {} : { logsEnabled }),
+    ...(logsEndpoint === undefined ? {} : { logsEndpoint }),
+    ...(tokens.booleans.has("--logs-content") ? { logsIncludeContent: true } : {}),
   };
 };
 
@@ -448,6 +477,10 @@ const RUN_FLAGS: ReadonlySet<string> = new Set([
   "--state-dir",
   "--installation-id",
   "--flush-timeout-ms",
+  "--logs",
+  "--no-logs",
+  "--logs-endpoint",
+  "--logs-content",
   "--max-input-bytes",
   "--no-export",
   "--no-spool",
@@ -473,6 +506,10 @@ const DOCTOR_FLAGS: ReadonlySet<string> = new Set([
   "--installation-id",
   "--no-spool",
   "--flush-timeout-ms",
+  "--logs",
+  "--no-logs",
+  "--logs-endpoint",
+  "--logs-content",
   "--include-experimental",
   "--no-experimental",
 ]);
@@ -752,6 +789,12 @@ Exporter and runtime policy (never identity):
   --installation-id <id>     state namespace (not identity)
   --no-spool                 do not persist batches a collector refused
   --flush-timeout-ms <n>     upper bound on flush before exiting (default 2000)
+  --logs                     also export OTLP logs (off by default)
+  --logs-endpoint <url>      OTLP HTTP/protobuf logs endpoint; derived from
+                             --endpoint when omitted (/v1/traces -> /v1/logs)
+  --logs-content             permit disclosed content text in a log body. Needs
+                             --content-mode too: this decides whether the logs
+                             pipeline may carry what that one discloses
   --max-input-bytes <n>      stdin bound (default 1048576)
   --attr <key=value>         opaque consumer attribute for this invocation,
                              carried unchanged (not a resource attribute)

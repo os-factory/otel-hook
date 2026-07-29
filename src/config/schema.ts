@@ -9,6 +9,46 @@ import {
 import { EMPTY_RESOURCE_ATTRIBUTES, resourceAttributesSchema } from "./resource-attributes.js";
 
 /**
+ * Policy for the OTLP logs signal.
+ *
+ * Two switches rather than one, because they answer different questions and an
+ * operator needs to be able to answer them differently:
+ *
+ * - `enabled` — whether a second signal leaves this host at all. Off by default:
+ *   an installation that upgrades must not silently start sending a new stream to a
+ *   collector whose receivers, quotas, and retention were sized for traces.
+ * - `includeContent` — whether *disclosed* text may appear in a log body. Also off
+ *   by default, and deliberately not the same knob as `privacy.contentMode`: spans
+ *   carry no content in any content mode, so an installation that set
+ *   `contentMode` to get a hash and a length has never had content on the wire.
+ *   Reusing that setting to also mean "publish prompts" would change what an
+ *   existing configuration discloses without anybody editing it.
+ *
+ * `raw` content additionally requires the pre-existing `privacy.allowRawContent`
+ * opt-in, which the privacy service enforces before a fact is ever built and the
+ * log mapping re-checks at the wire.
+ */
+export const logsPolicySchema = z.strictObject({
+  enabled: z.boolean(),
+  /**
+   * Full URL for the logs signal.
+   *
+   * Absent, it is derived from `endpoint`: a trailing `/v1/traces` becomes
+   * `/v1/logs`, and an endpoint with no signal path has `/v1/logs` appended.
+   */
+  endpoint: z.string().url().max(2048).optional(),
+  includeContent: z.boolean(),
+  maxBatchSize: z.number().int().min(1).max(4096),
+});
+export type LogsPolicy = z.infer<typeof logsPolicySchema>;
+
+export const DEFAULT_LOGS_POLICY: LogsPolicy = Object.freeze({
+  enabled: false,
+  includeContent: false,
+  maxBatchSize: 128,
+});
+
+/**
  * Runtime exporter policy.
  *
  * This describes *where and how* telemetry goes. It deliberately contains no
@@ -39,6 +79,12 @@ export const exporterPolicySchema = z.strictObject({
    * identity, and is the same for every span this process exports.
    */
   resourceAttributes: resourceAttributesSchema,
+  /**
+   * The logs signal. Nested under the exporter because it shares the endpoint,
+   * headers, timeout, protocol, service identity, and resource attributes above —
+   * a second top-level section would invite two of each to drift apart.
+   */
+  logs: logsPolicySchema,
 });
 export type ExporterPolicy = z.infer<typeof exporterPolicySchema>;
 
@@ -69,7 +115,14 @@ export type OtelHookConfig = z.infer<typeof otelHookConfigSchema>;
 
 /** Partial overlay accepted from a configuration layer. */
 export const otelHookConfigPatchSchema = z.strictObject({
-  exporter: exporterPolicySchema.partial().optional(),
+  // `logs` is unwrapped and re-partialled for the same reason `privacy.limits` is:
+  // merging happens per leaf, so a layer must be able to set `logs.enabled` alone
+  // without also restating the endpoint and the batch size.
+  exporter: exporterPolicySchema
+    .omit({ logs: true })
+    .partial()
+    .extend({ logs: logsPolicySchema.partial().optional() })
+    .optional(),
   privacy: privacyPolicySchema
     .omit({ limits: true })
     .partial()
@@ -90,6 +143,7 @@ export const DEFAULT_EXPORTER_POLICY: ExporterPolicy = Object.freeze({
   maxRetryAttempts: 2,
   serviceName: "coding-agent",
   resourceAttributes: EMPTY_RESOURCE_ATTRIBUTES,
+  logs: DEFAULT_LOGS_POLICY,
 });
 
 export const DEFAULT_DETECTION_POLICY: DetectionPolicy = Object.freeze({

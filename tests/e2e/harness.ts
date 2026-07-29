@@ -72,13 +72,23 @@ export const runCliProcess = (
     child.stdin.end();
   });
 
-export type CapturedRequest = { readonly headers: IncomingHttpHeaders; readonly body: Buffer };
+export type CapturedRequest = {
+  readonly headers: IncomingHttpHeaders;
+  readonly body: Buffer;
+  /** Request path, e.g. `/v1/traces` or `/v1/logs`. */
+  readonly path: string;
+};
 
 export type Collector = {
+  /** Conventional traces endpoint. */
   readonly url: string;
+  /** Conventional logs endpoint, for pointing the logs signal somewhere explicitly. */
+  readonly logsUrl: string;
   readonly requests: readonly CapturedRequest[];
   /** All request bodies as one latin1 string: protobuf keeps UTF-8 strings inline. */
   text(): string;
+  /** The same, for one signal path only. */
+  textFor(path: string): string;
   close(): Promise<void>;
 };
 
@@ -100,7 +110,7 @@ export const startCollector = async (
     const chunks: Buffer[] = [];
     req.on("data", (chunk: Buffer) => chunks.push(chunk));
     req.on("end", () => {
-      const request = { headers: req.headers, body: Buffer.concat(chunks) };
+      const request = { headers: req.headers, body: Buffer.concat(chunks), path: req.url ?? "" };
       requests.push(request);
       const { status } = respond(request);
       res.writeHead(status);
@@ -112,10 +122,16 @@ export const startCollector = async (
   if (address === null || typeof address === "string") {
     throw new Error("failed to bind the capturing collector");
   }
+  const baseUrl = `http://127.0.0.1:${String(address.port)}`;
   return {
-    url: `http://127.0.0.1:${String(address.port)}/v1/traces`,
+    url: `${baseUrl}/v1/traces`,
+    logsUrl: `${baseUrl}/v1/logs`,
     requests,
     text: (): string => Buffer.concat(requests.map((request) => request.body)).toString("latin1"),
+    textFor: (path: string): string =>
+      Buffer.concat(
+        requests.filter((request) => request.path === path).map((request) => request.body),
+      ).toString("latin1"),
     close: (): Promise<void> => new Promise((resolve) => server.close(() => resolve())),
   };
 };

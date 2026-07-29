@@ -445,33 +445,18 @@ const resolvePairing = (
 };
 
 const buildLifecycleSpan = (
-  group: SpanGroup,
-  correlation: SpanCorrelation | undefined,
+  plan: GroupPlan,
   resource: Resource,
   scope: InstrumentationScope,
 ): ReadableSpan => {
-  const anchor = group.start ?? group.end;
-  if (anchor === undefined) {
-    throw new Error("unreachable: span group carries neither a start nor an end event");
-  }
+  const group = plan.group;
+  const anchor = plan.anchor;
+  const correlation = plan.correlation;
   const providerId = anchor.provenance.providerId;
   const sessionId = anchor.sessionId;
   const resolved = resolvePairing(group, anchor, correlation);
-  const traceId = deriveTraceId(providerId, sessionId);
-  const spanId =
-    correlation?.spanIdDiscriminator === undefined
-      ? deriveSpanId(providerId, sessionId, group.ref)
-      : digestHex(
-          [
-            "otelhook/span",
-            providerId,
-            sessionId,
-            group.ref.family,
-            group.ref.scopeKey,
-            correlation.spanIdDiscriminator,
-          ],
-          16,
-        );
+  const traceId = plan.traceId;
+  const spanId = plan.spanId;
   const parentSpanId =
     resolved.parent === undefined ? undefined : deriveSpanId(providerId, sessionId, resolved.parent);
 
@@ -691,22 +676,18 @@ const effectiveCorrelation = (
   };
 };
 
-/** Maps one invocation's canonical event batch into OTLP-ready spans. */
-export const canonicalEventsToReadableSpans = (
-  events: readonly CanonicalEvent[],
-  options: SemanticMappingOptions,
-): readonly ReadableSpan[] => {
-  const scope = options.instrumentationScope ?? DEFAULT_INSTRUMENTATION_SCOPE;
+/** How one batch's events distribute over the lifecycle scopes they are edges of. */
+type BatchLayout = {
+  readonly groups: ReadonlyMap<string, SpanGroup>;
+  readonly standalone: readonly CanonicalEvent[];
+  /** Event id of each lifecycle edge, mapped to the group key it belongs to. */
+  readonly groupOf: ReadonlyMap<string, string>;
+};
+
+const layoutBatch = (events: readonly CanonicalEvent[]): BatchLayout => {
   const groups = new Map<string, SpanGroup>();
   const standalone: CanonicalEvent[] = [];
-
-  const correlations = new Map<string, SpanCorrelation>();
-  for (const correlation of options.correlations ?? []) {
-    correlations.set(
-      correlationKey(correlation.providerId, correlation.sessionId, correlation.ref),
-      correlation,
-    );
-  }
+  const groupOf = new Map<string, string>();
 
   for (const event of events) {
     const ref = spanScopeRefOf(event);
@@ -722,35 +703,179 @@ export const canonicalEventsToReadableSpans = (
       group.end = event;
     }
     groups.set(groupKey, group);
+    groupOf.set(event.eventId, groupKey);
+  }
+  return { groups, standalone, groupOf };
+};
+
+const indexCorrelations = (
+  correlations: readonly SpanCorrelation[] | undefined,
+): ReadonlyMap<string, SpanCorrelation> => {
+  const indexed = new Map<string, SpanCorrelation>();
+  for (const correlation of correlations ?? []) {
+    indexed.set(
+      correlationKey(correlation.providerId, correlation.sessionId, correlation.ref),
+      correlation,
+    );
+  }
+  return indexed;
+};
+
+/**
+ * What this batch does with one lifecycle scope, decided once.
+ *
+ * Both the span mapping and the log mapping need the *same* answer to "which
+ * span id identifies this scope, and is a record for it going out now?" — a log
+ * record whose `spanContext` names a span id the exporter never published would
+ * dangle at the collector. Computing it in one place is what keeps the two
+ * signals pointing at the same span rather than at two plausible derivations of
+ * it.
+ */
+type GroupPlan = {
+  readonly group: SpanGroup;
+  /** The event the span's identity and provenance are read from. */
+  readonly anchor: CanonicalEvent;
+  /**
+   * False when the start is deferred: the state store is holding it and the end
+   * edge will publish the one complete span, so nothing is exported for it now.
+   */
+  readonly emits: boolean;
+  readonly correlation: SpanCorrelation | undefined;
+  readonly traceId: string;
+  readonly spanId: string;
+};
+
+const planGroup = (
+  group: SpanGroup,
+  correlation: SpanCorrelation | undefined,
+  correlationAvailable: boolean | undefined,
+): GroupPlan | undefined => {
+  const anchor = group.start ?? group.end;
+  if (anchor === undefined) {
+    // Unreachable: a group exists only because an event was filed into it.
+    return undefined;
+  }
+  const providerId = anchor.provenance.providerId;
+  const sessionId = anchor.sessionId;
+
+  // A start with no end in this batch is dropped **only** when something states
+  // that it is durably recorded, because its span id is a pure function of the
+  // scope: emitting here and again at the end edge would put two records with one
+  // id on the wire, and OTLP has no update operation.
+  //
+  // `defer` is that statement, and it is the correlator's to make — it just wrote
+  // the record. Anything else means nothing is holding this start, so dropping it
+  // would lose an observation that was neither persisted nor exported, while the
+  // caller saw zero rejections and marked the callback handled. Those are exported
+  // under a discriminated span id instead.
+  const durablyRecorded =
+    group.end === undefined &&
+    (correlation?.disposition === "defer" ||
+      // No correlator wired at all: cross-process pairing was never on offer, so
+      // this is the documented no-state-root degradation rather than a failure to
+      // persist something that should have been persisted.
+      (correlation === undefined && correlationAvailable === undefined));
+
+  // A deferred start keeps the scope's *plain* span id, because that is the id the
+  // end edge will publish. Only a record actually going out now may claim a
+  // discriminated one.
+  const effective = durablyRecorded ? correlation : effectiveCorrelation(group, correlation);
+  const discriminator = durablyRecorded ? undefined : effective?.spanIdDiscriminator;
+
+  return {
+    group,
+    anchor,
+    emits: !durablyRecorded,
+    correlation: effective,
+    traceId: deriveTraceId(providerId, sessionId),
+    spanId:
+      discriminator === undefined
+        ? deriveSpanId(providerId, sessionId, group.ref)
+        : digestHex(
+            [
+              "otelhook/span",
+              providerId,
+              sessionId,
+              group.ref.family,
+              group.ref.scopeKey,
+              discriminator,
+            ],
+            16,
+          ),
+  };
+};
+
+/** Trace and span a record derived from one canonical event belongs to. */
+export type EventTraceIdentity = {
+  readonly traceId: string;
+  readonly spanId: string;
+};
+
+/**
+ * Resolve the trace and span identity of every event in one batch.
+ *
+ * Exposed for signals other than traces — a log record correlates by carrying
+ * the *same* derived ids the span mapping would compute, including the deferred
+ * and discriminated cases. Whole batch at once because a start's identity
+ * depends on whether its end is in the same batch.
+ *
+ * Both ids come from the event's own `(providerId, sessionId)`, never from a
+ * batch-level or module-level value, which is what makes cross-session
+ * contamination structurally impossible: two sessions in one batch derive two
+ * different trace ids.
+ */
+export const canonicalEventTraceIdentities = (
+  events: readonly CanonicalEvent[],
+  options: {
+    readonly correlations?: readonly SpanCorrelation[];
+    readonly correlationAvailable?: boolean;
+  } = {},
+): ReadonlyMap<string, EventTraceIdentity> => {
+  const layout = layoutBatch(events);
+  const correlations = indexCorrelations(options.correlations);
+  const plans = new Map<string, GroupPlan>();
+  for (const [groupKey, group] of layout.groups) {
+    const plan = planGroup(group, correlations.get(groupKey), options.correlationAvailable);
+    if (plan !== undefined) {
+      plans.set(groupKey, plan);
+    }
   }
 
-  const spans: ReadableSpan[] = [];
-  for (const [groupKey, group] of groups) {
-    const correlation = correlations.get(groupKey);
-    if (group.end === undefined) {
-      // A start with no end in this batch is dropped **only** when something
-      // states that it is durably recorded, because its span id is a pure
-      // function of the scope: emitting here and again at the end edge would put
-      // two records with one id on the wire, and OTLP has no update operation.
-      //
-      // `defer` is that statement, and it is the correlator's to make — it just
-      // wrote the record. Anything else means nothing is holding this start, so
-      // dropping it would lose an observation that was neither persisted nor
-      // exported, while the caller saw zero rejections and marked the callback
-      // handled. Those get exported below, under a discriminated span id.
-      const durablyRecorded =
-        correlation?.disposition === "defer" ||
-        // No correlator wired at all: cross-process pairing was never on offer,
-        // so this is the documented no-state-root degradation rather than a
-        // failure to persist something that should have been persisted.
-        (correlation === undefined && options.correlationAvailable === undefined);
-      if (durablyRecorded) {
-        continue;
-      }
+  const identities = new Map<string, EventTraceIdentity>();
+  for (const event of events) {
+    const providerId = event.provenance.providerId;
+    const groupKey = layout.groupOf.get(event.eventId);
+    const plan = groupKey === undefined ? undefined : plans.get(groupKey);
+    if (plan === undefined) {
+      identities.set(event.eventId, {
+        traceId: deriveTraceId(providerId, event.sessionId),
+        spanId: deriveStandaloneSpanId(providerId, event.sessionId, event.type, event.eventId),
+      });
+      continue;
     }
-    spans.push(buildLifecycleSpan(group, effectiveCorrelation(group, correlation), options.resource, scope));
+    identities.set(event.eventId, { traceId: plan.traceId, spanId: plan.spanId });
   }
-  for (const event of standalone) {
+  return identities;
+};
+
+/** Maps one invocation's canonical event batch into OTLP-ready spans. */
+export const canonicalEventsToReadableSpans = (
+  events: readonly CanonicalEvent[],
+  options: SemanticMappingOptions,
+): readonly ReadableSpan[] => {
+  const scope = options.instrumentationScope ?? DEFAULT_INSTRUMENTATION_SCOPE;
+  const layout = layoutBatch(events);
+  const correlations = indexCorrelations(options.correlations);
+
+  const spans: ReadableSpan[] = [];
+  for (const [groupKey, group] of layout.groups) {
+    const plan = planGroup(group, correlations.get(groupKey), options.correlationAvailable);
+    if (plan === undefined || !plan.emits) {
+      continue;
+    }
+    spans.push(buildLifecycleSpan(plan, options.resource, scope));
+  }
+  for (const event of layout.standalone) {
     spans.push(buildStandaloneSpan(event, options.resource, scope));
   }
   return spans;

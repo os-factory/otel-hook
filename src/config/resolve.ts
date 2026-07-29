@@ -165,6 +165,23 @@ export const resolveConfig = (layers: readonly ConfigLayer[] = []): ConfigResolu
   if (parsed.data.exporter.enabled && parsed.data.exporter.protocol !== "none" && parsed.data.exporter.endpoint === undefined) {
     notes.push("exporter.enabled is true but no endpoint is configured");
   }
+  if (
+    parsed.data.exporter.logs.enabled &&
+    parsed.data.exporter.logs.endpoint === undefined &&
+    parsed.data.exporter.endpoint === undefined
+  ) {
+    notes.push(
+      "exporter.logs.enabled is true but neither a logs endpoint nor a trace endpoint to derive one from is configured",
+    );
+  }
+  if (parsed.data.exporter.logs.includeContent && parsed.data.privacy.contentMode === "omit") {
+    // Not an error: the two settings are independent by design, and this is the
+    // combination somebody lands on when they enable one and forget the other. Said
+    // out loud because the symptom — every log body withheld — looks like a bug.
+    notes.push(
+      "exporter.logs.includeContent is true but privacy.contentMode is omit, so no content is disclosed to describe",
+    );
+  }
 
   return { status: "ok", config: parsed.data, provenance, notes };
 };
@@ -176,18 +193,28 @@ export const resolveConfig = (layers: readonly ConfigLayer[] = []): ConfigResolu
  * snapshot is exported to the very system whose credentials it would leak.
  */
 export const describeResolvedConfig = (config: OtelHookConfig): Attributes => {
-  let endpointOrigin: string | undefined;
-  if (config.exporter.endpoint !== undefined) {
-    try {
-      endpointOrigin = new URL(config.exporter.endpoint).origin;
-    } catch {
-      endpointOrigin = "<unparsable>";
+  const originOf = (endpoint: string | undefined): string | undefined => {
+    if (endpoint === undefined) {
+      return undefined;
     }
-  }
+    try {
+      return new URL(endpoint).origin;
+    } catch {
+      return "<unparsable>";
+    }
+  };
+  const endpointOrigin = originOf(config.exporter.endpoint);
+  const logsEndpointOrigin = originOf(config.exporter.logs.endpoint);
   return {
     "exporter.enabled": config.exporter.enabled,
     "exporter.protocol": config.exporter.protocol,
     ...(endpointOrigin === undefined ? {} : { "exporter.endpoint_origin": endpointOrigin }),
+    "exporter.logs_enabled": config.exporter.logs.enabled,
+    "exporter.logs_include_content": config.exporter.logs.includeContent,
+    "exporter.logs_max_batch_size": config.exporter.logs.maxBatchSize,
+    ...(logsEndpointOrigin === undefined
+      ? {}
+      : { "exporter.logs_endpoint_origin": logsEndpointOrigin }),
     "exporter.header_names": [...config.exporter.headerNames],
     // Names only. A resource attribute *name* is already on the wire in every
     // exported resource, so disclosing it here adds nothing; a *value* may hold

@@ -202,3 +202,92 @@ export const decodeExportedSpans = (body: Buffer): readonly DecodedSpan[] => {
 export const decodeAllExportedSpans = (
   bodies: readonly Buffer[],
 ): readonly DecodedSpan[] => bodies.flatMap((body) => decodeExportedSpans(body));
+
+export type DecodedLogRecord = {
+  /** Empty string when the record carries no trace correlation. */
+  readonly traceId: string;
+  readonly spanId: string;
+  readonly eventName: string;
+  readonly severityNumber: number;
+  readonly severityText: string;
+  /**
+   * The record body, or `undefined` when the record carries none.
+   *
+   * The distinction matters more here than anywhere else in this decoder: "content
+   * was withheld" is expressed by the *absence* of the field, so a decoder that
+   * defaulted it to `""` would make a privacy assertion unable to tell a withheld
+   * body from an empty one.
+   */
+  readonly body: string | undefined;
+  readonly timeUnixNanos: bigint;
+  readonly observedTimeUnixNanos: bigint;
+  readonly attributes: Readonly<Record<string, DecodedAttributeValue>>;
+  readonly resourceAttributes: Readonly<Record<string, DecodedAttributeValue>>;
+  readonly scopeName: string;
+};
+
+const firstFixed64Raw = (fields: readonly WireField[], number: number): bigint | undefined => {
+  const raw = fields.find((field) => field.number === number)?.fixed64;
+  return raw === undefined ? undefined : raw.readBigUInt64LE(0);
+};
+
+const decodeLogRecord = (
+  buffer: Buffer,
+  resourceAttributes: Readonly<Record<string, DecodedAttributeValue>>,
+  scopeName: string,
+): DecodedLogRecord => {
+  const fields = readFields(buffer);
+  // LogRecord field numbers, which are not contiguous: 1 time_unix_nano,
+  // 2 severity_number, 3 severity_text, 5 body, 6 attributes, 9 trace_id,
+  // 10 span_id, 11 observed_time_unix_nano, 12 event_name.
+  const bodyBytes = firstBytes(fields, 5);
+  return {
+    traceId: (firstBytes(fields, 9) ?? Buffer.alloc(0)).toString("hex"),
+    spanId: (firstBytes(fields, 10) ?? Buffer.alloc(0)).toString("hex"),
+    eventName: (firstBytes(fields, 12) ?? Buffer.alloc(0)).toString("utf8"),
+    severityNumber: Number(firstVarint(fields, 2) ?? 0n),
+    severityText: (firstBytes(fields, 3) ?? Buffer.alloc(0)).toString("utf8"),
+    body:
+      bodyBytes === undefined
+        ? undefined
+        : ((): string | undefined => {
+            const value = decodeAnyValue(bodyBytes);
+            return typeof value === "string" ? value : undefined;
+          })(),
+    timeUnixNanos: firstFixed64Raw(fields, 1) ?? 0n,
+    observedTimeUnixNanos: firstFixed64Raw(fields, 11) ?? 0n,
+    attributes: decodeKeyValues(fields, 6),
+    resourceAttributes,
+    scopeName,
+  };
+};
+
+/** Every log record in one captured `ExportLogsServiceRequest` body. */
+export const decodeExportedLogRecords = (body: Buffer): readonly DecodedLogRecord[] => {
+  const records: DecodedLogRecord[] = [];
+  // ExportLogsServiceRequest.resource_logs is field 1; ResourceLogs.resource is 1
+  // and .scope_logs is 2; ScopeLogs.scope is 1 and .log_records is 2.
+  for (const resourceLogs of submessages(readFields(body), 1)) {
+    const resourceFields = readFields(resourceLogs);
+    const resourceBytes = firstBytes(resourceFields, 1);
+    const resourceAttributes =
+      resourceBytes === undefined ? {} : decodeKeyValues(readFields(resourceBytes), 1);
+    for (const scopeLogs of submessages(resourceFields, 2)) {
+      const scopeFields = readFields(scopeLogs);
+      const scopeBytes = firstBytes(scopeFields, 1);
+      const scopeName =
+        scopeBytes === undefined
+          ? ""
+          : (firstBytes(readFields(scopeBytes), 1) ?? Buffer.alloc(0)).toString("utf8");
+      for (const record of submessages(scopeFields, 2)) {
+        records.push(decodeLogRecord(record, resourceAttributes, scopeName));
+      }
+    }
+  }
+  return records;
+};
+
+/** Every log record across a sequence of captured request bodies, in arrival order. */
+export const decodeAllExportedLogRecords = (
+  bodies: readonly Buffer[],
+): readonly DecodedLogRecord[] => bodies.flatMap((body) => decodeExportedLogRecords(body));
