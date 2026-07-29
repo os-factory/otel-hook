@@ -28,7 +28,7 @@ const SCOPE_NAME = "@osfactory/otel-hook";
 
 export const DEFAULT_INSTRUMENTATION_SCOPE: InstrumentationScope = Object.freeze({
   name: SCOPE_NAME,
-  version: "0.0.0",
+  version: "0.1.0",
 });
 
 const ATTR_OTELHOOK_INVOCATION_ID = "otelhook.invocation.id";

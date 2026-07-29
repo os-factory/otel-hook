@@ -42,7 +42,7 @@ describe("otel-hook CLI: non-hook commands", () => {
   it("reports its version and nothing else", async () => {
     const result = await runCliProcess(["--version"]);
     expect(result.code).toBe(0);
-    expect(result.stdout).toBe("0.0.0\n");
+    expect(result.stdout).toBe("0.1.0\n");
     expect(result.stderr).toBe("");
   });
 
@@ -122,7 +122,7 @@ describe("otel-hook CLI: non-hook commands", () => {
       state: { writable: boolean };
     };
 
-    expect(report.version).toBe("0.0.0");
+    expect(report.version).toBe("0.1.0");
     expect(report.state.writable).toBe(true);
     expect(report.checks.find((check) => check.name === "state-store")?.ok).toBe(true);
     // No endpoint configured, so the exporter check fails and the exit code says so.
