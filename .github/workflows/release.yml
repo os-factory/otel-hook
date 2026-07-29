@@ -1,49 +1,39 @@
 name: Release
 
-# Prepares provenance-ready release artifacts for a tagged candidate. It never
-# runs `npm publish`: package.json's `"private": true` is the actual gate, and
-# is intentionally left in place until the integration owner reviews this
-# draft release and promotes it (see docs/release-checklist.md). This
-# workflow's job is to make that promotion a five-minute review, not a rebuild.
+# Cut a semver release from Conventional Commit / squash-merge titles on main,
+# then publish @osfactory/otel-hook to npm with provenance. Modeled on
+# os-factory/har's Release workflow (without Docker coupling).
 
 on:
   push:
-    tags: ["v*"]
+    branches: [main]
   workflow_dispatch:
     inputs:
-      ref:
-        description: "Ref to build the release candidate from"
-        required: false
-        type: string
+      dry_run:
+        description: Analyze commits and print the next release without publishing
+        type: boolean
+        default: false
 
-permissions:
-  contents: read
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  build-artifacts:
-    name: build release artifacts
+  verify:
+    if: github.event_name == 'workflow_dispatch' || !contains(github.event.head_commit.message, '[skip ci]')
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      id-token: write
-      attestations: write
     steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ inputs.ref || github.ref }}
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Setup Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"
           cache: npm
 
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Full verification (typecheck, lint, test, build)
-        run: npm run check
+      - name: Install and verify
+        run: |
+          npm ci
+          npm run check
 
       - name: Pack / install / API / binary smoke test
         run: node scripts/packaging/pack-smoke-test.mjs --skip-build
@@ -51,49 +41,126 @@ jobs:
       - name: Check dependency licenses
         run: node scripts/security/check-licenses.mjs
 
-      - name: Generate SBOMs
-        run: |
-          npm sbom --sbom-format cyclonedx > sbom.cdx.json
-          npm sbom --sbom-format spdx > sbom.spdx.json
+  release:
+    needs: verify
+    if: github.event_name == 'workflow_dispatch' || !contains(github.event.head_commit.message, '[skip ci]')
+    runs-on: ubuntu-latest
+    environment: npm-publish
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+      id-token: write
+    outputs:
+      released: ${{ steps.detect.outputs.released }}
+      tag: ${{ steps.detect.outputs.tag }}
+      version: ${{ steps.detect.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: true
 
-      - name: Pack release tarball
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          cache: npm
+          registry-url: https://registry.npmjs.org
+
+      - name: Configure git
         run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Record latest tag before release
+        id: before
+        run: |
+          TAG="$(git tag -l 'v*' --sort=-v:refname | head -1)"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+      - run: npm ci
+
+      - name: Semantic release (version cut + GitHub Release)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.dry_run }}" = "true" ]; then
+            npx semantic-release --dry-run
+          else
+            npx semantic-release
+          fi
+
+      - name: Detect published release
+        id: detect
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.dry_run }}" = "true" ]; then
+            echo "released=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git fetch --tags --force
+          TAG="$(git tag -l 'v*' --sort=-v:refname | head -1)"
+          BEFORE="${{ steps.before.outputs.tag }}"
+
+          if [ -n "$TAG" ] && [ "$TAG" != "$BEFORE" ]; then
+            echo "released=true" >> "$GITHUB_OUTPUT"
+            echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+            echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+            echo "Published $TAG"
+          else
+            echo "released=false" >> "$GITHUB_OUTPUT"
+            echo "No new release"
+          fi
+
+  publish-npm:
+    needs: release
+    if: needs.release.outputs.released == 'true'
+    runs-on: ubuntu-latest
+    environment: npm-publish
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.release.outputs.tag }}
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          cache: npm
+          registry-url: https://registry.npmjs.org
+
+      - name: Build, pack, SBOM, attest, publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          EXPECTED="${{ needs.release.outputs.version }}"
+          ACTUAL="$(node -p "require('./package.json').version")"
+          if [ "$ACTUAL" != "$EXPECTED" ]; then
+            echo "package.json version ($ACTUAL) does not match tag v${EXPECTED}" >&2
+            exit 1
+          fi
+          npm ci
+          npm run build
           mkdir -p release-artifacts
+          npm sbom --sbom-format cyclonedx > release-artifacts/sbom.cdx.json
+          npm sbom --sbom-format spdx > release-artifacts/sbom.spdx.json
           npm pack --pack-destination release-artifacts
-          cp sbom.cdx.json sbom.spdx.json release-artifacts/
+          npm publish --access public --provenance
+          echo "Published @osfactory/otel-hook@${EXPECTED} to npm"
 
-      - name: Attest build provenance
-        id: attest
+      - name: Attest build provenance (GitHub)
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
           subject-path: "release-artifacts/*.tgz"
 
-      - name: Upload release artifacts
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: release-artifacts
-          path: release-artifacts/
-          retention-days: 90
-
-      - name: Create draft GitHub release
-        if: github.event_name == 'push'
+      - name: Upload release artifacts to GitHub Release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="${GITHUB_REF_NAME}"
-          gh release create "$TAG" \
-            --repo "$GITHUB_REPOSITORY" \
-            --draft \
-            --generate-notes \
-            --title "$TAG (draft: package remains private)" \
-            release-artifacts/*.tgz release-artifacts/*.json
-
-      - name: Summary
-        run: |
-          {
-            echo "### Release artifacts prepared for \`${GITHUB_REF_NAME:-${{ inputs.ref }}}\`"
-            echo
-            echo "- Package remains \`\"private\": true\`. No \`npm publish\` ran."
-            echo "- A **draft** GitHub release was created with the packed tarball, both SBOM formats, and a build provenance attestation."
-            echo "- Promotion checklist: docs/release-checklist.md"
-          } >> "$GITHUB_STEP_SUMMARY"
+          TAG="${{ needs.release.outputs.tag }}"
+          gh release upload "$TAG" release-artifacts/* --clobber

@@ -23,12 +23,13 @@ import {
 
 import type { CanonicalEvent, CanonicalEventType } from "../model/events.js";
 import type { CanonicalUsage } from "../model/usage.js";
+import { VERSION } from "../version.js";
 
 const SCOPE_NAME = "@osfactory/otel-hook";
 
 export const DEFAULT_INSTRUMENTATION_SCOPE: InstrumentationScope = Object.freeze({
   name: SCOPE_NAME,
-  version: "0.1.0",
+  version: VERSION,
 });
 
 const ATTR_OTELHOOK_INVOCATION_ID = "otelhook.invocation.id";

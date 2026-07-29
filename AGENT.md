@@ -29,6 +29,22 @@ are opaque, immutable invocation metadata.
 - Do not introduce module-level mutable identity, session, tracer, or workspace.
 - Do not scan arbitrary transcript directories from provider adapters.
 
+## Branch names, CI, and releases
+
+Git **branch names do not skip CI or releases**. Match the **squash-merge PR
+title** to Conventional Commits — that title becomes the commit on `main` and
+is what [semantic-release](./release.config.cjs) analyzes.
+
+| Prefix | Release |
+| ------ | ------- |
+| `fix:` | Patch |
+| `feat:` | Minor |
+| `feat!:` / `BREAKING CHANGE:` | Major |
+| `chore:`, `docs:`, `test:`, `refactor:`, `ci:` | No release |
+
+Use `ci: …` for workflow-only PRs (this change). Add `[skip ci]` to the squash
+message only when you also need to skip the Release verify job.
+
 ## Verification
 
 Before committing:

@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "fixtures:validate": "node scripts/fixtures/validate-fixtures.mjs",
-    "check": "npm run typecheck && npm run lint && npm run build && npm test && npm run fixtures:validate"
+    "check": "npm run typecheck && npm run lint && npm run build && npm test && npm run fixtures:validate",
+    "release": "semantic-release"
   },
   "keywords": [],
   "author": "OS Factory",
@@ -102,9 +103,15 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@semantic-release/changelog": "^6.0.3",
+    "@semantic-release/exec": "^6.0.3",
+    "@semantic-release/git": "^10.0.1",
+    "@semantic-release/github": "^11.0.6",
+    "@semantic-release/npm": "^13.1.5",
     "@types/node": "^26.1.1",
     "eslint": "^10.8.0",
     "prettier": "^3.9.6",
+    "semantic-release": "^24.2.9",
     "tsup": "^8.5.1",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.65.0",
