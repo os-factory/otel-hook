@@ -1,0 +1,11 @@
+{
+  "fixture": "post-compact.json",
+  "sourceContract": "Codex CLI hook JSON protocol (PostCompact) reporting post-compaction context size, dropped message count, and the session-wide cumulative total_token_usage",
+  "provider": "codex",
+  "capturedDate": "2026-07-29",
+  "author": "otel-hook integration owner (agent)",
+  "sanitization": "Context sizes and token counts are round invented figures, not a measurement of any real compaction.",
+  "licenseBasis": "Original synthetic authorship.",
+  "sha256": "33906d4e9d0d6761ea1f41b1d3ce2b2e8dcdd9a57c50c2d2cafd5d4cc3dffbf0",
+  "notes": "Third point on the same cumulative curve (22500 -> 25300). Proves a compaction snapshot continues the session's usage series instead of starting a second, competing baseline."
+}

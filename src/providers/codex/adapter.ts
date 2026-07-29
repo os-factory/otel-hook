@@ -54,6 +54,11 @@ export const CODEX_CAPABILITIES: ProviderCapabilities = Object.freeze({
     "compaction.performed",
   ] as const),
   usageTemporality: "cumulative",
+  // Every usage-bearing Codex callback stamps the *session-wide* running total
+  // (`total_token_usage`), not a per-turn figure, so all of them are points on
+  // one series. Diffing per `turn_id` would re-count the whole session each
+  // turn; see docs/usage-semantics.md.
+  cumulativeUsageSeries: "session-lifetime",
   reportsCachedInput: true,
   reportsCacheCreation: false,
   cacheCreationAccounting: "not-reported",
