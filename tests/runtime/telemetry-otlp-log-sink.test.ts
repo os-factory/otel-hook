@@ -67,6 +67,24 @@ describe("resolveLogsEndpoint", () => {
     });
   });
 
+  it("strips any number of trailing slashes, in linear time", () => {
+    // Trailing slashes are stripped by scan rather than by `/\/+$/`, which is a
+    // polynomial-ReDoS on operator-supplied configuration. Many slashes followed by a
+    // non-slash is the shape that backtracks, so it is the shape asserted.
+    expect(resolveLogsEndpoint(policy({ endpoint: `http://collector:4318${"/".repeat(64)}` }))).toEqual({
+      endpoint: "http://collector:4318/v1/logs",
+      derived: true,
+    });
+    expect(
+      resolveLogsEndpoint(policy({ endpoint: `http://collector:4318/v1/traces${"/".repeat(64)}` })),
+    ).toEqual({ endpoint: "http://collector:4318/v1/logs", derived: true });
+    // An all-slash path degrades to appending the signal path, not to an empty URL.
+    expect(resolveLogsEndpoint(policy({ endpoint: "http://collector:4318///" }))).toEqual({
+      endpoint: "http://collector:4318/v1/logs",
+      derived: true,
+    });
+  });
+
   it("leaves an endpoint that is already the logs path alone", () => {
     expect(resolveLogsEndpoint(policy({ endpoint: "http://collector:4318/v1/logs" }))).toEqual({
       endpoint: "http://collector:4318/v1/logs",

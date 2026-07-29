@@ -45,6 +45,22 @@ const OTLP_TRACES_PATH = "/v1/traces";
 const OTLP_LOGS_PATH = "/v1/logs";
 
 /**
+ * Strip trailing slashes, by scan rather than by regex.
+ *
+ * `/\/+$/` is a polynomial-ReDoS on this input: an endpoint of many `/` followed by
+ * anything else makes the engine retry the `+` from every position. The endpoint is
+ * operator-supplied configuration bounded to 2048 characters, so the practical cost
+ * is small — but a linear scan is just as short, and the bound is not the guarantee.
+ */
+const withoutTrailingSlashes = (value: string): string => {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 0x2f) {
+    end -= 1;
+  }
+  return value.slice(0, end);
+};
+
+/**
  * Where log records are posted.
  *
  * Resolution order, highest first:
@@ -70,7 +86,7 @@ export const resolveLogsEndpoint = (
   if (exporter.endpoint === undefined) {
     return { unresolvable: "no-endpoint" };
   }
-  const trimmed = exporter.endpoint.replace(/\/+$/, "");
+  const trimmed = withoutTrailingSlashes(exporter.endpoint);
   if (trimmed.endsWith(OTLP_LOGS_PATH)) {
     return { endpoint: trimmed, derived: true };
   }
