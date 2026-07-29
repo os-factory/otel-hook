@@ -152,9 +152,18 @@ export type HookIngestOutcome = {
   readonly identity?: InvocationIdentity;
   readonly events: readonly CanonicalEvent[];
   readonly usageObservations: readonly UsageObservation[];
+  /**
+   * OTLP records the sink accepted, summed over every wired signal.
+   *
+   * A count of *records*, never of canonical events: two edges of one lifecycle
+   * scope produce one span, and one event carrying three content facts produces
+   * three log records. With the logs signal enabled a batch therefore reports both
+   * signals' records here — which is what makes {@link durability} correct across
+   * them, and why nothing should read this as "how many events were observed".
+   */
   readonly emitted: number;
   /**
-   * Spans the sink could neither export nor durably spool.
+   * Records the sink could neither export nor durably spool.
    *
    * The distinction `emitted` cannot make: a successful spool enqueue counts as
    * emitted, because the batch is safe on disk and a later invocation will retry

@@ -317,7 +317,12 @@ describe("hook runtime: bounded flush and containment", () => {
     const first = await runtime.shutdown();
     const second = await runtime.shutdown();
     expect(second).toBe(first);
-    expect(runtime.health().subsystems.map((entry) => entry.subsystem)).toEqual(["telemetry-sink"]);
+    // Both OTLP signals report separately, even with logs off: a single combined
+    // verdict would make an operator bisect which one is broken.
+    expect(runtime.health().subsystems.map((entry) => entry.subsystem)).toEqual([
+      "telemetry-sink",
+      "telemetry-log-sink",
+    ]);
   });
 
   it("shows why the CLI refuses cross-provider auto-detection instead of letting confidence decide", async () => {

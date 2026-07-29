@@ -78,6 +78,13 @@ export const resolveInstallationId = (policy: CliPolicyFlags, io: CliIo): string
 /** Configuration patch expressed by CLI policy flags. Carries no identity field. */
 export const policyFlagsToPatch = (policy: CliPolicyFlags): OtelHookConfigPatch => {
   const headerNames = Object.keys(policy.headers).sort();
+  const logs = {
+    ...(policy.logsEnabled === undefined ? {} : { enabled: policy.logsEnabled }),
+    ...(policy.logsEndpoint === undefined ? {} : { endpoint: policy.logsEndpoint }),
+    ...(policy.logsIncludeContent === undefined
+      ? {}
+      : { includeContent: policy.logsIncludeContent }),
+  };
   const exporter = {
     ...(policy.exportDisabled === true ? { enabled: false } : {}),
     ...(policy.endpoint === undefined ? {} : { endpoint: policy.endpoint }),
@@ -95,6 +102,7 @@ export const policyFlagsToPatch = (policy: CliPolicyFlags): OtelHookConfigPatch 
     ...(Object.keys(policy.resourceAttributes).length === 0
       ? {}
       : { resourceAttributes: policy.resourceAttributes }),
+    ...(Object.keys(logs).length === 0 ? {} : { logs }),
   };
   const privacy = policy.contentMode === undefined ? {} : { contentMode: policy.contentMode };
   const diagnostics = policy.logLevel === undefined ? {} : { logLevel: policy.logLevel };

@@ -1,7 +1,20 @@
 import type { OtelHookErrorCode } from "../errors/index.js";
 import type { EpochMillis } from "../model/primitives.js";
 
-export type DeliverySubsystem = "state-store" | "telemetry-sink" | "lifecycle";
+/**
+ * One tracked delivery path.
+ *
+ * The two telemetry signals are separate subsystems because they fail
+ * independently — a collector with no logs receiver leaves traces perfectly
+ * healthy — and a single combined verdict would make an operator bisect which one
+ * is broken. `telemetry-sink` remains the traces signal, unrenamed, so an existing
+ * `doctor --json` consumer keeps reading the same field.
+ */
+export type DeliverySubsystem =
+  | "state-store"
+  | "telemetry-sink"
+  | "telemetry-log-sink"
+  | "lifecycle";
 
 /**
  * Sanitized delivery health.

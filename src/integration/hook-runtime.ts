@@ -37,9 +37,17 @@ import { createNullLogger } from "../runtime/logger.js";
 import type { Clock, IdGenerator, Logger } from "../runtime/ports.js";
 import { createAsyncLock } from "../state/async-lock.js";
 import { createFilesystemStateStore, type FilesystemStateStore } from "../state/filesystem-store.js";
+import {
+  createFileDurableLogSpool,
+  type DurableLogSpool,
+} from "../telemetry/durable-log-spool.js";
 import { createFileDurableSpool, type DurableSpool } from "../telemetry/durable-spool.js";
+import { createOtlpLogSink, type OtlpLogTelemetrySink } from "../telemetry/otlp-log-sink.js";
 import { createOtlpTraceSink, type OtlpTelemetrySink } from "../telemetry/otlp-sink.js";
-import type { SpanCorrelation } from "../telemetry/semconv.js";
+import {
+  createSignalFanout,
+  shareCorrelationPerBatch,
+} from "../telemetry/signal-fanout.js";
 
 /**
  * A hook process lives for milliseconds and then exits, but the facts it needs
@@ -232,8 +240,13 @@ export interface HookRuntime {
   readonly hook: OtelHook;
   readonly config: OtelHookConfig;
   readonly stateStore: FilesystemStateStore;
+  /** The traces signal. Named `sink` because it is the one every installation has. */
   readonly sink: OtlpTelemetrySink;
+  /** The logs signal. A no-op sink unless `exporter.logs.enabled` is set. */
+  readonly logSink: OtlpLogTelemetrySink;
   readonly spool?: DurableSpool;
+  /** Retry queue for the logs signal. Absent when spooling or logs are disabled. */
+  readonly logSpool?: DurableLogSpool;
   readonly privacy: PrivacyService;
   readonly deduplicator: CallbackDeduplicator;
   readonly usageAccumulator: UsageAccumulator;
@@ -471,13 +484,37 @@ export const createHookRuntime = (options: HookRuntimeOptions): HookRuntime => {
           logger,
         });
 
+  // A separate queue from the trace spool, so a logs outage cannot consume the
+  // capacity the primary signal's retries need. Only built when logs are on: a
+  // default installation must not create a directory for a signal it never emits.
+  const logSpool =
+    options.enableSpool === false || !options.config.exporter.logs.enabled
+      ? undefined
+      : createFileDurableLogSpool({
+          rootDir: options.stateRootDir,
+          providerId: options.providerNamespace,
+          installationId: options.installationId,
+          clock,
+          logger,
+        });
+
   const spanCorrelator = createSpanCorrelator({
     stateStore,
     clock,
     maxStartAgeMillis: lifecycleMaxAge,
   });
 
-  const sink = createOtlpTraceSink({
+  /**
+   * One correlation resolution per batch, shared by both signals.
+   *
+   * `correlateBatch` records the start edge and marks a scope published, so two
+   * calls for one batch would have the second see the first's writes and report a
+   * start it just recorded as a duplicate — leaving the two signals pointing at
+   * different span ids for the same scope.
+   */
+  const correlate = shareCorrelationPerBatch((events) => spanCorrelator.correlateBatch(events));
+
+  const traceSink = createOtlpTraceSink({
     exporter: options.config.exporter,
     ...(options.headers === undefined ? {} : { headers: options.headers }),
     providerId: options.providerNamespace,
@@ -485,9 +522,28 @@ export const createHookRuntime = (options: HookRuntimeOptions): HookRuntime => {
     clock,
     logger,
     ...(spool === undefined ? {} : { spool }),
-    correlate: (events): Promise<readonly SpanCorrelation[]> =>
-      spanCorrelator.correlateBatch(events),
+    correlate,
   });
+
+  const logSink = createOtlpLogSink({
+    exporter: options.config.exporter,
+    ...(options.headers === undefined ? {} : { headers: options.headers }),
+    providerId: options.providerNamespace,
+    installationId: options.installationId,
+    clock,
+    logger,
+    ...(logSpool === undefined ? {} : { spool: logSpool }),
+    content: {
+      includeContent: options.config.exporter.logs.includeContent,
+      // The pre-existing verbatim-content opt-in, passed through rather than
+      // re-derived: `raw` disclosure in a log body is governed by the same flag it
+      // has always been governed by.
+      allowRawContent: privacy.policy.allowRawContent,
+    },
+    correlate,
+  });
+
+  const sink = createSignalFanout({ traces: traceSink, logs: logSink });
 
   const hookDeps = {
     stateStore,
@@ -858,7 +914,7 @@ export const createHookRuntime = (options: HookRuntimeOptions): HookRuntime => {
     );
   };
 
-  const snapshots = (): readonly DeliveryHealthSnapshot[] => [sink.health()];
+  const snapshots = (): readonly DeliveryHealthSnapshot[] => sink.health();
 
   let shutdownReport: Promise<HookShutdownReport> | undefined;
   const shutdown = (): Promise<HookShutdownReport> => {
@@ -888,8 +944,10 @@ export const createHookRuntime = (options: HookRuntimeOptions): HookRuntime => {
     hook,
     config: options.config,
     stateStore,
-    sink,
+    sink: traceSink,
+    logSink,
     ...(spool === undefined ? {} : { spool }),
+    ...(logSpool === undefined ? {} : { logSpool }),
     privacy,
     deduplicator,
     usageAccumulator,

@@ -138,6 +138,45 @@ describe("CLI argument parsing", () => {
     expect(expectErrors(["run", "payload.json"])[0]).toContain("unexpected positional argument");
   });
 
+  it("parses the logs signal flags, defaulting to silence about them", () => {
+    // Absent flags leave every logs field unset, so the configuration layer below
+    // keeps its own default rather than being overridden with one.
+    const quiet = expectRun(["run", "--provider", "claude-code"]).policy;
+    expect(quiet.logsEnabled).toBeUndefined();
+    expect(quiet.logsEndpoint).toBeUndefined();
+    expect(quiet.logsIncludeContent).toBeUndefined();
+
+    const enabled = expectRun([
+      "run",
+      "--provider",
+      "claude-code",
+      "--logs",
+      "--logs-endpoint",
+      "http://127.0.0.1:4318/v1/logs",
+      "--logs-content",
+    ]).policy;
+    expect(enabled.logsEnabled).toBe(true);
+    expect(enabled.logsEndpoint).toBe("http://127.0.0.1:4318/v1/logs");
+    expect(enabled.logsIncludeContent).toBe(true);
+
+    expect(expectRun(["run", "--provider", "claude-code", "--no-logs"]).policy.logsEnabled).toBe(false);
+  });
+
+  it("treats contradictory logs flags as an error", () => {
+    expect(expectErrors(["run", "--provider", "claude-code", "--logs", "--no-logs"])).toContain(
+      "flags --logs and --no-logs cannot both be given",
+    );
+  });
+
+  it("keeps the logs flags on the commands that can act on them", () => {
+    // `run` exports and `doctor` reports, so both need them; a registration command
+    // writes a hook document and has no exporter to configure.
+    expect(parseCliArgs(["doctor", "--logs", "--json"]).status).toBe("command");
+    expect(expectErrors(["setup", "--provider", "claude-code", "--logs"])).toEqual([
+      'flag --logs is not accepted by "setup"',
+    ]);
+  });
+
   it("treats contradictory experimental flags as an error", () => {
     expect(expectErrors(["run", "--include-experimental", "--no-experimental"])[0]).toContain(
       "cannot both be given",

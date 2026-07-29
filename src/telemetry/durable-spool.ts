@@ -1,10 +1,14 @@
 import type { Attributes } from "@opentelemetry/api";
-import { randomBytes } from "node:crypto";
-import { mkdir, readFile, readdir, rename, unlink, writeFile } from "node:fs/promises";
-import * as path from "node:path";
 
 import type { Clock, Logger } from "../runtime/ports.js";
-import { namespaceSegments, type StoreNamespace } from "../state/keys.js";
+import type { StoreNamespace } from "../state/keys.js";
+// Deliberately not re-exported: `spool-queue.js` is their one home, and a second
+// `export *` path to the same names makes them ambiguous in the barrel below.
+import {
+  createSpoolQueue,
+  type SpoolDrainResult,
+  type SpoolEnqueueResult,
+} from "./spool-queue.js";
 
 export type SerializedSpan = {
   readonly name: string;
@@ -174,25 +178,6 @@ export const validateSpoolBatch = (
   return { batch: value as unknown as SpoolBatch };
 };
 
-export type SpoolEnqueueResult =
-  | { readonly spooled: true }
-  | { readonly spooled: false; readonly reason: "capacity-exceeded" };
-
-export type SpoolDrainResult = {
-  readonly drained: number;
-  readonly remaining: number;
-  readonly failed: number;
-  /**
-   * Batches removed from the queue because they were unusable rather than
-   * undeliverable.
-   *
-   * Distinct from `failed`, which means "the collector would not take it, try
-   * later". A quarantined batch will never become deliverable, so counting it
-   * separately is what stops a permanent problem from reading as transient.
-   */
-  readonly quarantined: number;
-};
-
 export type DurableSpoolOptions = StoreNamespace & {
   readonly rootDir: string;
   readonly clock: Clock;
@@ -223,148 +208,17 @@ export interface DurableSpool {
   size(): Promise<number>;
 }
 
-const isErrnoException = (thrown: unknown, code: string): boolean =>
-  thrown instanceof Error && (thrown as NodeJS.ErrnoException).code === code;
+/** Default bound on queued trace batches, so the spool cannot grow without limit. */
+export const DEFAULT_MAX_SPOOL_FILES = 500;
 
-export const createFileDurableSpool = (options: DurableSpoolOptions): DurableSpool => {
-  const [providerSegment, installationSegment] = namespaceSegments(options);
-  const spoolDir = path.join(options.rootDir, providerSegment, installationSegment, "spool");
-  const corruptDir = path.join(options.rootDir, providerSegment, installationSegment, "spool-corrupt");
-  const maxSpoolFiles = options.maxSpoolFiles ?? 500;
-
-  let dirsReady: Promise<void> | undefined;
-  const ensureDirs = async (): Promise<void> => {
-    if (dirsReady !== undefined) {
-      return dirsReady;
-    }
-    const promise = (async (): Promise<void> => {
-      await mkdir(spoolDir, { recursive: true });
-      await mkdir(corruptDir, { recursive: true });
-    })();
-    dirsReady = promise;
-    try {
-      await promise;
-    } catch (thrown) {
-      dirsReady = undefined;
-      throw thrown;
-    }
-  };
-
-  const listSorted = async (): Promise<readonly string[]> => {
-    let entries: string[];
-    try {
-      entries = await readdir(spoolDir);
-    } catch (thrown) {
-      if (isErrnoException(thrown, "ENOENT")) {
-        return [];
-      }
-      throw thrown;
-    }
-    return entries.filter((entry) => entry.endsWith(".json") && !entry.startsWith(".tmp-")).sort();
-  };
-
-  const enqueue = async (batch: SpoolBatch): Promise<SpoolEnqueueResult> => {
-    await ensureDirs();
-    const existing = await listSorted();
-    if (existing.length >= maxSpoolFiles) {
-      options.logger?.warn("durable spool at capacity; batch dropped", {
-        "spool.max_files": maxSpoolFiles,
-      });
-      return { spooled: false, reason: "capacity-exceeded" };
-    }
-    const fileName = `${String(options.clock.now()).padStart(16, "0")}-${randomBytes(6).toString("hex")}.json`;
-    const target = path.join(spoolDir, fileName);
-    const tmp = path.join(spoolDir, `.tmp-${randomBytes(6).toString("hex")}.json`);
-    await writeFile(tmp, JSON.stringify(batch), "utf8");
-    await rename(tmp, target);
-    return { spooled: true };
-  };
-
-  const drain = async (
-    send: (batch: SpoolBatch) => Promise<boolean>,
-    drainOptions?: { readonly maxBatches?: number },
-  ): Promise<SpoolDrainResult> => {
-    await ensureDirs();
-    const cap = drainOptions?.maxBatches ?? 20;
-    const files = await listSorted();
-    let drained = 0;
-    let failed = 0;
-    let quarantined = 0;
-    let index = 0;
-
-    for (; index < files.length && index < cap; index += 1) {
-      const fileName = files[index];
-      if (fileName === undefined) {
-        break;
-      }
-      const filePath = path.join(spoolDir, fileName);
-
-      /**
-       * Move a file out of the queue, or delete it if quarantine is unavailable.
-       *
-       * Getting it *out of the queue* is the part that matters. A file the drain
-       * cannot use and cannot move would be re-read on every pass, and because the
-       * head is processed first it would block every healthy batch behind it — the
-       * one failure mode a retry queue must not have. So a failed quarantine falls
-       * back to deleting: losing one unusable batch beats losing all the usable
-       * ones queued behind it.
-       */
-      const quarantine = async (rejection: string): Promise<void> => {
-        quarantined += 1;
-        options.logger?.error("durable spool quarantined an unusable batch", {
-          "spool.rejection": rejection,
-          "spool.file": fileName,
-        });
-        try {
-          await rename(filePath, path.join(corruptDir, fileName));
-        } catch {
-          await unlink(filePath).catch(() => undefined);
-        }
-      };
-
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(await readFile(filePath, "utf8")) as unknown;
-      } catch {
-        await quarantine("unparseable-json");
-        continue;
-      }
-
-      const validation = validateSpoolBatch(parsed, {
-        providerId: options.providerId,
-        installationId: options.installationId,
-      });
-      if ("rejection" in validation) {
-        await quarantine(validation.rejection);
-        continue;
-      }
-      const batch = validation.batch;
-
-      let delivered: boolean;
-      try {
-        delivered = await send(batch);
-      } catch {
-        delivered = false;
-      }
-      if (delivered) {
-        await unlink(filePath).catch(() => undefined);
-        drained += 1;
-      } else {
-        failed += 1;
-        break;
-      }
-    }
-
-    const remaining = (await listSorted()).length;
-    return { drained, remaining, failed, quarantined };
-  };
-
-  return {
-    enqueue,
-    drain,
-    size: async (): Promise<number> => {
-      await ensureDirs();
-      return (await listSorted()).length;
-    },
-  };
-};
+export const createFileDurableSpool = (options: DurableSpoolOptions): DurableSpool =>
+  createSpoolQueue<SpoolBatch>({
+    rootDir: options.rootDir,
+    providerId: options.providerId,
+    installationId: options.installationId,
+    clock: options.clock,
+    ...(options.logger === undefined ? {} : { logger: options.logger }),
+    maxFiles: options.maxSpoolFiles ?? DEFAULT_MAX_SPOOL_FILES,
+    queueName: "spool",
+    validate: validateSpoolBatch,
+  });
