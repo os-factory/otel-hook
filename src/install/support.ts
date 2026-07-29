@@ -24,26 +24,6 @@ export type ProviderRegistrationSupport = {
   readonly evidenceBlocker?: string;
 };
 
-/**
- * Cursor is the one provider whose *configuration* is verified but whose
- * *payloads* are not, which is the reverse of the usual blocker and worth
- * stating plainly: registering it would succeed, fire, and then drop every
- * event on the floor.
- */
-const CURSOR_REASON =
-  "Cursor's hooks.json location and shape are verified (cursor.com/docs/agent/hooks; o11y-dev/opentelemetry-hooks " +
-  "v0.14.0 setup.sh), but this repository's Cursor payload contract is explicitly synthetic " +
-  "(providers/cursor/payload.ts), so a registration would fire a hook whose payloads the adapter rejects";
-
-const CURSOR_EVIDENCE_BLOCKER =
-  "Two concrete mismatches, both from providers/cursor/payload.ts against cursor.com/docs/agent/hooks: " +
-  "(1) the adapter's tool events are beforeToolUse/afterToolUse/toolUseFailed where Cursor documents " +
-  "preToolUse/postToolUse/postToolUseFailure, and (2) the adapter's current-shape envelope is camelCase " +
-  "(hookEventName, conversationId, timestampMillis) while its snake_case path only resolves snake_case event " +
-  "names (before_tool_use, …), so a real payload keyed hook_event_name: \"preToolUse\" matches neither path. " +
-  "Unblocked by capturing real Cursor hook payloads under fixtures/parity/cursor with provenance and " +
-  "re-deriving the payload contract from them; the planner can then reuse the verified hooks.json shape.";
-
 export const PROVIDER_REGISTRATION_SUPPORT: readonly ProviderRegistrationSupport[] = Object.freeze([
   Object.freeze({
     providerId: ANTIGRAVITY_PROVIDER_ID,
@@ -70,9 +50,13 @@ export const PROVIDER_REGISTRATION_SUPPORT: readonly ProviderRegistrationSupport
   }),
   Object.freeze({
     providerId: CURSOR_PROVIDER_ID,
-    supported: false,
-    reason: CURSOR_REASON,
-    evidenceBlocker: CURSOR_EVIDENCE_BLOCKER,
+    supported: true,
+    reason:
+      "the ~/.cursor/hooks.json and .cursor/hooks.json documents, their shape, and the event vocabulary are " +
+      "documented at cursor.com/docs/agent/hooks, and the payload contract this adapter parses is derived from " +
+      "that reference plus four real redacted capture runs (Cursor IDE 3.12.17 and CLI 2026.07.17, recorded in " +
+      "providers/cursor/payload.ts and replayed from fixtures/parity/cursor)",
+    helper: "mergeCursorHookRegistration",
   }),
   Object.freeze({
     providerId: GEMINI_PROVIDER_ID,

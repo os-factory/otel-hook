@@ -19,6 +19,13 @@ import {
   removeCodexHookRegistration,
 } from "../providers/codex/registration.js";
 import { CODEX_PROVIDER_ID } from "../providers/codex/version.js";
+import { CURSOR_PROVIDER_ID } from "../providers/cursor/payload.js";
+import {
+  CURSOR_REGISTRABLE_HOOK_EVENTS,
+  mergeCursorHookRegistration,
+  readCursorHookRegistrations,
+  removeCursorHookRegistration,
+} from "../providers/cursor/registration.js";
 import { GEMINI_PROVIDER_ID } from "../providers/gemini/adapter.js";
 import { type GeminiHookEventName } from "../providers/gemini/schema.js";
 import {
@@ -205,21 +212,28 @@ export type ProviderRegistrationPlanner = {
 const isPlainObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
+/** Reads the managed registrations out of a document, per event. */
+type RegistrationReader = (
+  existing: unknown,
+  identifies: HookHandlerPredicate,
+) => ReadonlyMap<string, readonly string[]>;
+
 /**
- * Antigravity's planner predates the shared result type and reports only
+ * The flat-document planners (Antigravity, Cursor) report only
  * `{ config, changed }`. Rather than change a published contract, the per-event
  * outcome is recovered by comparing the registrations before and after, and the
- * one structural check the flat shape needs is applied here.
+ * one structural check the flat shape needs is applied separately.
  */
-const adaptAntigravityResult = (
+const adaptFlatResult = (
+  read: RegistrationReader,
   existing: unknown,
   events: readonly string[],
   identifies: HookHandlerPredicate,
   result: { readonly config: Record<string, unknown>; readonly changed: boolean },
   removal: boolean,
 ): NestedHookDocumentResult => {
-  const before = readAntigravityHookRegistrations(existing, identifies);
-  const after = readAntigravityHookRegistrations(result.config, identifies);
+  const before = read(existing, identifies);
+  const after = read(result.config, identifies);
   const changes: HookDocumentChange[] = [];
 
   for (const event of events) {
@@ -243,7 +257,12 @@ const adaptAntigravityResult = (
   return { document: result.config, changed: result.changed, changes, conflicts: [] };
 };
 
-const antigravityConflicts = (existing: unknown): readonly HookDocumentConflict[] => {
+/**
+ * Structural check for the flat shape: `hooks` must be an object keyed by event
+ * name whose values are arrays of entries. Anything else is reported so the
+ * caller refuses to write, rather than coerced.
+ */
+const flatHookConflicts = (existing: unknown): readonly HookDocumentConflict[] => {
   if (!isPlainObject(existing) || existing.hooks === undefined) {
     return [];
   }
@@ -272,12 +291,16 @@ const antigravityConflicts = (existing: unknown): readonly HookDocumentConflict[
 const asAntigravityEvents = (events: readonly string[]): readonly (typeof ANTIGRAVITY_HOOK_EVENT_NAMES)[number][] =>
   events as readonly (typeof ANTIGRAVITY_HOOK_EVENT_NAMES)[number][];
 
+/** Event keys actually present in a flat document, for a removal with no `--event`. */
+const documentEventNames = (existing: unknown): readonly string[] =>
+  isPlainObject(existing) && isPlainObject(existing.hooks) ? Object.keys(existing.hooks) : [];
+
 const PLANNERS: readonly ProviderRegistrationPlanner[] = Object.freeze([
   Object.freeze({
     providerId: ANTIGRAVITY_PROVIDER_ID,
     defaultEvents: ANTIGRAVITY_HOOK_EVENT_NAMES,
     merge: (input: RegistrationPlanInput): NestedHookDocumentResult => {
-      const conflicts = antigravityConflicts(input.existing);
+      const conflicts = flatHookConflicts(input.existing);
       if (conflicts.length > 0) {
         return {
           document: isPlainObject(input.existing) ? input.existing : {},
@@ -287,7 +310,8 @@ const PLANNERS: readonly ProviderRegistrationPlanner[] = Object.freeze([
         };
       }
       const events = input.events ?? ANTIGRAVITY_HOOK_EVENT_NAMES;
-      return adaptAntigravityResult(
+      return adaptFlatResult(
+        readAntigravityHookRegistrations,
         input.existing,
         events,
         input.identifies,
@@ -302,7 +326,7 @@ const PLANNERS: readonly ProviderRegistrationPlanner[] = Object.freeze([
       );
     },
     remove: (input: RegistrationRemovalInput): NestedHookDocumentResult => {
-      const conflicts = antigravityConflicts(input.existing);
+      const conflicts = flatHookConflicts(input.existing);
       if (conflicts.length > 0) {
         return {
           document: isPlainObject(input.existing) ? input.existing : {},
@@ -311,12 +335,9 @@ const PLANNERS: readonly ProviderRegistrationPlanner[] = Object.freeze([
           conflicts,
         };
       }
-      const events =
-        input.events ??
-        (isPlainObject(input.existing) && isPlainObject(input.existing.hooks)
-          ? Object.keys(input.existing.hooks)
-          : []);
-      return adaptAntigravityResult(
+      const events = input.events ?? documentEventNames(input.existing);
+      return adaptFlatResult(
+        readAntigravityHookRegistrations,
         input.existing,
         events,
         input.identifies,
@@ -347,6 +368,61 @@ const PLANNERS: readonly ProviderRegistrationPlanner[] = Object.freeze([
     remove: (input: RegistrationRemovalInput): NestedHookDocumentResult =>
       removeCodexHookRegistration(input),
     read: readCodexHookRegistrations,
+  }),
+  Object.freeze({
+    providerId: CURSOR_PROVIDER_ID,
+    defaultEvents: CURSOR_REGISTRABLE_HOOK_EVENTS,
+    merge: (input: RegistrationPlanInput): NestedHookDocumentResult => {
+      const conflicts = flatHookConflicts(input.existing);
+      if (conflicts.length > 0) {
+        return {
+          document: isPlainObject(input.existing) ? input.existing : {},
+          changed: false,
+          changes: [],
+          conflicts,
+        };
+      }
+      const events = input.events ?? CURSOR_REGISTRABLE_HOOK_EVENTS;
+      return adaptFlatResult(
+        readCursorHookRegistrations,
+        input.existing,
+        events,
+        input.identifies,
+        mergeCursorHookRegistration({
+          ...(input.existing === undefined ? {} : { existing: input.existing }),
+          command: input.command,
+          events,
+          ...(input.matcher === undefined ? {} : { matcher: input.matcher }),
+          ...(input.timeoutSeconds === undefined ? {} : { timeoutSeconds: input.timeoutSeconds }),
+          identifies: input.identifies,
+        }),
+        false,
+      );
+    },
+    remove: (input: RegistrationRemovalInput): NestedHookDocumentResult => {
+      const conflicts = flatHookConflicts(input.existing);
+      if (conflicts.length > 0) {
+        return {
+          document: isPlainObject(input.existing) ? input.existing : {},
+          changed: false,
+          changes: [],
+          conflicts,
+        };
+      }
+      return adaptFlatResult(
+        readCursorHookRegistrations,
+        input.existing,
+        input.events ?? documentEventNames(input.existing),
+        input.identifies,
+        removeCursorHookRegistration({
+          ...(input.existing === undefined ? {} : { existing: input.existing }),
+          ...(input.events === undefined ? {} : { events: input.events }),
+          identifies: input.identifies,
+        }),
+        true,
+      );
+    },
+    read: readCursorHookRegistrations,
   }),
   Object.freeze({
     providerId: GEMINI_PROVIDER_ID,

@@ -4,80 +4,71 @@ import { normalizeCursorPayload, type CursorPayload } from "./payload.js";
 /**
  * Which Cursor callbacks carry an identifier that survives a redelivery.
  *
- * Cursor's envelope always carries `conversationId` — which scopes the identity —
- * and most events carry a payload-native id on top of it:
+ * Cursor's envelope always carries `conversation_id`, which scopes the identity.
+ * On top of it:
  *
- * - `toolCallId` names one tool call; the event name separates its before-edge
- *   from its after-edge.
- * - `generationId` names one generation, and `beforeSubmitPrompt`,
- *   `afterAgentResponse`, and `stop` each fire once per generation.
- * - `subagentInvocationId` names one delegated invocation.
+ * - `tool_use_id` names one tool call, and the event name separates its
+ *   before-edge from its after-edge and from its failure edge.
+ * - `generation_id` names one generation, and `beforeSubmitPrompt` and `stop`
+ *   each fire once per generation.
  * - `sessionStart`/`sessionEnd` fire once per conversation, so the event name
  *   alone identifies them.
  *
  * Excluded on purpose:
  *
+ * - The dedicated shell, MCP, and file callbacks carry no `tool_use_id` at all —
+ *   neither the reference nor any capture shows one. What distinguishes two of
+ *   them is the command line or the file path, which are content, not
+ *   identifiers; the contract's component guard rejects both (no whitespace, no
+ *   path separators), and it is right to. `generation_id` alone would be wrong
+ *   in the other direction: one generation runs many shell commands, so it would
+ *   suppress genuine second calls as redeliveries.
  * - `preCompact` carries nothing that separates two genuine compactions.
- * - The dedicated shell, MCP, file-edit, and file-read callbacks make
- *   `toolCallId` optional. Without it the only distinguishing fields are the
- *   command line and the file path, which are content, not identifiers — the
- *   contract's component guard would reject them, and it is right to.
- * - `timestampMillis` is deliberately *not* mixed in. It would make two callbacks
- *   in the same millisecond distinguishable, but it would also make a host that
- *   restamps a redelivery undetectable, and losing a duplicate suppression is
- *   the worse of the two failures for accounting.
+ * - `subagentStart`/`subagentStop` produce no events at all (see `adapter.ts`),
+ *   so there is nothing to deduplicate.
+ * - There is no timestamp field to mix in, and Cursor sends none — so the usual
+ *   temptation to make two same-millisecond callbacks distinguishable does not
+ *   even arise here.
  */
 const deliveryComponents = (
   payload: CursorPayload,
 ): { readonly components: readonly string[]; readonly evidence: readonly string[] } | undefined => {
-  switch (payload.hookEventName) {
+  switch (payload.hook_event_name) {
     case "sessionStart":
     case "sessionEnd":
       return {
-        components: [payload.hookEventName],
-        evidence: [`cursor fires ${payload.hookEventName} once per conversation`],
+        components: [payload.hook_event_name],
+        evidence: [`cursor fires ${payload.hook_event_name} once per conversation`],
       };
     case "beforeSubmitPrompt":
-    case "afterAgentResponse":
     case "stop":
-      return {
-        components: [payload.generationId],
-        evidence: [
-          `payload.generationId names one generation, which fires ${payload.hookEventName} once`,
-        ],
-      };
-    case "afterAgentThought":
-      return payload.thoughtIndex === undefined
+      return payload.generation_id === undefined || payload.generation_id.length === 0
         ? undefined
         : {
-            components: [payload.generationId, String(payload.thoughtIndex)],
-            evidence: ["payload.generationId with payload.thoughtIndex names one thought"],
+            components: [payload.generation_id],
+            evidence: [
+              `payload.generation_id names one generation, which fires ${payload.hook_event_name} once`,
+            ],
           };
-    case "beforeToolUse":
-    case "afterToolUse":
-    case "toolUseFailed":
-      return {
-        components: [payload.toolCallId],
-        evidence: ["payload.toolCallId names one tool call and repeats on redelivery"],
-      };
-    case "subagentStart":
-    case "subagentStop":
-      return {
-        components: [payload.subagentInvocationId],
-        evidence: ["payload.subagentInvocationId names one delegated invocation"],
-      };
+    case "preToolUse":
+    case "postToolUse":
+    case "postToolUseFailure":
+      return payload.tool_use_id === undefined || payload.tool_use_id.length === 0
+        ? undefined
+        : {
+            components: [payload.tool_use_id],
+            evidence: ["payload.tool_use_id names one tool call and repeats on redelivery"],
+          };
+    case "afterAgentResponse":
+    case "afterAgentThought":
     case "beforeShellExecution":
     case "afterShellExecution":
     case "beforeMCPExecution":
     case "afterMCPExecution":
-    case "afterFileEdit":
     case "beforeReadFile":
-      return payload.toolCallId === undefined
-        ? undefined
-        : {
-            components: [payload.toolCallId],
-            evidence: ["payload.toolCallId names one tool call and repeats on redelivery"],
-          };
+    case "afterFileEdit":
+    case "subagentStart":
+    case "subagentStop":
     case "preCompact":
       return undefined;
   }
@@ -93,8 +84,14 @@ const deliveryComponents = (
  */
 export const CURSOR_DELIVERY_GAPS: Readonly<Record<string, string>> = Object.freeze({
   preCompact: "no compaction id; payload `trigger` does not separate two genuine compactions",
+  afterAgentResponse:
+    "generation_id alone would collide with stop for the same generation; Cursor fires both with the same token snapshot",
   afterAgentThought:
     "payload.thoughtIndex absent; generationId alone names the generation, not one thought within it",
+  subagentStart:
+    "subagentStop carries no subagent id, so the pair cannot be correlated and neither edge is identified",
+  subagentStop:
+    "subagentStop carries no subagent id, so the pair cannot be correlated and neither edge is identified",
   beforeShellExecution:
     "payload.toolCallId absent; the only remaining field is the command line, which is content and may not become an id",
   afterShellExecution:
@@ -112,20 +109,17 @@ export const CURSOR_DELIVERY_GAPS: Readonly<Record<string, string>> = Object.fre
 export const cursorDeliveryIdentity = (
   input: ProviderIdentityInput,
 ): ProviderDeliveryClaim | undefined => {
-  const normalized = normalizeCursorPayload(input.payload);
-  if (normalized === undefined) {
+  const payload = normalizeCursorPayload(input.payload);
+  if (payload === undefined) {
     return undefined;
   }
-  const { payload } = normalized;
   const identified = deliveryComponents(payload);
   if (identified === undefined) {
     return undefined;
   }
   return {
-    sessionId: payload.conversationId,
-    // The current-shape event name, not the raw one: a legacy `session_start` and
-    // a current `sessionStart` are the same callback and must not dedupe apart.
-    sourceEventName: payload.hookEventName,
+    sessionId: payload.conversation_id,
+    sourceEventName: payload.hook_event_name,
     components: identified.components,
     evidence: identified.evidence,
   };

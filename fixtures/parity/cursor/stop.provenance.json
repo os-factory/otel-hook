@@ -1,0 +1,12 @@
+{
+  "fixture": "stop.json",
+  "sourceContract": "Cursor agent hook `stop`: documented `status`/`loop_count` plus the four token counters observed in capture but absent from the reference",
+  "provider": "cursor",
+  "capturedDate": "2026-07-29",
+  "author": "otel-hook cursor provider owner (agent)",
+  "sanitization": "Real key set. The token counts are reproduced from one captured IDE sample because their *ratio* is the evidence for how the counters relate; they measure an unrelated third party's throwaway canary turn, name nothing, and identify no one.",
+  "licenseBasis": "Original authorship; only the field names, their types, and four integer measurements are taken from the cited capture set.",
+  "providerVersionObserved": "cursor 3.12.17 (IDE)",
+  "sha256": "ebbe484d1d6688fa3cee3705acf0c3e55ad4e8edab0821c55387370871f25f58",
+  "notes": "input_tokens/output_tokens/cache_read_tokens/cache_write_tokens appear on `stop` and `afterAgentResponse` in the IDE runs of colinsurprenant/director hack/canary/cursor-cli/findings and in no part of Cursor's published reference. In the captured conversation both callbacks reported the identical snapshot, which is why the adapter emits generation.end from `stop` alone. cache_read_tokens sits below input_tokens in all three captured samples (28384/43859, 7040/21033, 77920/94622); see CURSOR_USAGE_INCLUSIVITY_NOTE."
+}

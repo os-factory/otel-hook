@@ -76,14 +76,18 @@ describe("otel-hook CLI: non-hook commands", () => {
     expect(listing.filter((entry) => entry.requiresHookResponse).map((entry) => entry.id)).toEqual([
       "cursor",
     ]);
-    // Cursor is also the one provider this repository will not plan a
-    // registration for: its hooks.json shape is documented, but the payload
-    // contract here is synthetic, so a registration would fire and drop
-    // everything. The catalog has to say so.
+    // Every registered provider now has a planner, Cursor included: its
+    // hooks.json shape was documented all along, and its payload contract is now
+    // derived from the reference plus real captures.
     expect(
       listing.filter((entry) => entry.registrationSupported).map((entry) => entry.id),
-    ).toEqual(["antigravity", "claude-code", "codex", "gemini-cli"]);
-    expect(listing.find((entry) => entry.id === "cursor")?.registrationNote).toContain("synthetic");
+    ).toEqual(["antigravity", "claude-code", "codex", "cursor", "gemini-cli"]);
+    expect(listing.find((entry) => entry.id === "cursor")?.registrationNote).toContain(
+      "cursor.com/docs/agent/hooks",
+    );
+    expect(listing.find((entry) => entry.id === "cursor")?.registrationNote).not.toContain(
+      "synthetic",
+    );
     // Deduplication coverage is part of the catalog: a host has to be able to see
     // that no adapter identifies *every* callback before it relies on the
     // at-most-once guarantee for all of them.
@@ -536,17 +540,17 @@ describe("otel-hook run: identity isolation and concurrency", () => {
   it("suppresses a redelivered tool callback with no --callback-id at all, across two processes", async () => {
     const collector = await withCollector();
     const stateDir = await withStateDir();
-    // A Cursor `afterToolUse` payload: `toolCallId` is the adapter's own evidence
+    // A Cursor `postToolUse` payload: `tool_use_id` is the adapter's own evidence
     // of a replay-stable identity, so two separate hook processes reach the same
     // conclusion without the host telling them anything.
     const payload = JSON.stringify({
-      hookEventName: "afterToolUse",
-      conversationId: "ses-derived-redelivery",
-      timestampMillis: 1_700_000_000_000,
-      workspaceRoots: ["/workspace/fixture-repo"],
-      toolCallId: "call-e2e-1",
-      toolName: "read_file",
-      durationMillis: 12,
+      hook_event_name: "postToolUse",
+      conversation_id: "ses-derived-redelivery",
+      generation_id: "gen-e2e-1",
+      workspace_roots: ["/workspace/fixture-repo"],
+      tool_use_id: "call-e2e-1",
+      tool_name: "Read",
+      duration: 12,
     });
     const args = [
       "run",
@@ -581,12 +585,12 @@ describe("otel-hook run: identity isolation and concurrency", () => {
     // Cursor's `preCompact` carries no field that separates a redelivery from a
     // genuine second compaction, so the adapter refuses to identify it.
     const payload = JSON.stringify({
-      hookEventName: "preCompact",
-      conversationId: "ses-required-e2e",
-      timestampMillis: 1_700_000_000_000,
-      workspaceRoots: ["/workspace/fixture-repo"],
-      trigger: "automatic",
-      contextTokensBefore: 180_000,
+      hook_event_name: "preCompact",
+      conversation_id: "ses-required-e2e",
+      generation_id: "gen-e2e-1",
+      workspace_roots: ["/workspace/fixture-repo"],
+      trigger: "auto",
+      context_tokens: 180_000,
     });
     const args = [
       "run",
@@ -619,12 +623,12 @@ describe("otel-hook run: identity isolation and concurrency", () => {
     const collector = await withCollector();
     const stateDir = await withStateDir();
     const payload = JSON.stringify({
-      hookEventName: "afterToolUse",
-      conversationId: "ses-no-derive-e2e",
-      timestampMillis: 1_700_000_000_000,
-      workspaceRoots: ["/workspace/fixture-repo"],
-      toolCallId: "call-e2e-2",
-      toolName: "read_file",
+      hook_event_name: "postToolUse",
+      conversation_id: "ses-no-derive-e2e",
+      generation_id: "gen-e2e-1",
+      workspace_roots: ["/workspace/fixture-repo"],
+      tool_use_id: "call-e2e-2",
+      tool_name: "Read",
     });
     const args = [
       "run",

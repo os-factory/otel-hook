@@ -7,5 +7,5 @@
   "sanitization": "Session id, turn ids, and working directory are invented placeholders; codex_version is a deliberately non-real sentinel ('0.42.0-fixture') so a test can prove the version came from the payload and not from a codex binary on the host PATH.",
   "licenseBasis": "Original synthetic authorship.",
   "sha256": "d5412640666e39510bb981e94a6c2fe9344d53a74dc36e82ede167d7789490e7",
-  "notes": "Anchors the client-version-attribution dimension: our adapter reads codex_version from the payload, while the pinned reference ignores it and shells out to `codex --version` (DIVERGENCE-008)."
+  "notes": "Anchors the client-version-attribution dimension: our adapter reads codex_version from the payload, while the pinned reference ignores it and shells out to `codex --version` (DIVERGENCE-010)."
 }

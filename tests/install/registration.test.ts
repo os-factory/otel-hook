@@ -43,31 +43,34 @@ describe("provider registration support", () => {
     }
   });
 
-  it("offers planners for claude-code, codex, gemini-cli, and antigravity", () => {
+  it("offers planners for every provider whose contract is verified", () => {
     expect([...SUPPORTED_REGISTRATION_PROVIDER_IDS].sort()).toEqual([
       "antigravity",
       "claude-code",
       "codex",
+      "cursor",
       "gemini-cli",
     ]);
   });
 
-  it("refuses cursor and names the payload-contract blocker, not a config-shape one", () => {
+  it("supports cursor and cites both halves of the contract, config and payload", () => {
     const support = findRegistrationSupport("cursor");
-    expect(support?.supported).toBe(false);
-    // The reason must be honest about *which* half is unverified: Cursor's
-    // hooks.json shape is known; its payloads, in this repository, are not.
-    expect(support?.reason).toContain("synthetic");
-    expect(support?.evidenceBlocker).toContain("preToolUse");
-    expect(support?.evidenceBlocker).toContain("fixtures/parity/cursor");
+    expect(support?.supported).toBe(true);
+    expect(support?.evidenceBlocker).toBeUndefined();
+    // The reason has to establish *both* halves: the document shape was verified
+    // first, and the payload contract is what took a capture to settle.
+    expect(support?.reason).toContain("cursor.com/docs/agent/hooks");
+    expect(support?.reason).toContain("capture");
+    expect(support?.reason).not.toContain("synthetic");
 
     const result = planProviderRegistration({
       providerId: "cursor",
       options: { command: "otel-hook run --provider cursor" },
     });
-    expect(result.status).toBe("unsupported");
-    if (result.status === "unsupported") {
-      expect(result.reason).toBe(support?.reason);
+    expect(result.status).toBe("planned");
+    if (result.status === "planned") {
+      expect(result.document).toMatchObject({ version: 1 });
+      expect(result.changed).toBe(true);
     }
   });
 

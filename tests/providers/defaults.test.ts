@@ -76,11 +76,14 @@ describe("default provider registry", () => {
     );
 
     const cursor = catalog.find((entry) => entry.id === "cursor");
-    // Cursor hooks carry no authoritative token breakdown; the catalog must say
-    // so, because "not reported" and "zero" are indistinguishable in the data.
-    expect(cursor?.reportsCachedInput).toBe(false);
+    // Cursor reports a cache-read subset of its input tokens but documents no
+    // accounting for cache writes, and the catalog must draw that line: "not
+    // reported" and "zero" are indistinguishable in the data.
+    expect(cursor?.reportsCachedInput).toBe(true);
     expect(cursor?.cacheCreationAccounting).toBe("not-reported");
     expect(cursor?.requiresHookResponse).toBe(true);
+    // subagentStop carries no subagent id to pair with subagentStart.
+    expect(cursor?.lifecycleEvents).not.toContain("subagent.start");
 
     const codex = catalog.find((entry) => entry.id === "codex");
     expect(codex?.usageTemporality).toBe("cumulative");

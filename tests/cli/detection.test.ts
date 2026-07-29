@@ -71,9 +71,9 @@ describe("auto-detection refuses cross-provider overlap", () => {
 
   it("resolves payload families only one adapter recognizes", () => {
     const cursor = detect({
-      hookEventName: "sessionStart",
-      conversationId: "ses-cursor",
-      timestampMillis: 1_700_000_000_000,
+      hook_event_name: "sessionStart",
+      conversation_id: "ses-cursor",
+      is_background_agent: false,
     });
     expect(cursor.status).toBe("resolved");
     if (cursor.status === "resolved") {

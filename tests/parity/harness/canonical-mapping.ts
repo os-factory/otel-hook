@@ -291,7 +291,12 @@ type CursorPayload = {
   readonly composer_mode?: string;
   readonly tool_name?: string;
   readonly tool_input?: unknown;
+  readonly tool_use_id?: string;
   readonly duration?: number;
+  readonly workspace_roots?: readonly string[];
+  readonly input_tokens?: number;
+  readonly output_tokens?: number;
+  readonly cache_read_tokens?: number;
 };
 
 const MCP_TOOL_NAME_PATTERN = /^mcp__([^_]+(?:_[^_]+)*)__(.+)$/;
@@ -315,10 +320,11 @@ export const mapCursorSession = (payloads: readonly unknown[]): ParityMappingRes
   if (first === undefined) {
     return { events: [], droppedExtensionKeys: [] };
   }
+  const workspaceRoot = first.workspace_roots?.[0];
   const identity = buildIdentity(context, {
     providerId: "cursor",
     sessionId: first.conversation_id,
-    ...(first.cwd === undefined ? {} : { cwd: first.cwd }),
+    ...(workspaceRoot === undefined ? {} : { cwd: workspaceRoot }),
   });
   const factory = createEventFactory({ identity, sequenceBase: 0, context });
 
@@ -335,7 +341,8 @@ export const mapCursorSession = (payloads: readonly unknown[]): ParityMappingRes
         const mcp = payload.tool_name === undefined ? undefined : parseMcpToolName(payload.tool_name);
         factory.build({
           type: "tool.start",
-          toolCallId: payload.generation_id ?? context.ids.newOpaqueId([payload.conversation_id, "tool"]),
+          toolCallId:
+            payload.tool_use_id ?? context.ids.newOpaqueId([payload.conversation_id, "tool"]),
           toolName: payload.tool_name ?? "unknown-tool",
           toolKind: mcp === undefined ? "other" : "network",
           ...(payload.tool_input === undefined
@@ -357,14 +364,34 @@ export const mapCursorSession = (payloads: readonly unknown[]): ParityMappingRes
       case "postToolUse":
         factory.build({
           type: "tool.end",
-          toolCallId: payload.generation_id ?? context.ids.newOpaqueId([payload.conversation_id, "tool"]),
+          toolCallId:
+            payload.tool_use_id ?? context.ids.newOpaqueId([payload.conversation_id, "tool"]),
           toolName: payload.tool_name ?? "unknown-tool",
           outcome: "ok",
-          // Cursor reports duration in fractional seconds; the canonical model
-          // is milliseconds (durationMillisSchema). Converting here, unlike
-          // opentelemetry-hooks's CursorEventAdapter which does the same
-          // conversion — see DIVERGENCE-006 for the case where an adapter forgets.
-          ...(payload.duration === undefined ? {} : { durationMillis: payload.duration * 1000 }),
+          // Cursor's `duration` is already milliseconds, so it is passed through
+          // unscaled — see DIVERGENCE-008 for the reference's two different
+          // wrong readings of the same key.
+          ...(payload.duration === undefined ? {} : { durationMillis: payload.duration }),
+        });
+        break;
+      case "stop":
+        factory.build({
+          type: "generation.end",
+          generationId: payload.generation_id ?? "unknown-generation",
+          model: { modelId: "unknown" },
+          outcome: "ok",
+          ...(payload.input_tokens === undefined
+            ? {}
+            : {
+                usage: normalizeOrDrop({
+                  temporality: "delta",
+                  inputTokens: payload.input_tokens,
+                  ...(payload.output_tokens === undefined ? {} : { outputTokens: payload.output_tokens }),
+                  ...(payload.cache_read_tokens === undefined
+                    ? {}
+                    : { cachedInputTokens: payload.cache_read_tokens }),
+                }),
+              }),
         });
         break;
       default:

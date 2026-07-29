@@ -54,6 +54,20 @@ import {
   type CodexHooksFeatureFlag,
 } from "../providers/codex/registration.js";
 import { CODEX_PROVIDER_ID } from "../providers/codex/version.js";
+import { CURSOR_PROVIDER_ID } from "../providers/cursor/payload.js";
+import {
+  CURSOR_HOOK_EVENTS_MODELLED,
+  CURSOR_HOOKS_DOCUMENT_VERSION,
+  CURSOR_REGISTRABLE_HOOK_EVENTS,
+  CURSOR_UNREGISTERED_HOOK_EVENTS,
+  mergeCursorHookRegistration,
+  readCursorHookRegistrations,
+  removeCursorHookRegistration,
+  type CursorHookCommandEntry,
+  type CursorHookDocumentResult,
+  type CursorHookRemovalInput,
+  type MergeCursorHookRegistrationInput,
+} from "../providers/cursor/registration.js";
 import { GEMINI_PROVIDER_ID } from "../providers/gemini/adapter.js";
 import {
   mergeGeminiHookRegistration,
@@ -90,20 +104,27 @@ export {
   CODEX_HOOK_EVENTS_MODELLED,
   CODEX_REGISTRABLE_HOOK_EVENTS,
   CODEX_UNREGISTERED_HOOK_EVENTS,
+  CURSOR_HOOK_EVENTS_MODELLED,
+  CURSOR_HOOKS_DOCUMENT_VERSION,
+  CURSOR_REGISTRABLE_HOOK_EVENTS,
+  CURSOR_UNREGISTERED_HOOK_EVENTS,
   mergeAntigravityHookRegistration,
   mergeClaudeHookRegistration,
   mergeCodexHookRegistration,
+  mergeCursorHookRegistration,
   mergeGeminiHookRegistration,
   mergeNestedHookRegistration,
   readAntigravityHookRegistrations,
   readClaudeHookRegistrations,
   readCodexHookRegistrations,
   readCodexHooksFeatureFlag,
+  readCursorHookRegistrations,
   readGeminiHookRegistrations,
   readNestedHookRegistrations,
   removeAntigravityHookRegistration,
   removeClaudeHookRegistration,
   removeCodexHookRegistration,
+  removeCursorHookRegistration,
   removeGeminiHookRegistration,
   removeNestedHookRegistrations,
   type AntigravityHookCommandEntry,
@@ -113,6 +134,9 @@ export {
   type CodexHookRemovalOptions,
   type CodexHooksFeatureFlag,
   type CommandHookEntry,
+  type CursorHookCommandEntry,
+  type CursorHookDocumentResult,
+  type CursorHookRemovalInput,
   type GeminiHookCommandEntry,
   type GeminiHookMatcherEntry,
   type GeminiHooksSettings,
@@ -123,6 +147,7 @@ export {
   type HookHandlerPredicate,
   type MergeAntigravityHookRegistrationInput,
   type MergeAntigravityHookRegistrationResult,
+  type MergeCursorHookRegistrationInput,
   type MergeGeminiHookResult,
   type MergeNestedHookInput,
   type NestedHookDocumentResult,
@@ -216,6 +241,13 @@ export type PlanProviderRegistrationInput =
       readonly providerId: typeof CODEX_PROVIDER_ID;
       readonly existing?: unknown;
       readonly options: Omit<CodexHookRegistrationOptions, "existing" | "identifies"> & {
+        readonly identifies?: HookHandlerPredicate;
+      };
+    }
+  | {
+      readonly providerId: typeof CURSOR_PROVIDER_ID;
+      readonly existing?: unknown;
+      readonly options: Omit<MergeCursorHookRegistrationInput, "existing" | "identifies"> & {
         readonly identifies?: HookHandlerPredicate;
       };
     }

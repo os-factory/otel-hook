@@ -17,11 +17,17 @@ export { CLAUDE_CODE_CAPABILITIES } from "./claude/capabilities.js";
 export { CLAUDE_CODE_PROVIDER_ID } from "./claude/detect.js";
 export { CLAUDE_HOOK_EVENT_NAMES, type ClaudeHookEventName } from "./claude/schema.js";
 
-export { createCursorAdapter, CURSOR_CAPABILITIES, type CursorAdapterOptions } from "./cursor/adapter.js";
+export {
+  createCursorAdapter,
+  CURSOR_ADAPTER_VERSION,
+  CURSOR_CAPABILITIES,
+  type CursorAdapterOptions,
+} from "./cursor/adapter.js";
 export {
   CURSOR_PROVIDER_ID,
+  CURSOR_DECISION_EVENTS,
   CURSOR_HOOK_EVENT_NAMES,
-  LEGACY_TO_CURRENT_EVENT_NAME as CURSOR_LEGACY_TO_CURRENT_EVENT_NAME,
+  CURSOR_UNMODELLED_HOOK_EVENT_NAMES,
   type CursorHookEventName,
 } from "./cursor/payload.js";
 

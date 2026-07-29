@@ -35,7 +35,7 @@ indistinguishable in the data.
 | ------------- | ------------------ | ------------ | --------------- | ----------------- | ---------------------------- |
 | `claude-code` | Claude Code        | stable       | silent          | delta             | `setup` (global and project) |
 | `codex`       | OpenAI Codex CLI   | stable       | silent          | cumulative[^1]    | `setup` (global and project) |
-| `cursor`      | Cursor             | stable       | provider JSON   | delta             | unsupported                  |
+| `cursor`      | Cursor             | stable       | provider JSON   | delta             | `setup` (global and project) |
 | `gemini-cli`  | Gemini CLI         | stable       | silent          | cumulative        | `setup` (global and project) |
 | `antigravity` | Google Antigravity | experimental | silent          | delta             | `setup --settings-file`      |
 
@@ -100,8 +100,9 @@ Provider selection:
   real Claude Code `SessionStart` payload is claimed by the Gemini adapter at
   `exact` and by the Codex adapter at `strong`. Confidence is self-reported per
   adapter and is *not* comparable across providers, so taking the highest score
-  would file one agent's telemetry under another's id. Cursor and Antigravity
-  payloads, which are camelCase, auto-detect cleanly.
+  would file one agent's telemetry under another's id. Cursor payloads, whose
+  `hook_event_name` values are camelCase (`preToolUse`, `beforeSubmitPrompt`), and
+  Antigravity's camelCase envelope both auto-detect cleanly.
 
 Invocation identity — immutable, per invocation, never from the environment
 ([ADR 0001](docs/adr/0001-invocation-identity-isolation.md)):
@@ -164,7 +165,7 @@ otel-hook run --provider cursor --callback-id "$HOST_DELIVERY_ID"
 ```
 
 Or, with no flag at all, one normalized from payload fields the selected adapter
-vouches for — a `tool_use_id`, a `turn_id`, a `generationId`, a
+vouches for — a `tool_use_id`, a `turn_id`, a `generation_id`, a
 provider-recorded timestamp:
 
 ```bash
@@ -417,13 +418,15 @@ The **lifecycle** layer — `runRegistrationLifecycle`, what the CLI's `setup`,
 locking, formatting preservation, atomic writes, and refusing rather than
 clobbering.
 
-Planners exist for `claude-code`, `codex`, `gemini-cli`, and `antigravity`. For
-`cursor` the result is `{ status: "unsupported", reason }`: its `hooks.json` shape
-*is* documented, but this package's Cursor payload contract is synthetic, so a
-registration would fire a hook whose every payload the adapter rejects. Writing a
-guessed shape — or a verified shape into an adapter that cannot read the result —
-is worse than shipping no installer. `PROVIDER_REGISTRATION_SUPPORT` carries the
-reason and the `evidenceBlocker` per provider;
+Planners exist for `claude-code`, `codex`, `cursor`, `gemini-cli`, and
+`antigravity`. Cursor's `hooks.json` is the one *flat* document among them —
+`{ version: 1, hooks: { "<event>": [{ command }] } }` — and its default event set
+deliberately omits `beforeShellExecution`/`afterShellExecution` and the MCP pair,
+because one shell call fires those *and* `preToolUse`/`postToolUse`, and only the
+generic pair carries a `tool_use_id` to correlate the two edges. `antigravity` is
+the remaining gap, and it is a *location* gap rather than a shape one: `setup`
+requires `--settings-file`. `PROVIDER_REGISTRATION_SUPPORT` carries the reason and
+the `evidenceBlocker` per provider;
 [docs/registration-evidence.md](docs/registration-evidence.md) is the long form.
 
 ## Canonical model
@@ -751,9 +754,12 @@ fixing one means updating that test rather than discovering a silent change.
    - **Codex** — `SessionStart`, `PreCompact`, `PostCompact`, and any tool
      callback whose optional `tool_call_id` is absent (`tool_name` is not a
      substitute: two calls to the same tool in one turn would collapse into one).
-   - **Cursor** — `preCompact`, and the dedicated shell, MCP, file-edit, and
-     file-read callbacks when `toolCallId` is absent, because the only remaining
-     distinguishing fields are the command line and the file path.
+   - **Cursor** — `preCompact`, `afterAgentResponse`, `afterAgentThought`, both
+     subagent callbacks, and the dedicated shell, MCP, file-edit, and file-read
+     callbacks, none of which carry a `tool_use_id` at all: the only remaining
+     distinguishing fields are the command line and the file path, and
+     `generation_id` would be worse than nothing, since one generation runs many
+     shell commands.
    - **Gemini CLI** — *everything*, declared `deliveryIdentifier: "none"`. The
      protocol carries no request, turn, or tool-call id at all. The only candidate
      is the provider-recorded `timestamp`, and a millisecond reading repeats on
@@ -815,14 +821,44 @@ fixing one means updating that test rather than discovering a silent change.
    `context_tokens_before` on `PreCompact` alone is declined explicitly rather
    than dropped silently. `compact_summary` is never read — it is conversation
    content. `ADAPTER-NOTE-002`.
-7. **Cursor's payload contract is synthetic (release blocker).**
-   `src/providers/cursor/payload.ts` documents its shape as invented for this
-   repository. Cursor parity therefore runs through a documented envelope bridge
-   (`ADAPTER-NOTE-005`), and Cursor cannot be claimed as verified upstream support
-   until the contract is replaced with a captured one. This is also why
-   `otel-hook setup --provider cursor` refuses: the `hooks.json` shape is known,
-   but the adapter would reject the payloads a registration caused Cursor to send
-   (see [docs/registration-evidence.md](docs/registration-evidence.md)).
+7. **Cursor sends no timestamp, and four of its facts rest on capture rather than
+   documentation.** The contract is derived from Cursor's published hooks
+   reference plus four real redacted capture runs (Cursor IDE 3.12.17 and CLI
+   2026.07.17); `src/providers/cursor/payload.ts` cites both, and
+   `tests/parity/cursor.parity.test.ts` replays the fixture bytes through the
+   shipped adapter with no envelope bridge — which is what retired
+   `ADAPTER-NOTE-005`. Four residual limits, each a consequence of what Cursor
+   does or does not send:
+   - **No timestamp field exists** on any Cursor hook, in the reference or in any
+     captured payload's key list, so `occurredAt` is a clock reading. Replay
+     stability comes from `deliveryIdentity` instead, not from `invocationId`.
+   - **Token accounting is partly undocumented.** `input_tokens`,
+     `output_tokens`, `cache_read_tokens`, and `cache_write_tokens` appear on
+     `stop` and `afterAgentResponse` in capture and nowhere in the reference.
+     `input_tokens` is read as the canonical *inclusive* total with
+     `cache_read_tokens` as a subset — the reading all three captured samples are
+     consistent with — and a payload that contradicts it loses the breakdown
+     rather than being reinterpreted. `cache_write_tokens` is not mapped at all:
+     canonical usage needs an explicit cache-creation accounting, and nothing
+     establishes whether Cursor bills those tokens inside or beside
+     `input_tokens`, so a non-zero value produces a warning instead of a guess.
+     See `CURSOR_USAGE_INCLUSIVITY_NOTE`.
+   - **Two callbacks report no outcome.** `afterShellExecution` and
+     `afterMCPExecution` carry no exit code and no status field, so their
+     `tool.end` reports `outcome: "unknown"` rather than assuming success. The
+     generic `postToolUse`/`postToolUseFailure` pair does distinguish the two,
+     which is why it is the pair `setup` registers.
+   - **Subagents and compaction are partial.** `subagentStop` carries no subagent
+     id — the reference gives `subagent_id` to `subagentStart` only — so both are
+     ignored rather than emitting a delegation that never closes, and
+     `emitsSubagentEvents` is `false`. Cursor exposes no post-compaction
+     callback, so `compaction.performed` carries `contextTokensBefore` and never
+     `contextTokensAfter`.
+
+   Delivery also differs by surface: `stop` and `afterAgentResponse` fired in the
+   captured IDE runs and in neither CLI run, while `sessionEnd` fired in both CLI
+   runs and in neither IDE run — from the same `hooks.json`. See
+   [docs/registration-evidence.md](docs/registration-evidence.md).
 8. **Antigravity is experimental (release blocker for that provider).** It maps
    only `tool.start`/`tool.end`; `PreInvocation`, `PostInvocation`, and `Stop` are
    ignored rather than mapped to invented session or generation identities. Its
@@ -834,7 +870,7 @@ fixing one means updating that test rather than discovering a silent change.
     Claude Code's `PreToolUse` (`DIVERGENCE-007`), and reads Codex's
     `gen_ai.client.version` from whichever `codex` binary is on the *host's* PATH
     rather than from the payload's own `codex_version` — host-dependent, and wrong
-    for a replayed payload (`DIVERGENCE-008`).
+    for a replayed payload (`DIVERGENCE-010`).
     `tests/parity/codex-gemini.parity.test.ts` establishes our own semantics and
     pins both divergences instead of asserting agreement.
 10. **Only OTLP HTTP/protobuf traces are exported.** `http/json` falls back to a

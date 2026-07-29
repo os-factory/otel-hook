@@ -1,0 +1,12 @@
+{
+  "fixture": "after-mcp-execution.json",
+  "sourceContract": "Cursor agent hook `afterMCPExecution`: `tool_name`, `tool_input`, `result_json`, `duration` (ms) — and no status field",
+  "provider": "cursor",
+  "capturedDate": "2026-07-29",
+  "author": "otel-hook cursor provider owner (agent)",
+  "sanitization": "Real key set, synthetic values. The MCP server, tool, query, and result are invented; no real MCP server is referenced.",
+  "licenseBasis": "Original authorship; only the field names and their types are taken from the published reference.",
+  "providerVersionObserved": "not observed in the cited captures; shape from cursor.com/docs/agent/hooks alone",
+  "sha256": "34e854326956cce15eccffc1982fd7497899ce6bcb444353bac402bf2691388a",
+  "notes": "No capture in colinsurprenant/director hack/canary/cursor-cli/findings exercised MCP, so this fixture rests on the published reference only — which is why the adapter reports its tool end with outcome `unknown` rather than reading a status out of result_json. It carries the same 84.5 duration as post-tool-use-mcp.json so the two can be compared: the pinned Python reference scales this event's `duration` by 1000 and leaves the postToolUse one alone (DIVERGENCE-008)."
+}
