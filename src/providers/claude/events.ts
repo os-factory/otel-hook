@@ -197,11 +197,24 @@ export const parseClaudeCode = (
       break;
 
     case "PreCompact":
-      // Fires before compaction runs, with only an estimate; the completed
-      // operation is reported once at PostCompact instead.
+      // Fires before compaction runs; the completed operation is reported once at
+      // PostCompact instead. Claude Code reports no token count on either
+      // compaction callback (docs/claude-code-usage-contract.md, finding 6), so
+      // nothing is lost by ignoring this edge — but a *harness* may have attached
+      // a before-figure here, and dropping that silently is what made
+      // ADAPTER-NOTE-002 look like a plumbing gap. It is an exclusion, so it says
+      // so: carrying the figure to PostCompact would need cross-invocation state
+      // an adapter must not hold (ADR 0006), and the same harness can attach it to
+      // PostCompact, where one callback carries both ends.
+      // Kept inside the 160 characters an ignore reason survives at the log
+      // boundary, so the remedy is not the part that gets truncated away.
       return {
         status: "ignored",
-        reason: "compaction is reported once it completes, at PostCompact",
+        reason:
+          payload.context_tokens_before === undefined
+            ? "compaction is reported once it completes, at PostCompact"
+            : "contextTokensBefore is an explicit exclusion for this provider: attach " +
+              "context_tokens_before to PostCompact, which carries both ends in one callback",
       };
 
     case "PostCompact":

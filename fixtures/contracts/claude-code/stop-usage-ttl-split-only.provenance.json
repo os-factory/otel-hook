@@ -1,0 +1,12 @@
+{
+  "fixture": "stop-usage-ttl-split-only.json",
+  "sourceContract": "Claude Code hook JSON protocol (Stop) with a harness-attached `usage` object that states the cache-creation TTL split without the aggregate counter",
+  "provider": "claude-code",
+  "providerVersionObserved": "2.1.220",
+  "capturedDate": "2026-07-29",
+  "author": "otel-hook claude-code provider owner (agent)",
+  "sanitization": "Shape only; every value invented. Deliberately a partial shape: real captures always carried cache_creation_input_tokens alongside the TTL split, and this fixture drops it to pin what the adapter does when only the breakdown survives a harness's own reshaping.",
+  "licenseBasis": "Original synthetic authorship: field names reproduce a third-party CLI's documented hook contract, all values are this repository's own.",
+  "sha256": "10343ce37825016bd8a5cf2876d30a063392c972e50e253493075c747b855826",
+  "notes": "Pins the derivation direction: with only usage.cache_creation present, cacheCreationInputTokens is derived from the TTL buckets (900 + 2100 = 3000) rather than defaulting to zero. Exercised by tests/providers/claude/usage-contract.test.ts."
+}

@@ -24,17 +24,66 @@ const commonFields = {
 };
 
 /**
+ * Cache-creation tokens split by cache TTL.
+ *
+ * A *breakdown* of `cache_creation_input_tokens`, not tokens beside it: the two
+ * sub-buckets summed to that counter in 4,999 of 4,999 real usage objects. See
+ * `usage.ts` for why they are verified and never added, and
+ * docs/claude-code-usage-contract.md (finding 3) for the capture.
+ */
+export const claudeCacheCreationSchema = z.object({
+  ephemeral_5m_input_tokens: z.number().int().min(0).optional(),
+  ephemeral_1h_input_tokens: z.number().int().min(0).optional(),
+});
+
+/**
+ * One model request inside a turn that took more than one.
+ *
+ * Also a breakdown: the per-iteration counters summed to the outer counters
+ * exactly, for all four fields, in every capture (finding 4).
+ */
+export const claudeUsageIterationSchema = z.object({
+  input_tokens: z.number().int().min(0).optional(),
+  output_tokens: z.number().int().min(0).optional(),
+  cache_creation_input_tokens: z.number().int().min(0).optional(),
+  cache_read_input_tokens: z.number().int().min(0).optional(),
+});
+
+/**
  * Anthropic Messages API usage shape, as a wrapping harness may attach it
- * after correlating a hook firing with the transcript. This adapter never
- * reads the transcript itself (AGENT.md forbids scanning transcript
- * directories from provider adapters); the field is accepted only when a
- * caller has already placed it on the payload.
+ * after correlating a hook firing with the transcript.
+ *
+ * **No Claude Code hook callback carries this object.** Confirmed against the
+ * CLI's own hook-input schemas at 2.1.220: not `Stop`, not `SubagentStop`, not
+ * `PostCompact` — no hook event in the protocol reports a token counter at all
+ * (docs/claude-code-usage-contract.md, finding 1). The tokens exist only at
+ * `message.usage` in the transcript, and this adapter never reads the transcript
+ * itself (AGENT.md forbids scanning transcript directories from provider
+ * adapters). So the field is accepted only when a caller has already placed it
+ * on the payload, and the shape mirrors `message.usage` exactly so a harness can
+ * attach what it read without reshaping it.
+ *
+ * `input_tokens` is the **fresh** portion of the prompt only; cache reads and
+ * cache writes are separate, additive buckets (finding 2). `usage.ts` documents
+ * the fold that turns those three into the canonical inclusive total.
  */
 export const claudeUsageSchema = z.object({
   input_tokens: z.number().int().min(0),
   output_tokens: z.number().int().min(0),
   cache_creation_input_tokens: z.number().int().min(0).optional(),
   cache_read_input_tokens: z.number().int().min(0).optional(),
+  cache_creation: claudeCacheCreationSchema.optional(),
+  iterations: z.array(claudeUsageIterationSchema).optional(),
+  /**
+   * Counters the canonical model has a home for but Claude Code never reports:
+   * 0 of 4,999 real usage objects carried either (finding 5).
+   *
+   * Named here rather than left to the object's forward-compatible looseness so
+   * that a harness attaching one gets told it was excluded, instead of watching
+   * it vanish. See `CLAUDE_EXCLUDED_USAGE_COUNTERS`.
+   */
+  total_tokens: z.number().int().min(0).optional(),
+  reasoning_output_tokens: z.number().int().min(0).optional(),
 });
 export type ClaudeUsage = z.infer<typeof claudeUsageSchema>;
 
@@ -117,16 +166,41 @@ export const subagentStopPayloadSchema = z.object({
   agent_type: z.string().min(1),
   agent_id: z.string().min(1),
   last_assistant_message: z.string().optional(),
+  /** True when this stop fired because a hook continued the subagent's turn. */
+  stop_hook_active: z.boolean().optional(),
   usage: claudeUsageSchema.optional(),
 });
 export type SubagentStopPayload = z.infer<typeof subagentStopPayloadSchema>;
 
+/**
+ * Compaction callbacks.
+ *
+ * The upstream contract at 2.1.220 is `PreCompact { trigger, custom_instructions }`
+ * and `PostCompact { trigger, compact_summary }`. **Neither reports a token
+ * count** — no context size before or after, no dropped-message count
+ * (docs/claude-code-usage-contract.md, finding 6). The counters below are
+ * accepted for a wrapping harness that computed them; they are not a claim that
+ * Claude Code sends them, and `capabilities.ts` excludes `contextTokensBefore`
+ * accordingly.
+ *
+ * `custom_instructions` and `compact_summary` are deliberately absent. The
+ * summary is a model-generated précis of the conversation — content — and
+ * compaction telemetry needs the trigger and the sizes, not the text. Both are
+ * ignored by the object's forward-compatible looseness rather than read and
+ * screened, so there is no path by which they could reach an event.
+ */
 export const preCompactPayloadSchema = z.object({
   ...commonFields,
   hook_event_name: z.literal("PreCompact"),
-  /** Matcher values: manual | auto. */
+  /** Upstream values: manual | auto. Forward-compatible: any string. */
   trigger: z.string().min(1).optional(),
+  /** Compatibility alias emitted by older wrappers and hook integrations. */
   compact_trigger: z.string().min(1).optional(),
+  /**
+   * Harness-supplied, never upstream. Reported as an explicit exclusion rather
+   * than carried across the process boundary: see `events.ts`.
+   */
+  context_tokens_before: z.number().int().min(0).optional(),
   estimated_tokens_removed: z.number().int().min(0).optional(),
 });
 export type PreCompactPayload = z.infer<typeof preCompactPayloadSchema>;
@@ -136,7 +210,7 @@ export const postCompactPayloadSchema = z.object({
   hook_event_name: z.literal("PostCompact"),
   trigger: z.string().min(1).optional(),
   compact_trigger: z.string().min(1).optional(),
-  /** Best-effort/optional: not documented on the public schema, accepted if present. */
+  /** Harness-supplied, never upstream; accepted here because one callback carries both. */
   context_tokens_before: z.number().int().min(0).optional(),
   context_tokens_after: z.number().int().min(0).optional(),
   dropped_message_count: z.number().int().min(0).optional(),
@@ -148,6 +222,14 @@ export const stopPayloadSchema = z.object({
   ...commonFields,
   hook_event_name: z.literal("Stop"),
   last_assistant_message: z.string().optional(),
+  /**
+   * True when this stop fired because a hook continued the turn.
+   *
+   * Required upstream, optional here. It is what separates the once-per-prompt
+   * stop from a continuation stop, which is what lets `delivery.ts` deduplicate
+   * the former without suppressing the latter.
+   */
+  stop_hook_active: z.boolean().optional(),
   usage: claudeUsageSchema.optional(),
 });
 export type StopPayload = z.infer<typeof stopPayloadSchema>;
@@ -215,5 +297,7 @@ export const claudeIdentityFieldsSchema = z.object({
   prompt_id: z.string().min(1).optional(),
   agent_id: z.string().min(1).optional(),
   tool_use_id: z.string().min(1).optional(),
+  /** Read by `delivery.ts` to tell a once-per-prompt stop from a continuation. */
+  stop_hook_active: z.boolean().optional(),
 });
 export type ClaudeIdentityFields = z.infer<typeof claudeIdentityFieldsSchema>;

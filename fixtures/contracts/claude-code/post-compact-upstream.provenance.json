@@ -1,0 +1,12 @@
+{
+  "fixture": "post-compact-upstream.json",
+  "sourceContract": "Claude Code hook JSON protocol (PostCompact), read from the shipped CLI's own hook-input schemas: trigger plus compact_summary, and no token counter of any kind",
+  "provider": "claude-code",
+  "providerVersionObserved": "2.1.220",
+  "capturedDate": "2026-07-29",
+  "author": "otel-hook claude-code provider owner (agent)",
+  "sanitization": "Shape only; session id and paths are fabricated. compact_summary is an invented placeholder sentence: no real conversation summary is reproduced, and the adapter never reads the field in the first place.",
+  "licenseBasis": "Original synthetic authorship: field names reproduce a third-party CLI's documented hook contract, all values are this repository's own.",
+  "sha256": "01d30bdd7859885f1b684ba08ffd70b9f7c3f293e9e4ee47c52e4efaec836493",
+  "notes": "The unembellished upstream PostCompact. Pins two claims: compaction.performed is emitted with no context-token figures because the provider reports none, and compact_summary never reaches an event because it is conversation content the adapter does not read."
+}

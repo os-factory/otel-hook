@@ -6,10 +6,14 @@
 //   node scripts/fixtures/validate-fixtures.mjs --fix     # rewrite sha256 fields to match content
 //   node scripts/fixtures/validate-fixtures.mjs --json    # machine-readable report on stdout, no exit-code text noise
 //
-// A fixture is any `*.json` file under fixtures/parity/** that is not itself a
+// A fixture is any `*.json` file under one of FIXTURE_ROOTS that is not itself a
 // `*.provenance.json` sidecar. Every fixture must have a sibling
 // `<name>.provenance.json` matching fixtures/provenance.schema.json, whose
 // `sha256` field equals the SHA-256 of the fixture file's exact bytes.
+//
+// The roots are enumerated rather than being "everything under fixtures/" so that
+// fixtures/provenance.schema.json — the schema itself, which has no sidecar and
+// needs none — is not mistaken for a fixture.
 //
 // This script never reads outside the repository's fixtures/ directory, never
 // makes network calls, and never writes anything unless --fix is passed.
@@ -21,7 +25,13 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..", "..");
-const FIXTURES_ROOT = path.join(REPO_ROOT, "fixtures", "parity");
+const FIXTURE_ROOTS = [
+  // Differential fixtures replayed against the pinned Python reference.
+  path.join(REPO_ROOT, "fixtures", "parity"),
+  // Provider contract fixtures: the shape a provider's protocol was confirmed to
+  // have, with invented values. Their sidecars carry providerVersionObserved.
+  path.join(REPO_ROOT, "fixtures", "contracts"),
+];
 
 const REQUIRED_FIELDS = [
   "fixture",
@@ -107,7 +117,9 @@ const scanForbiddenContent = (text, fixturePath) => {
 };
 
 export const validateFixtures = async ({ fix = false } = {}) => {
-  const allFiles = await walk(FIXTURES_ROOT).catch(() => []);
+  const allFiles = (
+    await Promise.all(FIXTURE_ROOTS.map((root) => walk(root).catch(() => [])))
+  ).flat();
   const fixtureFiles = allFiles.filter((file) => isFixtureFile(path.basename(file))).sort();
 
   const issues = [];

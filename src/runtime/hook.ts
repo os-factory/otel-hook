@@ -857,6 +857,20 @@ export const createOtelHook = (deps: OtelHookDependencies): OtelHook => {
         };
       }
 
+      if (parsed.warnings !== undefined && parsed.warnings.length > 0) {
+        // An adapter reports a warning when it understood the payload but had to
+        // decline part of it — a counter outside its declared capabilities, a
+        // breakdown that disagrees with the total it itemizes. Not a diagnostic:
+        // the observation is intact and nothing failed, so raising an error-severity
+        // code would misreport a healthy invocation. But not nothing either, which
+        // is what these were before: a harness whose attached field is being ignored
+        // has no other way to find out.
+        logger.warn("adapter declined part of the payload it understood", {
+          "provider.id": detection.providerId,
+          "adapter.warnings": parsed.warnings.slice(0, 8).map((warning) => warning.slice(0, 200)),
+        });
+      }
+
       const screened = screenEvents(parsed.events, identity, sequenceBase, diagnostics);
 
       let batch: readonly CanonicalEvent[] = screened.kept;

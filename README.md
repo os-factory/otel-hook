@@ -680,9 +680,14 @@ fixing one means updating that test rather than discovering a silent change.
    `eventId` can substitute: some adapters seed the former with a clock reading,
    and the latter is seeded with a session sequence number that has already
    advanced by the time a redelivery arrives. What each adapter cannot identify:
-   - **Claude Code** — `Stop`, `StopFailure` (Claude Code can fire `Stop` more
-     than once per prompt when a hook continues the turn, so `prompt_id` is not a
-     delivery identity), `SessionStart`, `SessionEnd`, `PreCompact`, `PostCompact`.
+   - **Claude Code** — `StopFailure`, `SessionStart`, `SessionEnd`, `PreCompact`,
+     `PostCompact`, plus any `Stop` or `SubagentStop` that fired because a hook
+     continued the turn. Claude Code can fire `Stop` more than once per prompt, so
+     `prompt_id` alone is not a delivery identity; the `stop_hook_active` flag
+     separates the once-per-prompt stop (`false`, deduplicated — it carries the
+     turn's usage) from a continuation (`true`, deliberately left unidentifiable,
+     because two continuations are indistinguishable and suppressing one would lose
+     real tokens).
    - **Codex** — `SessionStart`, `PreCompact`, `PostCompact`, and any tool
      callback whose optional `tool_call_id` is absent (`tool_name` is not a
      substitute: two calls to the same tool in one turn would collapse into one).
@@ -723,19 +728,27 @@ fixing one means updating that test rather than discovering a silent change.
    Current `reason` / `trigger` fields and legacy `end_reason` /
    `compact_trigger` wrappers map to the same canonical session and compaction
    events.
-5. **Claude Code usage is read only from a nested Anthropic-shaped `usage`
-   object.** Top-level `cache_read_input_tokens` / `reasoning_output_tokens` and
-   `usage.total_tokens` are outside that contract and are not surfaced. This is
-   consistent with the adapter's declared capabilities
-   (`reportsReasoningOutput: false`, `reportsProviderTotal: false`) — which is
-   exactly what capability declarations are for — but it means Claude Code cache
-   and reasoning figures are unavailable until the provider owner confirms where
-   the fields really live. `ADAPTER-NOTE-001`.
-6. **`contextTokensBefore` is lost across the compaction boundary.** The adapter
-   ignores `PreCompact` and cannot hold cross-invocation state, so only
-   `contextTokensAfter` reaches `compaction.performed`. Carrying it forward would
-   have to be done by the integration layer through the state store.
-   `ADAPTER-NOTE-002`.
+5. **Claude Code reports no reasoning-token counter and no provider total.**
+   Confirmed against real captures at 2.1.220 — 0 of 4,999 `usage` objects carried
+   either — so `reportsReasoningOutput: false` and `reportsProviderTotal: false`
+   are settled exclusions rather than open questions, and a consumer can tell
+   "this provider does not report reasoning tokens" from "this turn used none".
+   Cache read and cache creation *are* reported, at
+   `usage.cache_read_input_tokens` and `usage.cache_creation_input_tokens` (whose
+   TTL split is a breakdown, reconciled and never added). No hook callback carries
+   a token counter at all, so `usage` is read only when a wrapping harness
+   attaches it. A harness that attaches an excluded counter anyway is told which
+   field was declined. `ADAPTER-NOTE-001`; see
+   [docs/claude-code-usage-contract.md](docs/claude-code-usage-contract.md).
+6. **`contextTokensBefore` is an explicit exclusion for Claude Code.** Neither
+   compaction callback reports a context size upstream (`PreCompact` carries
+   `trigger` and `custom_instructions`; `PostCompact` carries `trigger` and
+   `compact_summary`), so there is no provider-stated figure for injected state to
+   carry across the boundary. Both figures are emitted when one harness attaches
+   them to `PostCompact`, which carries both ends in a single callback; a
+   `context_tokens_before` on `PreCompact` alone is declined explicitly rather
+   than dropped silently. `compact_summary` is never read — it is conversation
+   content. `ADAPTER-NOTE-002`.
 7. **Cursor's payload contract is synthetic (release blocker).**
    `src/providers/cursor/payload.ts` documents its shape as invented for this
    repository. Cursor parity therefore runs through a documented envelope bridge
