@@ -79,8 +79,8 @@ source.
   `"files"`); `tests/packaging/pack.test.ts` fails CI if the packed tarball
   ever contains anything else, so source, tests, and fixtures never leak into
   a consumer's `node_modules`.
-- The package stays `"private": true` until an integration owner promotes a
-  release candidate — see [docs/release-checklist.md](release-checklist.md).
+- First public release is `0.1.0`. Subsequent promotions follow
+  [docs/release-checklist.md](release-checklist.md).
 
 ## Changelog
 

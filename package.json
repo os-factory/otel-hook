@@ -1,6 +1,6 @@
 {
   "name": "@osfactory/otel-hook",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Provider-neutral coding-agent hooks to OpenTelemetry",
   "scripts": {
     "test": "vitest run",
@@ -16,8 +16,10 @@
   "keywords": [],
   "author": "OS Factory",
   "license": "MIT",
-  "private": true,
   "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
   "files": [
     "dist",
     "README.md",

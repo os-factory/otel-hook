@@ -2,13 +2,12 @@
 
 ## Supported versions
 
-`@osfactory/otel-hook` is pre-1.0 and currently unpublished (`"private": true`
-in `package.json`). Until a 1.0 release, only the latest commit on `main` and
-the most recent tagged release candidate receive security fixes.
+`@osfactory/otel-hook` is pre-1.0. Until a 1.0 release, only the latest
+published npm version and `main` receive security fixes.
 
 | Version                          | Supported          |
 | --------------------------------- | ------------------- |
-| `main` / latest tagged RC        | :white_check_mark:  |
+| Latest npm release / `main`      | :white_check_mark:  |
 | Anything older                   | :x:                 |
 
 ## Reporting a vulnerability

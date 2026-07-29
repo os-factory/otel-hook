@@ -1,9 +1,9 @@
 # Release checklist
 
-`@osfactory/otel-hook` ships `"private": true`. `.github/workflows/release.yml`
-prepares a reviewable, provenance-attested release candidate on every `v*`
-tag push — it never runs `npm publish`. Promoting a candidate to a real npm
-release is a deliberate, separate action taken by an integration owner.
+`.github/workflows/release.yml` prepares a reviewable, provenance-attested
+release candidate on every `v*` tag push — it never runs `npm publish`.
+Promoting a candidate to a real npm release is a deliberate, separate action
+taken by an integration owner. First public release: `0.1.0`.
 
 ## What the release workflow already did for you
 

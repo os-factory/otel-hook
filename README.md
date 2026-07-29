@@ -9,11 +9,10 @@ accounted for usage, and exported over OTLP.
 
 ## Status
 
-**Private, unreleased.** `package.json` sets `"private": true` and the version is
-`0.0.0`; publishing requires an explicit release promotion, not just a green
-build. See [docs/release-checklist.md](docs/release-checklist.md) and
-[Known limitations](#known-limitations) — several of those entries are release
-blockers, not footnotes.
+**Published as `0.1.0`.** Install with `npm install -g @osfactory/otel-hook` or
+`npx @osfactory/otel-hook`. See [docs/release-checklist.md](docs/release-checklist.md)
+and [Known limitations](#known-limitations) for what this release intentionally
+does and does not claim.
 
 ## Principles
 
