@@ -138,6 +138,29 @@ export const DIVERGENCE_MANIFEST: readonly DivergenceEntry[] = [
       "empirically confirmed against fixtures/parity/gemini-cli/before-tool.json: the emitted span reports " +
       'hook.event="PreToolUse" with hook.original_event="BeforeTool" and provider_adapter="gemini"',
   },
+  {
+    id: "DIVERGENCE-008",
+    title: "Codex client version is read from a host binary on PATH, not from the payload",
+    dimension: "lifecycle",
+    pythonBehavior:
+      "For Codex, `_detect_client_version` never looks at the `codex_version` field the hook payload actually " +
+      "carries — it checks `client_version`/`ide_version`/`app_version`, then `$CODEX_VERSION`, and then shells " +
+      "out to `subprocess.run([\"codex\", \"--version\"])` against whatever is on the host's PATH, caching the " +
+      "result in a process-global for every subsequent payload. `gen_ai.client.version` therefore describes the " +
+      "machine that ran the hook rather than the client that produced the event: it is absent on a host without " +
+      "the CLI installed, and wrong for any replayed or forwarded payload.",
+    ourBehavior:
+      "`codex_version` is read from the payload and only from the payload. It reaches `session.start` as " +
+      "`agentVersion` and detection as `providerVersion`, and stays absent when the payload omits it. No adapter " +
+      "is given a filesystem, a subprocess, or a network handle (see AGENT.md and `ProviderContext`), so " +
+      "substituting a host binary's version is not merely avoided by convention — it is unreachable by " +
+      "construction. A replayed payload therefore yields the same version attribution on any machine.",
+    citation:
+      "otel_hook.py:1028-1046 (`_detect_client_version`, codex branch) with the process-global cache at " +
+      "otel_hook.py:1004-1005; empirically confirmed against fixtures/parity/codex/session-start.json, whose " +
+      'payload states codex_version="0.42.0-fixture" while the emitted span carried the host binary\'s own ' +
+      "version string instead",
+  },
 ];
 
 export const findDivergence = (id: string): DivergenceEntry => {

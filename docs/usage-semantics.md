@@ -96,3 +96,43 @@ passes through unchanged. A `cumulative` report with no stored baseline is
 emitted as its own first delta. If the baseline cannot be read, the observation
 is **skipped** with a `state-store-failure` diagnostic — emitting the raw
 snapshot would double-count.
+
+### Which series a cumulative report continues
+
+The scope an observation is *attributed to* and the series its baseline is *read
+from* are two different questions, and conflating them silently multiplies usage.
+
+A provider declares the answer with
+`ProviderCapabilities.cumulativeUsageSeries`:
+
+| Value                       | The baseline for a `generation.end` snapshot is…                |
+| --------------------------- | --------------------------------------------------------------- |
+| `event-scope` (default)     | the previous snapshot **for that same `generationId`**           |
+| `session-lifetime`          | the previous snapshot **anywhere in the session**                |
+
+`event-scope` is right for a provider whose counter restarts per generation.
+`session-lifetime` is right for one that keeps a single running total for the
+whole session and stamps it onto whichever callback reports next — Codex, whose
+every usage-bearing hook carries the rollout's session-wide `total_token_usage`.
+
+For such a provider, keying the baseline by `generationId` is a correctness bug,
+not a modelling preference: each turn has a fresh `turn_id`, so every snapshot
+would find no predecessor and be emitted whole. A three-turn session reporting
+13 500 → 22 500 → 25 300 would bill 61 300 instead of 25 300.
+
+Two details make this safe rather than merely different:
+
+- The **observation** keeps `scope: "generation"` and its own `scopeKey`. A
+  turn's token spend is still attributed to that turn; only the subtraction
+  changed. Session-level events (`compaction.performed`) land on the same series,
+  so a compaction snapshot continues the curve instead of starting a competing
+  baseline.
+- **Subagent scopes are never redirected.** A delegated agent's counter is its
+  own series, not a point on the parent's curve. Folding it in would read as a
+  reset every time a subagent reported a total below the parent's.
+
+Rewinding is still reported, never hidden: replaying a session from the top makes
+the counter regress, which surfaces as a single `resetDetected` observation
+restating the snapshot. That is indistinguishable from a genuine restart — Codex
+reuses a session id after a `/clear` — so the contract is to flag it rather than
+to guess which one happened.

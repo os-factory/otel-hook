@@ -1,0 +1,16 @@
+{
+  "hook_event_name": "SubagentStop",
+  "session_id": "sess-parity-codex-001",
+  "cwd": "/workspace/fixture-repo",
+  "turn_id": "turn-parity-codex-002",
+  "subagent_id": "sub-parity-codex-001",
+  "status": "completed",
+  "usage": {
+    "input_tokens": 4000,
+    "cached_input_tokens": 1000,
+    "output_tokens": 800,
+    "reasoning_output_tokens": 200,
+    "total_tokens": 4800
+  },
+  "occurred_at": 1700000007000
+}
