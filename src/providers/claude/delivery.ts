@@ -125,3 +125,40 @@ export const claudeDeliveryIdentity = (
 
   return undefined;
 };
+
+/**
+ * Why each remaining Claude Code callback carries no delivery identity, and what
+ * would have to exist for it to.
+ *
+ * Reported through `readDeliveryGap` when `requireCallbackId` is set, so an
+ * operator auditing coverage reads the actual protocol reason instead of
+ * "callback-not-identifiable". Kept exhaustive over
+ * {@link CLAUDE_HOOK_EVENT_NAMES} — every event is either identified above or
+ * explained here, so adding a hook event without deciding its delivery status
+ * reads as an omission rather than passing silently.
+ *
+ * The four tool events and the two subagent events appear here too, because their
+ * identifying field is *optional in practice*: a payload that omits `tool_use_id`
+ * or `agent_id` reaches the same dead end as an event that never had one, and the
+ * diagnostic should say which field is missing rather than blame the event.
+ */
+export const CLAUDE_DELIVERY_GAPS: Readonly<Record<string, string>> = Object.freeze({
+  SessionStart:
+    "no per-firing id; payload `source` (startup, resume, clear, compact, fork) means SessionStart fires repeatedly under one session_id",
+  SessionEnd: "no per-firing id; a cleared and a resumed session end under the same session_id",
+  PreCompact: "no compaction id; payload `trigger` does not separate two genuine compactions",
+  PostCompact: "no compaction id; payload `trigger` does not separate two genuine compactions",
+  Stop:
+    "prompt_id is not a delivery identity here: Claude Code can fire Stop more than once per prompt when a hook continues the turn (stop_hook_active)",
+  StopFailure:
+    "prompt_id is not a delivery identity here: one prompt can fail more than once, and error_type names a class rather than a firing",
+  PreToolUse: "payload.tool_use_id absent; nothing else in this callback names one tool call",
+  PostToolUse: "payload.tool_use_id absent; nothing else in this callback names one tool call",
+  PostToolUseFailure:
+    "payload.tool_use_id absent; nothing else in this callback names one tool call",
+  PermissionRequest:
+    "payload.tool_use_id absent; nothing else in this callback names one tool call",
+  SubagentStart: "payload.agent_id absent; agent_type names a class of subagents, not an instance",
+  SubagentStop: "payload.agent_id absent; agent_type names a class of subagents, not an instance",
+  UserPromptSubmit: "payload.prompt_id absent; requires Claude Code v2.1.196 or later",
+});

@@ -83,6 +83,32 @@ const deliveryComponents = (
   }
 };
 
+/**
+ * Why each Cursor callback that {@link cursorDeliveryIdentity} declines carries no
+ * delivery identity.
+ *
+ * Exhaustive over the hook event names in `./payload.ts`. Only `preCompact` is
+ * unconditionally unidentifiable; the rest appear here for the case where their
+ * optional `toolCallId` is absent, which is the whole of Cursor's coverage gap.
+ */
+export const CURSOR_DELIVERY_GAPS: Readonly<Record<string, string>> = Object.freeze({
+  preCompact: "no compaction id; payload `trigger` does not separate two genuine compactions",
+  afterAgentThought:
+    "payload.thoughtIndex absent; generationId alone names the generation, not one thought within it",
+  beforeShellExecution:
+    "payload.toolCallId absent; the only remaining field is the command line, which is content and may not become an id",
+  afterShellExecution:
+    "payload.toolCallId absent; the only remaining field is the command line, which is content and may not become an id",
+  beforeMCPExecution:
+    "payload.toolCallId absent; the only remaining fields are the tool name and its arguments, which are content",
+  afterMCPExecution:
+    "payload.toolCallId absent; the only remaining fields are the tool name and its arguments, which are content",
+  afterFileEdit:
+    "payload.toolCallId absent; the only remaining field is the file path, which is content and may not become an id",
+  beforeReadFile:
+    "payload.toolCallId absent; the only remaining field is the file path, which is content and may not become an id",
+});
+
 export const cursorDeliveryIdentity = (
   input: ProviderIdentityInput,
 ): ProviderDeliveryClaim | undefined => {

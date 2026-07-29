@@ -52,6 +52,33 @@ const deliveryComponents = (
   }
 };
 
+/**
+ * Why each Codex callback that {@link codexDeliveryIdentity} declines carries no
+ * delivery identity.
+ *
+ * Exhaustive over {@link CODEX_HOOK_EVENT_NAMES}. The tool and turn events appear
+ * here because their identifying field is optional in the documented protocol:
+ * `tool_call_id` and `turn_id` are this adapter's chosen correlation keys, and a
+ * payload that omits one reaches the same dead end as an event that never had it.
+ * Naming the absent field is the point — that is the one thing a host can fix.
+ */
+export const CODEX_DELIVERY_GAPS: Readonly<Record<string, string>> = Object.freeze({
+  SessionStart:
+    "no per-firing id; payload `source` (startup, resume, clear, compact) means SessionStart fires repeatedly under one session_id",
+  PreCompact: "no compaction id; payload `trigger` does not separate two genuine compactions",
+  PostCompact: "no compaction id; payload `trigger` does not separate two genuine compactions",
+  PreToolUse:
+    "payload.tool_call_id absent; tool_name is not a substitute because one turn can call the same tool twice",
+  PostToolUse:
+    "payload.tool_call_id absent; tool_name is not a substitute because one turn can call the same tool twice",
+  PermissionRequest:
+    "payload.tool_call_id absent; tool_name is not a substitute because one turn can prompt for the same tool twice",
+  UserPromptSubmit: "payload.turn_id absent; nothing else in this callback names one turn",
+  Stop: "payload.turn_id absent; nothing else in this callback names one turn",
+  SubagentStart: "payload.subagent_id absent, so no subagent instance is named",
+  SubagentStop: "payload.subagent_id absent, so no subagent instance is named",
+});
+
 export const codexDeliveryIdentity = (
   input: ProviderIdentityInput,
 ): ProviderDeliveryClaim | undefined => {

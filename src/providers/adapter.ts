@@ -116,6 +116,51 @@ export const providerDeliveryClaimSchema = z.strictObject({
 export type ProviderDeliveryClaim = z.infer<typeof providerDeliveryClaimSchema>;
 
 /**
+ * Shape a per-callback delivery *gap* explanation must have.
+ *
+ * These strings reach a diagnostic, so the same reasoning that constrains
+ * {@link deliveryComponentSchema} applies for the opposite purpose: a component
+ * must be identifier-shaped, a gap reason must be prose that cannot smuggle a
+ * filesystem path or a newline-delimited payload dump into stderr. Spaces are
+ * allowed — it is a sentence — and `/`, `\`, and control characters are not,
+ * which is what keeps a home directory out of a message an adapter author writes
+ * by hand.
+ */
+export const DELIVERY_GAP_REASON_PATTERN = /^[^\n\r\t\\/]{1,240}$/;
+
+export const deliveryGapReasonSchema = z
+  .string()
+  .regex(
+    DELIVERY_GAP_REASON_PATTERN,
+    "delivery gap reason must be one line of prose: no path separators, no control characters",
+  );
+
+/** Most callbacks one adapter may document a delivery gap for. */
+export const MAX_DELIVERY_GAPS = 48;
+
+/**
+ * Why each of an adapter's callbacks carries no replay-stable identity.
+ *
+ * Keyed by the provider's *own* event name — the same value `detect` reports as
+ * `sourceEventName` — so the runtime can look up the reason for the callback in
+ * front of it without parsing the payload a second time.
+ *
+ * This exists because `callback-not-identifiable` on its own is a true statement
+ * that helps nobody: an operator auditing coverage with `--require-callback-id`
+ * needs to know *which* callback and *what field would have to exist*, and only
+ * the adapter knows that. Keeping it declarative rather than computed means the
+ * answer is reviewable next to the protocol it describes, and an exhaustiveness
+ * test can insist that adding a hook event without deciding its delivery status
+ * reads as an omission.
+ */
+export const providerDeliveryGapsSchema = z
+  .record(deliveryComponentSchema, deliveryGapReasonSchema)
+  .refine((gaps) => Object.keys(gaps).length <= MAX_DELIVERY_GAPS, {
+    message: `at most ${String(MAX_DELIVERY_GAPS)} delivery gaps may be declared`,
+  });
+export type ProviderDeliveryGaps = z.infer<typeof providerDeliveryGapsSchema>;
+
+/**
  * What an adapter can actually observe.
  *
  * Capabilities are declared rather than probed so consumers can distinguish
@@ -256,6 +301,17 @@ export interface ProviderAdapter {
     input: ProviderIdentityInput,
     context: ProviderContext,
   ): ProviderDeliveryClaim | undefined;
+  /**
+   * Why each callback that {@link ProviderAdapter.deliveryIdentity} declines
+   * carries no replay-stable identity, keyed by the provider's own event name.
+   *
+   * Static data, not control flow: it never decides whether a callback is
+   * deduplicated, only what the runtime can *say* when it is not. An adapter that
+   * declares `deliveryIdentifier: "none"` should still populate this — the gap is
+   * then the whole story, and "the protocol has no request id" is a far more
+   * actionable diagnostic than "not identifiable".
+   */
+  readonly deliveryGaps?: ProviderDeliveryGaps;
   /** Interpret the payload into canonical events. */
   parse(input: ProviderParseInput, context: ProviderContext): ProviderParseResult;
   /** Provider-specific hook response for the given outcome. */
@@ -317,6 +373,32 @@ export const readDeliveryClaim = (
     };
   }
   return { claim: parsed.data };
+};
+
+/**
+ * Look up why this callback has no replay-stable identity, containing anything
+ * the adapter got wrong.
+ *
+ * Validated on the way out rather than trusted, for the same reason a claim is:
+ * the string ends up in a diagnostic an operator reads, and an adapter that pasted
+ * a path or a payload excerpt into its own gap table must produce *no detail*
+ * rather than a disclosure. Returning `undefined` costs a sentence of explanation
+ * and nothing else — the reason code is reported either way.
+ */
+export const readDeliveryGap = (
+  adapter: ProviderAdapter,
+  sourceEventName: string | undefined,
+): string | undefined => {
+  if (sourceEventName === undefined || adapter.deliveryGaps === undefined) {
+    return undefined;
+  }
+  // A prototype-polluting event name must not reach a bare property read: the
+  // event name comes from a payload, and `__proto__` is a string like any other.
+  if (!Object.prototype.hasOwnProperty.call(adapter.deliveryGaps, sourceEventName)) {
+    return undefined;
+  }
+  const parsed = deliveryGapReasonSchema.safeParse(adapter.deliveryGaps[sourceEventName]);
+  return parsed.success ? parsed.data : undefined;
 };
 
 export const asProviderId = (value: string): ProviderId => providerIdSchema.parse(value);

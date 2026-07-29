@@ -30,7 +30,7 @@ import {
   type CodexHookPayload,
   type CodexUsage,
 } from "./payload.js";
-import { codexDeliveryIdentity } from "./delivery.js";
+import { CODEX_DELIVERY_GAPS, codexDeliveryIdentity } from "./delivery.js";
 import { classifyCodexToolKind } from "./tool-kind.js";
 import { codexUsageToReport } from "./usage.js";
 import { CODEX_ADAPTER_VERSION, CODEX_PROVIDER_ID } from "./version.js";
@@ -484,6 +484,7 @@ export const createCodexAdapter = (): ProviderAdapter => ({
   detect,
   identify,
   deliveryIdentity: codexDeliveryIdentity,
+  deliveryGaps: CODEX_DELIVERY_GAPS,
   parse,
   hookResponse,
 });

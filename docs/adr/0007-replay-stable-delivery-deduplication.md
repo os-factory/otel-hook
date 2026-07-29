@@ -143,6 +143,23 @@ are content rather than identifiers.
    (ADR 0004): the callback is still exported and still accounted, because losing
    a real observation is unrecoverable and exporting a possible duplicate is not.
 
+   The report also names the **callback** and, where the adapter documents one, the
+   protocol reason. A reason code alone is a true statement that helps nobody:
+   coverage is per callback, so the provider id and the capability are identical for
+   every callback of that provider and identify nothing an operator can act on.
+   Adapters therefore declare `deliveryGaps` — a static table keyed by their own
+   event name, exhaustive over the events they recognize — and the runtime looks up
+   the entry for the callback in front of it using the `sourceEventName` that
+   `detect` already reports. It is data, never control flow: a gap entry cannot make
+   a callback identifiable or unidentifiable, only explain which it is.
+
+   Reasons are validated on the way out exactly as claims are, by the mirror image of
+   the component guard: a component must be identifier-shaped, a reason must be one
+   line of prose with no path separator and no control character. An adapter that
+   pasted a home directory into its own gap table produces *no detail*, not a
+   disclosure. The lookup is `hasOwnProperty`-guarded, because the event name comes
+   from a payload and `__proto__` is a string like any other.
+
 ## Consequences
 
 - Hosts get redelivery *suppression* for identifiable callbacks with no
@@ -151,16 +168,50 @@ are content rather than identifiers.
   otherwise.** OTLP acceptance and the local claim commit are two systems with no
   transaction between them, so a process killed after the collector accepted a batch
   and before `commit` re-exports on redelivery. The alternative ordering — commit,
-  then export — converts that window into *silent loss*, which is strictly worse:
-  a duplicate carries the same derived trace and span id and is therefore droppable
-  at the collector, while a missing observation is undetectable downstream. Local
+  then export — converts that window into *silent loss*, which is strictly worse: a
+  duplicate is identifiable downstream, a missing observation is not. Local
   accounting is committed under the claim's own lock and is at-most-once.
-- Rollup application is *not* idempotent by delivery identity. Making it so would
-  require the rollup write and the claim commit to be one atomic operation, and the
-  state store has no multi-key transaction; simulating one across keys would be a
-  pseudo-transaction whose failure modes are harder to reason about than the
-  single-increment under-count it would close. The window is documented and the
-  baseline is ordered first so the *next* observation stays correct.
+- **The re-export is identifiable in one of two ways, and the difference matters.**
+  When the redelivery derives the *same* event id, the span correlator replays the
+  facts on disk and the span is byte-identical — same trace id, same span id, so a
+  backend drops or overwrites. When it derives a *different* one, which is the common
+  case because most adapters seed each hook firing with a distinct invocation, the
+  correlator finds the scope already closed and refuses to republish under the
+  accepted span's id: the re-export gets a discriminated span id and
+  `otelhook.span.orphan="already-closed"`. That attribute does not prove duplication —
+  a genuine second close of one scope carries it too — but it does mean the duplicate
+  never arrives indistinguishable from a first observation. An earlier draft of this
+  ADR asserted the byte-identical case for *all* redeliveries; it is only the first
+  row of that table, and both are now pinned by test.
+- **Rollup application is idempotent by delivery identity, and the mechanism is a
+  single key rather than a simulated transaction.** The rollup is the one piece of
+  accounting outside `ingest`'s own transaction, because the accumulator takes the
+  same non-reentrant session lock — so it is the only place a reclaimed or superseded
+  delivery could apply its numbers twice, and for a delta-reporting provider it
+  certainly would: a delta needs no baseline, so the retry re-adds it whole. The
+  marker naming the last delivery folded in therefore lives *inside* the rollup
+  record, which is what makes the check and the write one atomic operation without
+  the multi-key transaction the store does not have. A marker in a second key could
+  be written without the total it describes, and a marker that can disagree with its
+  subject is worse than none.
+
+  Two bounds on it, stated rather than implied. Only the *most recent* delivery per
+  rollup key is recognizable, which covers the retry window and nothing beyond it —
+  a different delivery landing on the same key in between overwrites the marker.
+  And it closes double-application, not under-application: a crash between the
+  baseline advance and the rollup write still loses one increment, and baseline-first
+  is still ordered that way so the window under-counts a rollup rather than letting
+  the next diff over-count.
+- **Retention defers to the stale-claim window for uncommitted claims.** A dedup TTL
+  shorter than that window would otherwise delete a claim while its holder was still
+  exporting, and the concurrent redelivery would read a *fresh* callback — a retention
+  setting silently inverting the guarantee, which is the same failure mode as an
+  undersized `staleClaimMillis` arriving through a different knob. So the sweep drops
+  a `claimed` record only once it is older than both, reports what it kept as
+  `retainedInFlight`, and takes the record's own scope lock across the re-read and
+  the delete so it cannot race a peer's `claim`. Completed records still expire on
+  the operator's TTL alone: that is a real choice about how long a handled callback
+  stays recognizable, and it is theirs to make.
 - `staleClaimMillis` is a conservative floor, not a proof. Claims therefore carry an
   owner token verified at commit: a claim reclaimed under a live holder produces
   `delivery-claim-superseded` rather than a silent double count, which is what makes
@@ -170,9 +221,18 @@ are content rather than identifiers.
   the ambiguity capability declarations exist to remove.
 - No raw provider identifier reaches a state key or a diagnostic attribute as a
   side effect of deduplicating on it.
-- Deduplication coverage is per callback, and every shipped adapter is `partial`.
-  What each one cannot identify is enumerated in the README's known limitations
-  and asserted by name in `tests/providers/delivery-identity.test.ts`.
+- Deduplication coverage is per callback, and every shipped adapter is `partial` or
+  `none`. What each one cannot identify is enumerated in the README's known
+  limitations, declared as `deliveryGaps` next to the protocol it describes, and
+  asserted exhaustively in `tests/providers/delivery-identity.test.ts` — every
+  recognized event is either always identifiable or has a documented gap, so adding a
+  hook event without deciding its delivery status reads as an omission.
+- The Antigravity adapter identifies its invocation edges as well as its tool steps,
+  from `invocationNum` alone. A counter named for the invocation it numbers repeats on
+  a redelivery and advances on a genuine second invocation, which is the same argument
+  the tool pair rests on applied to a field present on every payload. `Stop` stays
+  refused: keying it on `invocationNum` would suppress its second real firing, and the
+  field that separates the two is an unconfirmed reconstruction.
 - Detection runs twice per invocation (once to resolve the delivery, once inside
   `ingest`). `detect` is contractually cheap and side-effect free, so this buys
   the ordering guarantee above at a measured cost.

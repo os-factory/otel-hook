@@ -11,6 +11,16 @@ export type LifecycleJanitorOptions = {
   readonly usageAccumulator?: UsageAccumulator;
   readonly spanMaxAgeMillis?: number;
   readonly dedupMaxAgeMillis?: number;
+  /**
+   * Floor on how long an uncommitted delivery claim survives the sweep, whatever
+   * `dedupMaxAgeMillis` says.
+   *
+   * Passed through rather than left to the deduplicator's default so it can be the
+   * *effective* window the runtime computed, which is raised from the requested one
+   * to cover a process's whole export budget. A sweep using a smaller number than
+   * the claim path uses would delete claims the claim path still considers live.
+   */
+  readonly dedupStaleClaimMillis?: number;
   readonly usageMaxAgeMillis?: number;
   /** Caps how many keys any single component scans per sweep. */
   readonly maxEntriesPerComponent?: number;
@@ -24,6 +34,11 @@ export type LifecycleSweepStats = {
    * exported. Reported only by the span sweep; see `SpanCleanupResult`.
    */
   readonly expiredOpen?: number;
+  /**
+   * Aged-out records kept back because they are delivery claims a live process may
+   * still hold. Reported only by the dedup sweep; see `DedupCleanupResult`.
+   */
+  readonly retainedInFlight?: number;
 };
 
 export type LifecycleCleanupReport = {
@@ -60,7 +75,12 @@ export const createLifecycleJanitor = (options: LifecycleJanitorOptions): Lifecy
       // digest of provider/installation/session, never a session id, so scoping
       // this sweep by `sessionId` would match nothing and let records accumulate
       // forever. The sweep is TTL-driven and still bounded by `maxEntries`.
-      options.deduplicator?.cleanup(dedupMaxAge, { maxEntries }),
+      options.deduplicator?.cleanup(dedupMaxAge, {
+        maxEntries,
+        ...(options.dedupStaleClaimMillis === undefined
+          ? {}
+          : { staleClaimMillis: options.dedupStaleClaimMillis }),
+      }),
       options.usageAccumulator?.cleanup(usageMaxAge, scope),
     ]);
     return {

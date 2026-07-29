@@ -21,11 +21,15 @@ import {
   type HookRuntime,
 } from "../../src/integration/hook-runtime.js";
 import { createCallbackDeduplicator } from "../../src/lifecycle/dedup.js";
+import { dedupKey } from "../../src/lifecycle/keys.js";
 import { createClaudeCodeAdapter } from "../../src/providers/claude/adapter.js";
+import { createGeminiCliAdapter } from "../../src/providers/gemini/adapter.js";
 import { createFixedClock, type FixedClock } from "../../src/runtime/clock.js";
 import { createRecordingLogger } from "../../src/runtime/memory.js";
 import { createProviderRegistry } from "../../src/providers/registry.js";
 import { createFilesystemStateStore } from "../../src/state/filesystem-store.js";
+import { startCapturingCollector } from "../helpers/collector.js";
+import { decodeExportedSpans } from "../helpers/otlp.js";
 
 const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => {
@@ -345,11 +349,17 @@ describe("delivery deduplication: usage accounting is applied at most once", () 
     const first = await deliverOnce(options, stopPayload("ses-unidentified"));
     const second = await deliverOnce(options, stopPayload("ses-unidentified"));
 
-    expect(first.delivery).toEqual({
+    const { detail, ...report } = first.delivery;
+    expect(report).toEqual({
       deduplicated: false,
       reason: "callback-not-identifiable",
       capability: "partial",
+      // Named, so a host auditing its own coverage knows which callback is
+      // uncovered and why. Coverage is per callback; the provider id and the
+      // capability are the same for every one of them and so identify nothing.
+      sourceEventName: "Stop",
     });
+    expect(detail).toContain("stop_hook_active");
     expect(second.delivery.deduplicated).toBe(false);
     expect(first.usageRollups).toHaveLength(1);
     expect(second.usageRollups).toHaveLength(1);
@@ -388,6 +398,67 @@ describe("delivery deduplication: capability diagnostics", () => {
     // the telemetry.
     expect(outcome.ingest.attribution).toBe("attributed");
     expect(outcome.ingest.events.length).toBeGreaterThan(0);
+  }, 60_000);
+
+  it("names the callback and the protocol reason, not just the reason code", async () => {
+    const stateRootDir = await scratchDir();
+
+    const outcome = await deliverOnce(
+      { stateRootDir, requireCallbackId: true },
+      stopPayload("ses-named"),
+    );
+    const info = outcome.diagnostics.find(
+      (candidate) => candidate.code === "delivery-identifier-unavailable",
+    );
+
+    // Coverage is per callback, so a report that names only the provider and the
+    // capability names nothing an operator can act on: those are identical for every
+    // callback of the provider. This is the difference between "something here is not
+    // deduplicated" and "Stop is not, because Claude Code can fire it twice".
+    expect(info?.details?.["delivery.source_event_name"]).toBe("Stop");
+    expect(info?.message).toContain("stop_hook_active");
+    expect(outcome.delivery.sourceEventName).toBe("Stop");
+  }, 60_000);
+
+  it("explains a per-callback gap for a provider that identifies nothing at all", async () => {
+    const stateRootDir = await scratchDir();
+    // `provider-declares-none` is where a bare reason code is least useful: the
+    // answer is a property of the protocol, and only the adapter can state it.
+    const { runtime } = buildRuntime({ stateRootDir, requireCallbackId: true });
+    const geminiRuntime = createHookRuntime({
+      config: {
+        ...DEFAULT_CONFIG,
+        exporter: { ...DEFAULT_EXPORTER_POLICY, enabled: false },
+        detection: { ...DEFAULT_CONFIG.detection, minimumConfidence: "weak" },
+      },
+      registry: createProviderRegistry([createGeminiCliAdapter()]),
+      stateRootDir,
+      installationId: "test-install",
+      providerNamespace: "gemini-cli",
+      requireCallbackId: true,
+    });
+    await runtime.shutdown();
+
+    const outcome = await geminiRuntime.process({
+      payload: {
+        session_id: "ses-gemini",
+        cwd: "/workspace/demo",
+        hook_event_name: "SessionStart",
+        source: "resume",
+      },
+      transport: "hook-stdin",
+      providerHint: "gemini-cli",
+    });
+    await geminiRuntime.shutdown();
+
+    const info = outcome.diagnostics.find(
+      (candidate) => candidate.code === "delivery-identifier-unavailable",
+    );
+    expect(info?.details?.["delivery.reason"]).toBe("provider-declares-none");
+    expect(info?.details?.["delivery.source_event_name"]).toBe("SessionStart");
+    // The subtle one, and the reason the adapter refuses the once-per-session edges:
+    // `SessionStart` fires again under the *same* session_id on resume and clear.
+    expect(info?.message).toContain("resume");
   }, 60_000);
 
   it("says nothing is available when no provider could be attributed at all", async () => {
@@ -583,6 +654,194 @@ describe("delivery deduplication: stale state left by a crashed process", () => 
   }, 60_000);
 });
 
+/**
+ * The window the ADR and the README both say is open, exercised rather than only
+ * asserted in prose.
+ *
+ * A process killed after the collector accepted a batch and before the claim
+ * committed leaves the claim uncommitted on disk. There is no transaction spanning
+ * an OTLP acceptance and a local state write, so the redelivery re-exports — and
+ * the whole justification for choosing that ordering is that the duplicate is
+ * *identifiable*: the same trace and span id, therefore droppable at the collector.
+ * A test is the only thing that keeps that justification true as the id derivation
+ * changes.
+ */
+describe("delivery deduplication: the crash window is at-least-once, and the duplicate is droppable", () => {
+  /**
+   * Put the dedup record back into the state a crash between export and commit
+   * leaves: claimed, never completed, by an owner nobody is going to hear from.
+   */
+  const reopenClaimAsCrashed = async (
+    stateRootDir: string,
+    clock: FixedClock,
+    payload: unknown,
+  ): Promise<void> => {
+    const { runtime: probe } = buildRuntime({ stateRootDir, clock });
+    const resolved = probe.hook.resolveDelivery({
+      payload,
+      transport: "hook-stdin",
+      providerHint: "claude-code",
+    });
+    await probe.shutdown();
+    if (resolved.status !== "resolved") {
+      throw new Error(`expected a resolvable delivery identity, got ${resolved.status}`);
+    }
+    const stateStore = createFilesystemStateStore({
+      rootDir: stateRootDir,
+      providerId: "claude-code",
+      installationId: "test-install",
+      clock,
+    });
+    await stateStore.write(dedupKey(resolved.identity.scope, resolved.identity.callbackId), {
+      kind: "attributes",
+      attributes: {
+        state: "claimed",
+        attempt: 1,
+        claimedAt: clock.now(),
+        owner: "owner-of-a-process-that-died",
+      },
+    });
+  };
+
+  /**
+   * The window a redelivery actually has to wait out.
+   *
+   * The runtime *raises* the requested window to a derived floor and honours the
+   * larger of the two, so a test that assumed its own request was honoured would
+   * wait the wrong amount of time. Asking the same question the runtime asks is the
+   * only version of this that survives a timeout policy change.
+   */
+  const RUNTIME_DEFAULT_STALE_CLAIM_MILLIS = 60_000;
+  const effectiveStaleClaim = (): number =>
+    Math.max(
+      RUNTIME_DEFAULT_STALE_CLAIM_MILLIS,
+      minimumStaleClaimMillis({
+        exportTimeoutMillis: DEFAULT_EXPORTER_POLICY.timeoutMillis,
+        maxRetryAttempts: DEFAULT_EXPORTER_POLICY.maxRetryAttempts,
+        flushTimeoutMillis: 2_000,
+        stateLockTimeoutMillis: 1_000,
+      }),
+    );
+
+  it("re-exports a callback the collector already accepted, with the identical span id", async () => {
+    const collector = await startCapturingCollector();
+    cleanups.push(() => collector.close());
+    const stateRootDir = await scratchDir();
+    const clock = createFixedClock();
+    const options = { stateRootDir, clock, endpoint: collector.url };
+    const payload = toolPayload("ses-crash-window");
+
+    const first = await deliverOnce(options, payload);
+    expect(first.ingest.emitted).toBeGreaterThan(0);
+    expect(first.delivery.outcome).toBe("fresh");
+
+    // The crash: the batch is at the collector, the claim never completed.
+    await reopenClaimAsCrashed(stateRootDir, clock, payload);
+    clock.advance(effectiveStaleClaim() + 1_000);
+
+    const second = await deliverOnce(options, payload);
+
+    // At-least-once, stated plainly. Suppressing here would be the alternative
+    // ordering's failure — a committed claim over an export that never happened is
+    // indistinguishable from this, and it loses the observation silently.
+    expect(second.delivery.outcome).toBe("reclaimed");
+    expect(second.duplicateDelivery).toBe(false);
+    expect(second.ingest.emitted).toBeGreaterThan(0);
+
+    const spans = collector.bodies().flatMap((body) => decodeExportedSpans(body));
+    expect(spans).toHaveLength(2);
+    const [before, after] = spans;
+
+    // Same session, so the same trace: the re-export lands next to the original
+    // rather than in a trace of its own.
+    expect(after?.traceId).toBe(before?.traceId);
+
+    // And it is *labelled*, which is the part that makes at-least-once survivable
+    // downstream. The span correlator finds this scope already closed and refuses to
+    // re-publish under the accepted span's id — so the duplicate neither overwrites
+    // the first observation nor arrives indistinguishable from a second real one.
+    expect(before?.attributes["otelhook.span.orphan"]).toBe("missing-start");
+    expect(after?.attributes["otelhook.span.orphan"]).toBe("already-closed");
+    expect(after?.attributes["otelhook.span.paired"]).toBe(false);
+    expect(after?.spanId).not.toBe(before?.spanId);
+  }, 90_000);
+
+  it("re-exports byte-identically when the redelivery derives the same event id", async () => {
+    // The other half of the crash window, and the only case in which the duplicate
+    // is droppable *by span id*: a redelivery whose derived event id matches has its
+    // span rebuilt from the facts already on disk. Claude Code cannot reach it — it
+    // seeds each hook firing with a distinct invocation — so this is asserted at the
+    // correlator, where the rule lives.
+    const stateRootDir = await scratchDir();
+    const clock = createFixedClock();
+    const { runtime } = buildRuntime({ stateRootDir, clock });
+    const key = {
+      sessionId: "ses-identical",
+      providerId: "claude-code",
+      scope: "tool" as const,
+      scopeKey: "tool-1",
+    };
+
+    const first = await runtime.spanCorrelator.recordEnd({
+      ...key,
+      eventId: "evt-1",
+      occurredAt: clock.now(),
+    });
+    const replayed = await runtime.spanCorrelator.recordEnd({
+      ...key,
+      eventId: "evt-1",
+      occurredAt: clock.now() + 5_000,
+    });
+    await runtime.shutdown();
+
+    expect(first.status).toBe("orphaned");
+    // Not "already-closed": the same event id is the *same* observation arriving
+    // twice, so the facts on disk are replayed rather than a second span invented.
+    expect(replayed.status).toBe("duplicate");
+  }, 60_000);
+
+  it("does not count a reclaimed callback's usage twice, even though it exports twice", async () => {
+    const stateRootDir = await scratchDir();
+    const clock = createFixedClock();
+    const options = { stateRootDir, clock };
+    // Claude Code reports *delta* usage, which is the case that makes this bite: a
+    // delta needs no baseline, so a retry has nothing to diff against and would
+    // simply add the same numbers a second time.
+    const payload = {
+      hook_event_name: "SubagentStop",
+      session_id: "ses-crash-usage",
+      cwd: "/workspace/demo",
+      agent_type: "Explore",
+      agent_id: "agent-crash",
+      usage: { input_tokens: 100, cache_read_input_tokens: 40, output_tokens: 20 },
+    };
+
+    const first = await deliverOnce(options, payload);
+    const accounted = first.usageRollups[0]?.snapshot.total.inputTokens;
+    expect(accounted).toBeGreaterThan(0);
+    const scopeKey = first.usageRollups[0]?.scopeKey ?? "";
+
+    await reopenClaimAsCrashed(stateRootDir, clock, payload);
+    clock.advance(effectiveStaleClaim() + 1_000);
+
+    const second = await deliverOnce(options, payload);
+    expect(second.delivery.outcome).toBe("reclaimed");
+
+    // The rollup marker rides inside the rollup record itself, so the check and the
+    // write are one atomic operation — no multi-key transaction, and no second key
+    // that could disagree with the total it describes.
+    const { runtime } = buildRuntime(options);
+    const rollup = await runtime.usageAccumulator.read({
+      sessionId: "ses-crash-usage",
+      scope: "subagent",
+      scopeKey,
+    });
+    await runtime.shutdown();
+    expect(rollup?.total.inputTokens).toBe(accounted);
+    expect(second.usageRollups[0]?.snapshot.total.inputTokens).toBe(accounted);
+  }, 90_000);
+});
+
 describe("delivery deduplication: retention", () => {
   it("sweeps dedup records at the end of a session, whatever scope they sit in", async () => {
     const stateRootDir = await scratchDir();
@@ -628,6 +887,106 @@ describe("delivery deduplication: retention", () => {
 
     expect((await deliverOnce(options, payload)).duplicateDelivery).toBe(true);
   }, 60_000);
+
+  it("does not let a short retention sweep away a claim a live process still holds", async () => {
+    const stateRootDir = await scratchDir();
+    const clock = createFixedClock();
+    // The reachable misconfiguration: retention far shorter than the stale-claim
+    // window. Left unguarded, the sweep deletes the in-flight claim and the
+    // concurrent redelivery sees `fresh` — a retention setting quietly converting
+    // suppression into a double export, which is the opposite of what tightening
+    // retention looks like it does.
+    const options = { stateRootDir, clock, deliveryRetentionMillis: 1_000 };
+    const payload = toolPayload("ses-sweep-race");
+
+    const { runtime: probe } = buildRuntime(options);
+    const resolved = probe.hook.resolveDelivery({
+      payload,
+      transport: "hook-stdin",
+      providerHint: "claude-code",
+    });
+    await probe.shutdown();
+    if (resolved.status !== "resolved") {
+      throw new Error(`expected a resolvable delivery identity, got ${resolved.status}`);
+    }
+
+    // A peer claims the callback and is still working on it.
+    const stateStore = createFilesystemStateStore({
+      rootDir: stateRootDir,
+      providerId: "claude-code",
+      installationId: "test-install",
+      clock,
+    });
+    const dedup = createCallbackDeduplicator({ stateStore, clock });
+    const claimed = await dedup.claim(resolved.identity.scope, resolved.identity.callbackId);
+    expect(claimed.owned).toBe(true);
+
+    // Past retention, nowhere near the stale window. A session ends, so the janitor
+    // sweeps.
+    clock.advance(2_000);
+    const ended = await deliverOnce(options, {
+      hook_event_name: "SessionEnd",
+      session_id: "ses-sweep-race",
+      cwd: "/workspace/demo",
+      reason: "completed",
+    });
+    expect(ended.cleanup?.dedup?.removed).toBe(0);
+    expect(ended.cleanup?.dedup?.retainedInFlight).toBe(1);
+
+    // So the redelivery still stands down instead of exporting the peer's callback a
+    // second time.
+    expect((await deliverOnce(options, payload)).delivery.outcome).toBe("in-flight");
+  }, 90_000);
+
+  it("still sweeps a claim once it is past the stale window as well as retention", async () => {
+    const stateRootDir = await scratchDir();
+    const clock = createFixedClock();
+    const options = { stateRootDir, clock, deliveryRetentionMillis: 1_000 };
+    const payload = toolPayload("ses-sweep-dead");
+
+    const { runtime: probe } = buildRuntime(options);
+    const resolved = probe.hook.resolveDelivery({
+      payload,
+      transport: "hook-stdin",
+      providerHint: "claude-code",
+    });
+    await probe.shutdown();
+    if (resolved.status !== "resolved") {
+      throw new Error(`expected a resolvable delivery identity, got ${resolved.status}`);
+    }
+    const stateStore = createFilesystemStateStore({
+      rootDir: stateRootDir,
+      providerId: "claude-code",
+      installationId: "test-install",
+      clock,
+    });
+    await createCallbackDeduplicator({ stateStore, clock }).claim(
+      resolved.identity.scope,
+      resolved.identity.callbackId,
+    );
+
+    // Protecting a live claim must not become "an abandoned claim is immortal": a
+    // crash would then cost a permanently unreclaimable record rather than a delay.
+    clock.advance(
+      Math.max(
+        60_000,
+        minimumStaleClaimMillis({
+          exportTimeoutMillis: DEFAULT_EXPORTER_POLICY.timeoutMillis,
+          maxRetryAttempts: DEFAULT_EXPORTER_POLICY.maxRetryAttempts,
+          flushTimeoutMillis: 2_000,
+          stateLockTimeoutMillis: 1_000,
+        }),
+      ) + 1_000,
+    );
+    const ended = await deliverOnce(options, {
+      hook_event_name: "SessionEnd",
+      session_id: "ses-sweep-dead",
+      cwd: "/workspace/demo",
+      reason: "completed",
+    });
+    expect(ended.cleanup?.dedup?.removed).toBe(1);
+    expect(ended.cleanup?.dedup?.retainedInFlight).toBeUndefined();
+  }, 90_000);
 
   it("leaves no stray files behind beyond the records it keeps", async () => {
     const stateRootDir = await scratchDir();

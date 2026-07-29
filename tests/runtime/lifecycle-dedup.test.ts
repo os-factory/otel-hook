@@ -147,16 +147,40 @@ describe("createCallbackDeduplicator: two-phase claims", () => {
     expect((await dedup.claim("scope", "cb_1")).outcome).toBe("duplicate");
   });
 
-  it("sweeps claimed and completed records alike once they age out", async () => {
+  it("sweeps an aged-out completed record but holds back a claim a live process may own", async () => {
     const dedup = build();
 
     await dedup.claim("scope", "cb_claimed");
     await dedup.claim("scope", "cb_done");
     await dedup.commit("scope", "cb_done");
 
+    // Past retention, but well inside the stale-claim window. Deleting the
+    // uncommitted claim here would hand the callback to a concurrent delivery as
+    // *fresh* while its holder is still exporting — retention silently turning
+    // suppression into a double export.
     dedup.clock.advance(10_000);
-    expect(await dedup.cleanup(5_000)).toEqual({ removed: 2, scanned: 2 });
+    expect(await dedup.cleanup(5_000, { staleClaimMillis: 60_000 })).toEqual({
+      removed: 1,
+      scanned: 2,
+      retainedInFlight: 1,
+    });
     expect((await dedup.claim("scope", "cb_done")).outcome).toBe("fresh");
+    // Held back, so a redelivery still stands down rather than exporting again.
+    expect((await dedup.claim("scope", "cb_claimed", { staleClaimMillis: 60_000 })).outcome).toBe(
+      "in-flight",
+    );
+  });
+
+  it("sweeps a claim once it is past both retention and the stale-claim window", async () => {
+    const dedup = build();
+
+    await dedup.claim("scope", "cb_abandoned");
+    dedup.clock.advance(70_000);
+
+    expect(await dedup.cleanup(5_000, { staleClaimMillis: 60_000 })).toEqual({
+      removed: 1,
+      scanned: 1,
+    });
   });
 
   it("bounds a sweep to maxEntries so a huge state store cannot stall a hook", async () => {
@@ -165,9 +189,28 @@ describe("createCallbackDeduplicator: two-phase claims", () => {
     for (let index = 0; index < 20; index += 1) {
       await dedup.claim("scope", `cb_${String(index)}`);
     }
-    dedup.clock.advance(10_000);
+    // Past the stale window too, so the cap is what limits the sweep rather than
+    // the in-flight protection.
+    dedup.clock.advance(70_000);
 
-    const swept = await dedup.cleanup(5_000, { maxEntries: 5 });
+    const swept = await dedup.cleanup(5_000, { maxEntries: 5, staleClaimMillis: 60_000 });
     expect(swept).toEqual({ removed: 5, scanned: 5 });
+  });
+
+  it("keeps a live claim out of the sweep even when retention is configured shorter", async () => {
+    const dedup = build();
+
+    // The reachable misconfiguration: a one-second retention with a one-minute
+    // effective stale window. The sweep must defer to the longer of the two.
+    await dedup.claim("scope", "cb_live", { staleClaimMillis: 60_000 });
+    dedup.clock.advance(2_000);
+
+    expect(await dedup.cleanup(1_000, { staleClaimMillis: 60_000 })).toMatchObject({
+      removed: 0,
+      retainedInFlight: 1,
+    });
+    expect((await dedup.claim("scope", "cb_live", { staleClaimMillis: 60_000 })).outcome).toBe(
+      "in-flight",
+    );
   });
 });

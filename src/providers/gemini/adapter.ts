@@ -18,6 +18,7 @@ import {
   type ProviderParseResult,
 } from "../adapter.js";
 import { createEventFactory } from "../builder.js";
+import { GEMINI_UNIDENTIFIABLE_CALLBACKS } from "./delivery.js";
 import {
   geminiCorrelationSeed,
   geminiGenerationId,
@@ -442,6 +443,11 @@ export const createGeminiCliAdapter = (options: GeminiAdapterOptions = {}): Prov
     capabilities,
     detect,
     identify,
+    // No `deliveryIdentity`: the capability is `none`, and offering a resolver
+    // that always declines would be a contradiction the runtime never consults.
+    // The gap table is still worth carrying — "the protocol has no request id" is
+    // the actionable half of that answer, and only this adapter can say it.
+    deliveryGaps: GEMINI_UNIDENTIFIABLE_CALLBACKS,
     parse,
     hookResponse,
   };

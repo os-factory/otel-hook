@@ -149,10 +149,11 @@ remembered in memory. Two identities can carry it.
 collector is a separate system: a batch is accepted over HTTP and the claim is then
 committed to local state, and there is no transaction spanning those two. A process
 killed in between leaves a callback the collector has *taken* and local state still
-records as unclaimed, so a redelivery re-exports it. Deterministic span ids make
-that duplicate identifiable at the collector — the same trace and span id, so a
-backend can drop it — which is the recovery this design offers instead of a
-guarantee it cannot keep. See
+records as unclaimed, so a redelivery re-exports it. The re-export is **labelled,
+not silent**: it lands in the same trace and carries
+`otelhook.span.orphan="already-closed"`, because the span correlator finds the scope
+already closed and refuses to republish under the accepted span's id. That is the
+recovery this design offers instead of a guarantee it cannot keep. See
 [Crash semantics](#crash-semantics-and-what-deduplication-does-not-cover).
 
 A host-supplied delivery id, unique by construction because only the host knows
@@ -183,14 +184,25 @@ privacy incident.
 
 No adapter identifies *every* callback. Coverage is declared per provider
 (`deliveryIdentifier: none | partial | all`) rather than left to be inferred, and
-`--require-callback-id` reports each callback that could not be deduplicated,
-naming the provider and the missing capability:
+`--require-callback-id` reports each callback that could not be deduplicated —
+naming the **callback**, not only the provider, because the provider id and the
+capability are identical for every callback of that provider and so identify
+nothing an operator can act on:
 
 ```bash
 otel-hook run --provider claude-code --require-callback-id
 # stderr: delivery-identifier-unavailable  "provider.delivery_identifier":"partial"
 #         "delivery.reason":"callback-not-identifiable"
+#         "delivery.source_event_name":"Stop"
+#         prompt_id is not a delivery identity here: Claude Code can fire Stop
+#         more than once per prompt when a hook continues the turn
 ```
+
+The explanation comes from the adapter's own gap table, so it names the protocol
+field whose absence is the gap — which is the one thing a host or a provider owner
+can actually change. Gap reasons are validated on the way out like any other
+adapter output: a reason carrying a filesystem path or a newline is dropped rather
+than printed.
 
 A suppressed redelivery is parsed but changes nothing: no export, no advance of
 the session sequence counter, and no rewrite of a cumulative usage baseline. Both
@@ -225,12 +237,33 @@ otherwise the retry would diff the advanced snapshot against itself and report z
 Sequence numbers are the one thing reserved up front, so a failed callback leaves a
 harmless gap in the numbering rather than a reused number.
 
+Rollup application is **idempotent by delivery identity**. It is the one piece of
+accounting outside `ingest`'s own transaction — the accumulator takes the same
+non-reentrant session lock, so it runs in a second critical section — which makes it
+the only place a reclaimed or superseded delivery could apply its numbers twice.
+That matters most for a delta-reporting provider: a delta needs no baseline, so a
+retry has nothing to diff against and would simply add the same tokens again. The
+marker naming the last delivery folded in rides *inside* the rollup record, so the
+check and the write are one atomic operation and no multi-key pseudo-transaction is
+invented. Only the most recent delivery per rollup key is recognizable, which is the
+retry window and nothing beyond it.
+
 `staleClaimMillis` — how long an uncommitted claim is respected before a later
 delivery may assume the holder died — is raised automatically to cover this
 installation's own worst-case work (state lock wait + every permitted export
 attempt + the bounded flush). A window shorter than that is not a smaller
 guarantee but the opposite of one: a peer would declare a *live* process abandoned
 and export the same callback twice. Raising it is logged.
+
+Retention defers to the same window. `deliveryRetentionMillis` expires *handled*
+callbacks, but the sweep will not drop an uncommitted claim until it is older than
+the effective `staleClaimMillis` too —
+otherwise tightening retention would delete a claim while its holder is still
+exporting, and the concurrent redelivery would see a *fresh* callback. Records kept
+back for that reason are reported as `cleanup.dedup.retainedInFlight`, and a
+retention shorter than the stale window is logged. An abandoned claim is still
+reclaimed once past both, so a crash costs a delayed export rather than a permanent
+one.
 
 It stays fail-open: an unidentifiable callback is still exported and still
 accounted. Losing a real observation is unrecoverable, exporting a possible
@@ -632,18 +665,31 @@ window:
 | export, then commit (**chosen**) | accepted by the collector, claim not yet committed | a redelivery **re-exports**: at-least-once |
 | commit, then export | claim committed, export never happened | the observation is **lost**, silently |
 
-The first is chosen deliberately. A duplicate is identifiable and removable: span
-ids are derived from `(provider, session, family, scopeKey)`, so the re-export
-carries the *same* trace and span id and a backend can drop or overwrite it. A
-silent loss is neither identifiable nor recoverable — nothing downstream can tell
-that an observation was supposed to exist.
+The first is chosen deliberately. A duplicate is *identifiable*; a silent loss is
+neither identifiable nor recoverable — nothing downstream can tell that an
+observation was supposed to exist. Precisely how identifiable is worth being exact
+about, because there are two cases and only one of them is droppable by span id:
+
+| Re-export | When | What the collector sees |
+| --- | --- | --- |
+| byte-identical | the redelivery derives the **same** event id | the same trace and span id; the span correlator replays the facts already on disk, so a backend drops or overwrites |
+| labelled duplicate | the redelivery derives a **different** event id | the same trace, a discriminated span id, and `otelhook.span.orphan="already-closed"` with `otelhook.span.paired=false` |
+
+The second is the common case for a reclaimed claim, because most adapters seed each
+hook firing with a distinct invocation — so the re-export cannot reuse the accepted
+span's id without overwriting a published observation, and it is classified instead.
+That attribute does not *prove* duplication (a genuine second close of one scope
+carries it too), but it does mean the duplicate never arrives indistinguishable from
+a first observation, which is what makes at-least-once survivable downstream. Both
+paths are pinned in `tests/integration/delivery-dedup.test.ts`.
 
 So, precisely:
 
 - **Export is at-least-once.** A callback whose telemetry the collector accepted may
   be exported again if this process dies before committing the claim.
 - **Local accounting is at-most-once**, because it is committed under the same lock
-  as the claim it depends on — but see the rollup caveat below.
+  as the claim it depends on, and the rollup — the one part outside that lock — is
+  idempotent by delivery identity.
 - **A partial batch is terminal**, and its loss is reported rather than retried.
 - **`staleClaimMillis` is a floor, not a proof.** If a real installation exceeds it,
   a peer reclaims a live claim; the commit then detects the mismatched owner token,
@@ -651,12 +697,17 @@ So, precisely:
   counting. That diagnostic means the window needs raising.
 
 Usage rollups are applied in a second critical section after the baseline advance,
-because the accumulator takes the same non-reentrant session lock. A crash between
-the two under-counts one rollup increment; the baseline is correct, so the *next*
-observation is unaffected. Making the rollup idempotent by delivery identity would
-need the rollup and the claim in one atomic write, and this store has no multi-key
-transaction — inventing one across keys would be a pseudo-transaction that fails in
-ways harder to reason about than the window it closes, so it is documented instead.
+because the accumulator takes the same non-reentrant session lock. Two windows sit
+there and they are not the same shape:
+
+- **Double-application is closed.** The record carries the last delivery folded into
+  it, so a reclaimed or superseded delivery re-applying its own delta is a no-op.
+  This lives in one key rather than being simulated across two, which is what makes
+  it a real atomic check instead of a pseudo-transaction.
+- **Under-application stays open.** A crash *between* the baseline advance and the
+  rollup write loses one rollup increment. The baseline is correct, so the next
+  observation is unaffected, and baseline-first is chosen precisely so this window
+  under-counts a rollup rather than letting the next diff over-count.
 
 This is why known limitation 2 stays open: deduplication is a real suppression
 mechanism with a real gap, not an exactly-once guarantee.
@@ -675,16 +726,17 @@ fixing one means updating that test rather than discovering a silent change.
 
    *Crash window.* OTLP export and local state cannot be committed together, so a
    process killed after the collector accepted a batch but before the claim was
-   committed re-exports on redelivery. Deterministic span ids make the duplicate
-   identifiable and droppable at the collector, which is the mitigation; it is not a
-   guarantee. See
+   committed re-exports on redelivery. The re-export is labelled rather than silent —
+   `otelhook.span.orphan="already-closed"`, or byte-identical when the redelivery
+   derives the same event id — which is the mitigation; it is not a guarantee. See
    [Crash semantics](#crash-semantics-and-what-deduplication-does-not-cover).
 
    *Coverage.* No adapter identifies every callback, and the Gemini CLI identifies
    none. Each refuses the callbacks
    where a stable-looking field would suppress a *genuine* second firing rather
-   than a redelivery. `--require-callback-id` reports these per callback, and a
-   host-supplied `--callback-id` closes any of them. Neither `invocationId` nor
+   than a redelivery. `--require-callback-id` reports these per callback — naming the
+   callback and the protocol field whose absence is the gap — and a host-supplied
+   `--callback-id` closes any of them. Neither `invocationId` nor
    `eventId` can substitute: some adapters seed the former with a clock reading,
    and the latter is seeded with a session sequence number that has already
    advanced by the time a redelivery arrives. What each adapter cannot identify:
@@ -711,16 +763,22 @@ fixing one means updating that test rather than discovering a silent change.
      `session_id` on resume and clear, so keying on it would suppress every restart
      after the first. `--callback-id` is the only deduplication available for this
      provider.
-   - **Antigravity** — `PreInvocation`, `PostInvocation`, `Stop`. `Stop` can fire
-     twice per invocation, and the only field separating those firings
-     (`fullyIdle`) is an unconfirmed reconstruction, not something to build an
-     at-most-once guarantee on. None of the three produce canonical events anyway.
+   - **Antigravity** — `Stop` only. The invocation and tool edges are identified
+     from `invocationNum` and `stepIdx`, both on the verified field list. `Stop` can
+     fire twice per invocation (idle, then fully idle), and the only field separating
+     those firings (`fullyIdle`) is an unconfirmed reconstruction — so keying it on
+     `invocationNum` would suppress the second, *real* firing rather than a
+     redelivery.
 
    A process killed between claiming a callback and completing it leaves an
    uncommitted claim; a later delivery reclaims it once `staleClaimMillis`
    (default 60,000ms) has passed, so a crash costs a delayed export rather than a
-   permanently lost one. Asserted in `tests/integration/delivery-dedup.test.ts`,
-   `tests/providers/delivery-identity.test.ts`, and
+   permanently lost one, and the sweep will not expire such a claim before then
+   however short retention is set. Asserted in
+   `tests/integration/delivery-dedup.test.ts`,
+   `tests/providers/delivery-identity.test.ts`,
+   `tests/runtime/lifecycle-dedup.test.ts`,
+   `tests/runtime/lifecycle-usage-accumulator.test.ts`, and
    `tests/integration/hook-runtime.test.ts`.
 3. **Cross-process span pairing needs a shared, durable state root.** A `*.end`
    fired as its own process carries its start time, duration, parent, and
