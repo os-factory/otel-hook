@@ -1,11 +1,17 @@
 {
   "session_id": "ses_gemini_demo_1",
   "hook_event_name": "AfterTool",
+  "transcript_path": "/workspace/demo-repo/.gemini-sessions/ses_gemini_demo_1.json",
   "cwd": "/workspace/demo-repo",
   "timestamp": "2026-07-25T10:00:08.000Z",
   "tool_name": "run_shell_command",
   "tool_input": { "command": "npm test" },
   "tool_response": {
-    "error": { "message": "command exited with status 1" }
+    "llmContent": "Command exited with status 1",
+    "returnDisplay": "npm test failed",
+    "error": {
+      "type": "shell_execute_error",
+      "message": "command exited with status 1"
+    }
   }
 }

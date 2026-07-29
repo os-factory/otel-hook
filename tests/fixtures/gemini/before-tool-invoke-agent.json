@@ -3,5 +3,10 @@
   "hook_event_name": "BeforeTool",
   "transcript_path": "/workspace/demo-repo/.gemini-sessions/ses_gemini_demo_1.json",
   "cwd": "/workspace/demo-repo",
-  "timestamp": "2026-07-25T10:00:06.000Z"
+  "timestamp": "2026-07-25T10:00:17.000Z",
+  "tool_name": "invoke_agent",
+  "tool_input": {
+    "name": "codebase-investigator",
+    "prompt": "Find every caller of the retry helper."
+  }
 }

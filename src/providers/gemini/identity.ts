@@ -58,17 +58,36 @@ export const geminiWorkspace = (
 
 /**
  * Stable content used to key a tool call across its `BeforeTool`/`AfterTool`
- * pair. Deliberately excludes `tool_input`: a preceding hook may rewrite the
- * arguments before the tool runs (`hookSpecificOutput.tool_input`), so the
- * `AfterTool` payload's echoed input can legitimately differ from what
- * `BeforeTool` observed. Keying on the tool name alone survives that rewrite;
- * the trade-off is that two calls to the same tool in a row within one turn are
- * not distinguishable from this protocol alone (see gemini adapter gaps).
+ * pair.
+ *
+ * **`tool_input` is deliberately excluded.** A `BeforeTool` hook may return
+ * `hookSpecificOutput.tool_input`, which the CLI merges with
+ * `Object.assign(invocation.params, modifiedInput)` — an in-place mutation of the
+ * very object it later hands to `AfterTool`. So `BeforeTool` sees the model's
+ * arguments and `AfterTool` sees the rewritten ones, for one and the same call.
+ * Keying on the input would split that call into two unpaired halves.
+ *
+ * **`original_request_name` is a distinguisher, not a replacement.** It appears
+ * only on a *tail tool call* — a tool the CLI runs in place of another because an
+ * `AfterTool` hook returned `hookSpecificOutput.tailToolCallRequest` — and names
+ * the tool the model originally asked for, while `tool_name` names the tool
+ * actually running. Keying on `original_request_name` alone would hand the tail
+ * call the *original* call's id, so two different tools would share one span.
+ * Both names therefore go into the key, which keeps the tail call's own
+ * before/after pair together and apart from the call it replaced.
+ *
+ * The residual gap: two calls to the same tool in a row within one turn are not
+ * distinguishable from this protocol alone. The CLI has an internal
+ * `ToolCallRequestInfo.callId`, but does not pass it to hooks (see
+ * `./delivery.ts`).
  */
 export const geminiToolCallKey = (input: {
   readonly tool_name: string;
   readonly original_request_name?: string | undefined;
-}): string => input.original_request_name ?? input.tool_name;
+}): string =>
+  input.original_request_name === undefined || input.original_request_name === input.tool_name
+    ? input.tool_name
+    : stableKey({ tail: input.tool_name, replacing: input.original_request_name });
 
 export const geminiToolCallId = (
   context: ProviderContext,

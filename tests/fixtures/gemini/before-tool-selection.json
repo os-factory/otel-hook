@@ -1,6 +1,7 @@
 {
   "session_id": "ses_gemini_demo_1",
   "hook_event_name": "BeforeToolSelection",
+  "transcript_path": "/workspace/demo-repo/.gemini-sessions/ses_gemini_demo_1.json",
   "cwd": "/workspace/demo-repo",
   "timestamp": "2026-07-25T10:00:04.000Z",
   "llm_request": {
