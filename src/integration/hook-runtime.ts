@@ -152,6 +152,19 @@ export type DeliveryReport = {
   readonly reason?: DeliveryUnavailableReason;
   /** The adapter's declared coverage, when a provider was selected. */
   readonly capability?: string;
+  /**
+   * The provider's own name for the callback that could not be identified.
+   *
+   * Present only alongside `reason`. Coverage is per callback, so a host auditing
+   * its own gaps needs the callback name to act on the report at all — the
+   * provider id and the capability are the same for every one of them.
+   */
+  readonly sourceEventName?: string;
+  /**
+   * The adapter's own account of why this callback has no identity, and what field
+   * would close the gap. Absent when the adapter documents none.
+   */
+  readonly detail?: string;
   /** Adapter-supplied justifications for a provider-derived identity. */
   readonly evidence?: readonly string[];
   /**
@@ -490,12 +503,28 @@ export const createHookRuntime = (options: HookRuntimeOptions): HookRuntime => {
 
   const deduplicator = createCallbackDeduplicator({ stateStore, clock });
   const usageAccumulator = createUsageAccumulator({ stateStore, clock });
+  const deliveryRetentionMillis = options.deliveryRetentionMillis ?? lifecycleMaxAge;
+  if (deliveryRetentionMillis < staleClaimMillis) {
+    // Not raised, only reported: an operator who wants dedup records gone in a
+    // minute is entitled to that, and the sweep already refuses to drop a claim
+    // inside the stale window. What they are not entitled to is a *silent* gap —
+    // a completed record that expires before a redelivery could plausibly arrive
+    // stops suppressing it, and this is the number that explains why.
+    logger.warn("delivery retention is shorter than the stale-claim window", {
+      "delivery.retention_millis": deliveryRetentionMillis,
+      "delivery.stale_claim_effective_millis": staleClaimMillis,
+    });
+  }
   const janitor = createLifecycleJanitor({
     spanCorrelator,
     deduplicator,
     usageAccumulator,
     spanMaxAgeMillis: lifecycleMaxAge,
-    dedupMaxAgeMillis: options.deliveryRetentionMillis ?? lifecycleMaxAge,
+    dedupMaxAgeMillis: deliveryRetentionMillis,
+    // The *effective* window, not the requested one: a sweep that considered a
+    // claim dead earlier than the claim path does would hand a live callback to a
+    // peer as fresh.
+    dedupStaleClaimMillis: staleClaimMillis,
     usageMaxAgeMillis: lifecycleMaxAge,
   });
 
@@ -504,21 +533,58 @@ export const createHookRuntime = (options: HookRuntimeOptions): HookRuntime => {
   const stateDiagnostic = (thrown: unknown): OtelHookErrorInfo =>
     errorInfoFromThrown(thrown, { code: "state-store-failure", phase: "state", occurredAt: clock.now() });
 
+  /**
+   * Opaque, replay-stable token for a delivery, safe to write into a state record.
+   *
+   * Digested rather than used directly, because a *host-supplied* callback id is a
+   * raw external identifier and a rollup record's contents are not a place one may
+   * appear as a side effect of deduplicating on it. The digest is content-addressed,
+   * so a later process recomputes the same token — which is the whole point: the
+   * retry has to recognize its own earlier application.
+   */
+  const rollupDeliveryToken = (identity: ResolvedDeliveryIdentity): string | undefined => {
+    // Clamped to the shape the state schema admits, because `ids` is injected: the
+    // default generator returns a hex digest, but a host's own could return anything.
+    // An unusable token must cost the *idempotency check* and nothing else — writing
+    // it would fail validation and take the whole rollup down with it, which trades a
+    // possible double count for a certain lost one.
+    const token = ids
+      .newOpaqueId(["usage-delivery", identity.scope, identity.callbackId])
+      .replace(/[^A-Za-z0-9_-]/g, "")
+      .slice(0, 128);
+    return token.length === 0 ? undefined : token;
+  };
+
   const applyRollups = async (
     sessionId: string,
     observations: readonly UsageObservation[],
     diagnostics: OtelHookErrorInfo[],
+    deliveryToken?: string,
   ): Promise<readonly UsageRollup[]> => {
     const rollups: UsageRollup[] = [];
+    // Per rollup key, because idempotency is per record: two observations landing on
+    // one key are the first and second application *to that key*, whatever their
+    // position in the batch.
+    const ordinals = new Map<string, number>();
     for (const observation of observations) {
       const key = { sessionId, scope: observation.scope, scopeKey: observation.scopeKey };
+      const rollupId = `${observation.scope} ${observation.scopeKey}`;
+      const ordinal = ordinals.get(rollupId) ?? 0;
+      ordinals.set(rollupId, ordinal + 1);
+      // Absent when no delivery identity was established: there is then nothing to
+      // recognize a repeat by, and declining to accumulate would lose a real
+      // observation rather than avoid a duplicate one.
+      const options =
+        deliveryToken === undefined
+          ? undefined
+          : { delivery: { callbackId: deliveryToken, ordinal } };
       try {
         if (observation.resetDetected) {
           // A restarted provider counter starts a new epoch rather than
           // deflating the running total (see createUsageAccumulator).
-          await usageAccumulator.recordReset(key);
+          await usageAccumulator.recordReset(key, options);
         }
-        const snapshot = await usageAccumulator.accumulateDelta(key, observation.delta);
+        const snapshot = await usageAccumulator.accumulateDelta(key, observation.delta, options);
         rollups.push({ scope: observation.scope, scopeKey: observation.scopeKey, snapshot });
       } catch (thrown) {
         diagnostics.push(
@@ -568,17 +634,27 @@ export const createHookRuntime = (options: HookRuntimeOptions): HookRuntime => {
       return { deduplicated: false };
     }
     if (options.requireCallbackId === true) {
+      // The generic sentence explains the *reason code*; the adapter's own gap
+      // explains the *callback*. Both are useful and they answer different
+      // questions, so the detail carries the general statement and then the
+      // specific one rather than replacing either.
+      const generic = DELIVERY_UNAVAILABLE_DETAIL[resolution.reason];
+      const detail =
+        resolution.detail === undefined ? generic : `${generic}; ${resolution.detail}`;
       diagnostics.push(
         createErrorInfo({
           code: "delivery-identifier-unavailable",
           phase: "identity",
-          detail: (resolution.detail ?? DELIVERY_UNAVAILABLE_DETAIL[resolution.reason]).slice(0, 400),
+          detail: detail.slice(0, 400),
           details: {
             "delivery.reason": resolution.reason,
             ...(resolution.providerId === undefined ? {} : { "provider.id": resolution.providerId }),
             ...(resolution.capability === undefined
               ? {}
               : { "provider.delivery_identifier": resolution.capability }),
+            ...(resolution.sourceEventName === undefined
+              ? {}
+              : { "delivery.source_event_name": resolution.sourceEventName }),
             "delivery.remedy": "pass an explicit host delivery id (--callback-id)",
           },
           occurredAt: clock.now(),
@@ -589,6 +665,10 @@ export const createHookRuntime = (options: HookRuntimeOptions): HookRuntime => {
       deduplicated: false,
       reason: resolution.reason,
       ...(resolution.capability === undefined ? {} : { capability: resolution.capability }),
+      ...(resolution.sourceEventName === undefined
+        ? {}
+        : { sourceEventName: resolution.sourceEventName }),
+      ...(resolution.detail === undefined ? {} : { detail: resolution.detail }),
     };
   };
 
@@ -648,10 +728,16 @@ export const createHookRuntime = (options: HookRuntimeOptions): HookRuntime => {
 
     let usageRollups: readonly UsageRollup[] = [];
     if (!duplicateDelivery && ingest.identity !== undefined && ingest.usageObservations.length > 0) {
+      // The rollup is the one piece of accounting that sits *outside* `ingest`'s
+      // own transaction, in a second critical section — the accumulator takes the
+      // same non-reentrant session lock. That leaves this the only place a retried
+      // or reclaimed delivery could apply its numbers twice, so it is the one place
+      // that gets stamped with the delivery it belongs to.
       usageRollups = await applyRollups(
         ingest.identity.sessionId,
         ingest.usageObservations,
         diagnostics,
+        identity === undefined ? undefined : rollupDeliveryToken(identity),
       );
     }
 

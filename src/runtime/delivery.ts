@@ -55,7 +55,19 @@ export type DeliveryResolution =
       readonly providerId?: string;
       /** The adapter's declared coverage, when there is an adapter. */
       readonly capability?: DeliveryIdentifierSupport;
-      /** Detail for a rejected claim. Never contains payload values. */
+      /**
+       * The provider's own name for the callback that could not be identified.
+       *
+       * Taken from the detection, which already carries it into span attributes
+       * and provenance, so it discloses nothing new — and it is the difference
+       * between a diagnostic an operator can act on and one that only restates
+       * that something is missing.
+       */
+      readonly sourceEventName?: string;
+      /**
+       * Why, in the adapter's own words: a rejected claim's failure, or the
+       * per-callback gap the adapter documents. Never contains payload values.
+       */
       readonly detail?: string;
     };
 

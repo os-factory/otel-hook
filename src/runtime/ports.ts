@@ -58,11 +58,38 @@ export interface IdGenerator {
   newOpaqueId(parts: readonly string[]): string;
 }
 
+/**
+ * Which delivery's observations are already folded into a stored total.
+ *
+ * The reason this rides *inside* the total's own record rather than beside it: the
+ * store has no multi-key transaction, so a marker in a second key could be written
+ * without the total or the other way round, and a marker that can disagree with
+ * what it describes is worse than none. In one record the two move together under a
+ * single write, which is what makes re-applying a redelivered callback's usage a
+ * no-op instead of a double count.
+ *
+ * `callbackId` is an opaque digest supplied by the caller, never a host's raw
+ * delivery id: a state record is somewhere a raw provider or host identifier must
+ * not appear as a side effect of deduplicating on it.
+ */
+export const appliedDeliverySchema = z.strictObject({
+  callbackId: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/),
+  /** How many of that delivery's observations are folded in, counted from one. */
+  applications: z.number().int().min(1).max(4_096),
+});
+export type AppliedDelivery = z.infer<typeof appliedDeliverySchema>;
+
 /** Values the state store may hold. Restricted so state stays inspectable. */
 export const stateValueSchema = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("usage-cumulative"),
     usage: canonicalUsageSchema,
+    /**
+     * Optional: absent on every record written before this field existed, which
+     * reads as "unknown provenance" and simply forgoes the idempotency check
+     * rather than resetting a baseline to gain it.
+     */
+    appliedDelivery: appliedDeliverySchema.optional(),
   }),
   z.strictObject({
     kind: z.literal("sequence"),

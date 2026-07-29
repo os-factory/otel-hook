@@ -87,6 +87,33 @@ export const dedupScanPrefix = (scope?: string): string =>
     ? `${LIFECYCLE_PREFIX}:dedup:`
     : `${LIFECYCLE_PREFIX}:dedup:v${String(DEDUP_KEY_VERSION)}:${encodeSegment(scope)}:`;
 
+const decodeSegment = (segment: string): string =>
+  segment.replaceAll("%3A", ":").replaceAll("%25", "%");
+
+/**
+ * Recover the delivery scope a dedup key belongs to.
+ *
+ * Needed by the sweep and nothing else. A sweep enumerates keys rather than being
+ * handed a scope, but deleting a dedup record is a read-modify-write against the
+ * same record a concurrent `claim` is deciding on — so the sweep has to take the
+ * same per-scope lock, and to take it, it has to know the scope. Recovering it
+ * from the key is safe precisely because {@link encodeSegment} is injective.
+ *
+ * Returns `undefined` for a key from a previous layout version, which no lock
+ * protects because no current read can reach it.
+ */
+export const dedupScopeOf = (key: string): string | undefined => {
+  const prefix = `${LIFECYCLE_PREFIX}:dedup:v${String(DEDUP_KEY_VERSION)}:`;
+  if (!key.startsWith(prefix)) {
+    return undefined;
+  }
+  // Exactly two segments follow the prefix, and neither can contain a raw `:`,
+  // so the first `:` after the prefix is unambiguously the boundary.
+  const rest = key.slice(prefix.length);
+  const boundary = rest.indexOf(":");
+  return boundary <= 0 ? undefined : decodeSegment(rest.slice(0, boundary));
+};
+
 /**
  * Usage rollup keys are escaped but deliberately *not* versioned: their layout
  * has not changed, and a version segment would orphan every cumulative token

@@ -4,6 +4,7 @@ import {
   DEDUP_KEY_VERSION,
   dedupKey,
   dedupScanPrefix,
+  dedupScopeOf,
   rollupEpochKey,
   rollupUsageKey,
   SPAN_KEY_VERSION,
@@ -79,5 +80,42 @@ describe("lifecycle state key spaces", () => {
     expect(spanKey("ses-1", "claude-code", "tool", "t1")).not.toBe(
       spanKey("ses-1", "codex", "tool", "t1"),
     );
+  });
+});
+
+/**
+ * The sweep enumerates dedup keys rather than being handed a scope, but deleting a
+ * record races a concurrent `claim` — so it has to take the same per-scope lock, and
+ * to take it, it has to recover the scope from the key. That recovery is only sound
+ * because the segment encoding is a bijection, so it is worth asserting as one.
+ */
+describe("dedupScopeOf", () => {
+  it("recovers the scope from a key, including the characters escaping exists for", () => {
+    for (const scope of [
+      "delivery",
+      "provider-session:0123456789abcdef",
+      "a:b",
+      "100%",
+      "%3A",
+      "%25",
+      "weird::%%::scope",
+    ]) {
+      expect(dedupScopeOf(dedupKey(scope, "cb-1")), scope).toBe(scope);
+    }
+  });
+
+  it("recovers the scope whatever the callback id contains", () => {
+    for (const callbackId of ["cb-1", "a:b", "%3A", "100%", ""]) {
+      expect(dedupScopeOf(dedupKey("a:b", callbackId)), callbackId).toBe("a:b");
+    }
+  });
+
+  it("declines a key from a previous layout, which no current read can reach", () => {
+    // No scope means no lock, which is correct rather than unfortunate: a v1 key is
+    // unreachable by any current claim, so there is nothing to serialize against.
+    expect(dedupScopeOf("lifecycle:dedup:ses-1:cb-1")).toBeUndefined();
+    expect(dedupScopeOf(spanKey("ses-1", "p", "tool", "x"))).toBeUndefined();
+    expect(dedupScopeOf(`lifecycle:dedup:v${String(DEDUP_KEY_VERSION)}:`)).toBeUndefined();
+    expect(dedupScopeOf("")).toBeUndefined();
   });
 });

@@ -41,8 +41,8 @@ layout. As of the current version:
 | `usage:<sessionId>:...`                                           | Cumulative usage baseline for delta computation  |
 | `lifecycle:span:v2:<sessionId>:<providerId>:<scope>:<scopeKey>`    | One open or recently closed lifecycle span       |
 | `lifecycle:dedup:v2:<deliveryScope>:<callbackId>`                 | A delivery id already claimed or completed       |
-| `lifecycle:usage:<sessionId>:<scope>:<scopeKey>`                  | Running per-scope usage rollup                   |
-| `lifecycle:epoch:<sessionId>:<scope>:<scopeKey>`                  | Rollup epoch, bumped when a provider counter resets |
+| `lifecycle:usage:<sessionId>:<scope>:<scopeKey>`                  | Running per-scope usage rollup, plus the last delivery folded into it |
+| `lifecycle:epoch:<sessionId>:<scope>:<scopeKey>`                  | Rollup epoch, bumped when a provider counter resets, plus the delivery that bumped it |
 
 The session segment leads so a whole session can be swept by prefix. The
 provider segment sits under it so a start recorded by one provider is
@@ -103,6 +103,8 @@ an invented half.
 | Records scanned per `pruneStale`  | 5,000   | `FilesystemStateStore.pruneStale`                   |
 | Session lock staleness            | 30s     | `FilesystemStateStoreOptions.lockStaleMillis`       |
 | Session lock wait                 | 1s      | `HookRuntimeOptions.stateLockTimeoutMillis`         |
+| Dedup record age                  | 24h     | `HookRuntimeOptions.deliveryRetentionMillis`        |
+| Floor on an uncommitted claim's age | 60s   | `HookRuntimeOptions.staleClaimMillis` (raised to a derived floor) |
 | Spool files                       | 500     | `DurableSpoolOptions.maxSpoolFiles`                 |
 
 Every sweep is bounded, so cleanup costs a hook invocation a known amount of
@@ -118,6 +120,19 @@ An open span that outlives the retention window is not merely deleted: when its
 end finally arrives, the end is exported as an explicit orphan
 (`otelhook.span.orphan=expired-start`) rather than with a duration that really
 measures a machine suspend or a reused identifier.
+
+A dedup record for an **uncommitted claim** is the one thing retention does not get
+the last word on. It survives until it is older than *both* the retention window and
+the effective `staleClaimMillis`, and the sweep re-reads and deletes it under the
+record's own delivery-scope lock so it cannot race a concurrent `claim`. Retention is
+an answer to "how long should a handled callback stay recognizable"; the stale window
+is a statement about how long one process's own export can take, and a sweep that
+deleted a claim inside it would hand the callback to a peer as *fresh* while its
+holder was still exporting — a retention setting inverting the guarantee it looks
+like it is merely tightening. Records held back for that reason are reported as
+`cleanup.dedup.retainedInFlight`, and a retention shorter than the window is logged
+at runtime construction. Past both bounds the claim is swept normally, so a crash
+still costs a delayed export rather than an immortal record.
 
 ## Write ordering within one callback
 
@@ -142,6 +157,15 @@ The baseline read, diff, and write-back share one critical section, so two
 concurrent processes cannot diff against the same snapshot. The rollup apply is a
 separate one, so a crash between them under-counts a rollup; that order is chosen
 deliberately, because the reverse leaves the *next* diff to over-count.
+
+Because the rollup sits outside that transaction, it is the one figure a reclaimed or
+superseded delivery could apply twice — so the rollup record carries the last delivery
+folded into it (`appliedDelivery`, an opaque digest plus a count) and re-applying the
+same one is a no-op. The marker lives in the same record as the total it describes, so
+the check and the write are a single atomic operation; a marker in a second key could
+be written without its subject, and one that can disagree with what it describes is
+worse than none. Only the most recent delivery per rollup key is recognizable, which
+is the retry window and nothing beyond it.
 
 ## What a record's absence means
 

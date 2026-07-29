@@ -21,7 +21,7 @@ import {
   type ProviderParseResult,
 } from "../adapter.js";
 import { createEventFactory } from "../builder.js";
-import { cursorDeliveryIdentity } from "./delivery.js";
+import { CURSOR_DELIVERY_GAPS, cursorDeliveryIdentity } from "./delivery.js";
 import {
   CURSOR_PROVIDER_ID,
   normalizeCursorPayload,
@@ -640,6 +640,7 @@ export const createCursorAdapter = (options: CursorAdapterOptions = {}): Provide
     detect,
     identify,
     deliveryIdentity: cursorDeliveryIdentity,
+    deliveryGaps: CURSOR_DELIVERY_GAPS,
     parse,
     hookResponse,
   };

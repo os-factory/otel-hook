@@ -39,6 +39,7 @@ import { CONTENT_MODE_DISCLOSURE } from "../privacy/policy.js";
 import { createPrivacyService, type PrivacyService } from "../privacy/service.js";
 import {
   readDeliveryClaim,
+  readDeliveryGap,
   SILENT_HOOK_RESPONSE,
   type ProviderAdapter,
   type ProviderContext,
@@ -561,12 +562,24 @@ export const createOtelHook = (deps: OtelHookDependencies): OtelHook => {
 
     const { adapter, detection } = detected;
     const capability = adapter.capabilities.deliveryIdentifier;
+    // Named once, then reused: an unavailable resolution says *which* callback it
+    // is talking about, because "not identifiable" without a callback name leaves
+    // an operator auditing coverage nowhere to go.
+    const named = {
+      providerId: detection.providerId,
+      capability,
+      ...(detection.sourceEventName === undefined
+        ? {}
+        : { sourceEventName: detection.sourceEventName }),
+    };
+    const gap = readDeliveryGap(adapter, detection.sourceEventName);
+
     if (capability === "none") {
       return {
         status: "unavailable",
         reason: "provider-declares-none",
-        providerId: detection.providerId,
-        capability,
+        ...named,
+        ...(gap === undefined ? {} : { detail: gap }),
       };
     }
 
@@ -575,8 +588,7 @@ export const createOtelHook = (deps: OtelHookDependencies): OtelHook => {
       return {
         status: "unavailable",
         reason: "claim-rejected",
-        providerId: detection.providerId,
-        capability,
+        ...named,
         detail: read.rejection,
       };
     }
@@ -584,8 +596,8 @@ export const createOtelHook = (deps: OtelHookDependencies): OtelHook => {
       return {
         status: "unavailable",
         reason: "callback-not-identifiable",
-        providerId: detection.providerId,
-        capability,
+        ...named,
+        ...(gap === undefined ? {} : { detail: gap }),
       };
     }
     return {

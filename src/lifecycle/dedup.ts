@@ -3,14 +3,27 @@ import { randomBytes } from "node:crypto";
 import type { Attributes } from "../model/primitives.js";
 import type { Clock, StateRecord, StateStore } from "../runtime/ports.js";
 import { withOptionalSessionLock } from "../state/store.js";
-import { dedupKey, dedupScanPrefix } from "./keys.js";
+import { dedupKey, dedupScanPrefix, dedupScopeOf } from "./keys.js";
 
 export type DedupCheckResult = {
   /** True when `callbackId` was already marked seen for this scope. */
   readonly duplicate: boolean;
 };
 
-export type DedupCleanupResult = { readonly removed: number; readonly scanned: number };
+export type DedupCleanupResult = {
+  readonly removed: number;
+  readonly scanned: number;
+  /**
+   * Aged-out records the sweep deliberately kept because they are uncommitted
+   * claims younger than the stale-claim window — a live process may still be
+   * working on them.
+   *
+   * Reported rather than merely not-removed, because the two are indistinguishable
+   * in `removed` and only one of them means "retention is configured shorter than
+   * this installation's own export budget". Absent when nothing was retained.
+   */
+  readonly retainedInFlight?: number;
+};
 
 /**
  * What happened when a delivery tried to take ownership of a callback id.
@@ -114,9 +127,26 @@ export interface CallbackDeduplicator {
    * callback is treated as fresh instead of waiting out the stale window.
    */
   release(scope: string, callbackId: string): Promise<void>;
+  /**
+   * Drop dedup records older than `maxAgeMillis`.
+   *
+   * An uncommitted claim is held back until it is also older than
+   * `staleClaimMillis`, whatever the retention says. Retention is an operator's
+   * answer to "how long should a handled callback stay recognizable"; the stale
+   * window is a statement about how long one process's own work can take. Deleting
+   * a claim inside that window would hand the callback to a concurrent delivery as
+   * *fresh* while the holder is still exporting it — a retention setting silently
+   * converting suppression into a double export, which is the opposite of what
+   * tightening retention looks like it does.
+   */
   cleanup(
     maxAgeMillis: number,
-    options?: { readonly maxEntries?: number; readonly sessionId?: string },
+    options?: {
+      readonly maxEntries?: number;
+      readonly sessionId?: string;
+      /** Floor on how long an uncommitted claim survives. Default 60,000ms. */
+      readonly staleClaimMillis?: number;
+    },
   ): Promise<DedupCleanupResult>;
 }
 
@@ -289,25 +319,77 @@ export const createCallbackDeduplicator = (
 
   const cleanup = async (
     maxAgeMillis: number,
-    options?: { readonly maxEntries?: number; readonly sessionId?: string },
+    options?: {
+      readonly maxEntries?: number;
+      readonly sessionId?: string;
+      readonly staleClaimMillis?: number;
+    },
   ): Promise<DedupCleanupResult> => {
     const keys = await stateStore.keys(dedupScanPrefix(options?.sessionId));
     const cap = options?.maxEntries ?? 1_000;
+    const staleClaimMillis = options?.staleClaimMillis ?? DEFAULT_STALE_CLAIM_MILLIS;
     const now = clock.now();
     let removed = 0;
     let scanned = 0;
+    let retainedInFlight = 0;
+
+    /** Whether this record may be dropped, counting a live claim as it goes. */
+    const isDroppable = (record: StateRecord | undefined, count: boolean): boolean => {
+      if (record === undefined || now - record.updatedAt <= maxAgeMillis) {
+        return false;
+      }
+      if (stateOf(record) === "claimed") {
+        const age = now - (claimedAtOf(record) ?? record.updatedAt);
+        if (age <= staleClaimMillis) {
+          if (count) {
+            retainedInFlight += 1;
+          }
+          return false;
+        }
+      }
+      return true;
+    };
+
     for (const key of keys) {
       if (scanned >= cap) {
         break;
       }
       scanned += 1;
-      const record = await stateStore.read(key);
-      if (record !== undefined && now - record.updatedAt > maxAgeMillis) {
+
+      // Unlocked first pass. It decides only whether this key is worth locking for,
+      // which is what keeps a sweep of a mostly-live store from paying a lock
+      // acquisition per record: the common answer is "not aged out, leave it".
+      if (!isDroppable(await stateStore.read(key), true)) {
+        continue;
+      }
+
+      const scope = dedupScopeOf(key);
+      if (scope === undefined) {
+        // A key from a previous layout version: unreachable by any current read, so
+        // there is no claim to race and no scope to lock on.
         await stateStore.delete(key);
         removed += 1;
+        continue;
       }
+
+      // Locked second pass, because a peer's `claim` takes this same lock and may
+      // have refreshed the record since the first read. Deciding once, outside the
+      // lock, would let a sweep delete a claim written microseconds earlier — and the
+      // concurrent redelivery would then read `fresh` and export a second time.
+      await withOptionalSessionLock(stateStore, scope, async (): Promise<void> => {
+        if (!isDroppable(await stateStore.read(key), false)) {
+          return;
+        }
+        await stateStore.delete(key);
+        removed += 1;
+      });
     }
-    return { removed, scanned };
+
+    return {
+      removed,
+      scanned,
+      ...(retainedInFlight === 0 ? {} : { retainedInFlight }),
+    };
   };
 
   return { checkAndMark, claim, commit, release, cleanup };

@@ -4,8 +4,11 @@ import { DEFAULT_PRIVACY_POLICY } from "../../src/privacy/policy.js";
 import { createPrivacyService } from "../../src/privacy/service.js";
 import {
   DELIVERY_COMPONENT_PATTERN,
+  MAX_DELIVERY_GAPS,
   providerDeliveryClaimSchema,
+  providerDeliveryGapsSchema,
   readDeliveryClaim,
+  readDeliveryGap,
   type ProviderAdapter,
   type ProviderContext,
   type ProviderDeliveryClaim,
@@ -510,10 +513,201 @@ describe("delivery identity: Antigravity", () => {
     ).toEqual(["2", "3"]);
   });
 
+  it("identifies the invocation edges from invocationNum, which is on the verified list", () => {
+    // `invocationNum` is present on every Antigravity payload and is one of the
+    // fields the integration task named as verified. A counter named for the
+    // invocation it numbers repeats on a redelivery and advances on a genuine
+    // second invocation, which is the same argument the tool pair rests on.
+    for (const hookEventName of ["PreInvocation", "PostInvocation"]) {
+      const claim = claimFor("antigravity", { ...base, hookEventName, agentVersion: "1.2.3" }).claim;
+      expect(claim?.components, hookEventName).toEqual(["2"]);
+      expect(claim?.evidence.join(" "), hookEventName).toContain("invocationNum");
+    }
+  });
+
+  it("keeps the two invocation edges distinct from each other and from the tool edges", () => {
+    const ids = createDeterministicIdGenerator();
+    const identityOf = (payload: Record<string, unknown>): string => {
+      const claim = claimFor("antigravity", payload).claim;
+      if (claim === undefined) {
+        throw new Error("expected a claim");
+      }
+      return resolveDeliveryIdentity({
+        ids,
+        providerId: "antigravity",
+        installationId: "install-1",
+        claim,
+      }).callbackId;
+    };
+
+    const callbackIds = new Set([
+      identityOf({ ...base, hookEventName: "PreInvocation" }),
+      identityOf({ ...base, hookEventName: "PostInvocation" }),
+      identityOf({ ...base, hookEventName: "PreToolUse", stepIdx: 0, toolName: "run_command" }),
+      identityOf({ ...base, hookEventName: "PostToolUse", stepIdx: 0, toolName: "run_command" }),
+    ]);
+    expect(callbackIds.size).toBe(4);
+  });
+
+  it("separates two invocations in one conversation", () => {
+    const ids = createDeterministicIdGenerator();
+    const claimAt = (invocationNum: number): ProviderDeliveryClaim => {
+      const claim = claimFor("antigravity", {
+        ...base,
+        invocationNum,
+        hookEventName: "PreInvocation",
+      }).claim;
+      if (claim === undefined) {
+        throw new Error("expected a claim");
+      }
+      return claim;
+    };
+    const at = (invocationNum: number): string =>
+      resolveDeliveryIdentity({
+        ids,
+        providerId: "antigravity",
+        installationId: "install-1",
+        claim: claimAt(invocationNum),
+      }).callbackId;
+
+    expect(at(2)).not.toBe(at(3));
+    // A redelivery repeats the counter, so it must recompute the same identity.
+    expect(at(2)).toBe(at(2));
+  });
+
   it("refuses Stop, whose only separating field is an unconfirmed reconstruction", () => {
+    // `invocationNum` would *look* like an identity here and would be worse than
+    // none: Stop can fire twice per invocation (idle, then fully idle), so keying on
+    // it would suppress the second, real firing.
     expect(
       claimFor("antigravity", { ...base, hookEventName: "Stop", fullyIdle: true }).claim,
     ).toBeUndefined();
+  });
+});
+
+describe("delivery identity: per-callback gap diagnostics", () => {
+  /**
+   * The callbacks each adapter identifies whenever its payload is well formed, so
+   * they need no gap entry. Everything else must have one — that is the assertion.
+   *
+   * Written out rather than derived: deriving it from the resolver would make the
+   * exhaustiveness check tautological, and the point is to notice a hook event added
+   * without anyone deciding its delivery status.
+   */
+  const ALWAYS_IDENTIFIED: Readonly<Record<string, readonly string[]>> = {
+    "claude-code": [],
+    codex: [],
+    cursor: [
+      "sessionStart",
+      "sessionEnd",
+      "beforeSubmitPrompt",
+      "afterAgentResponse",
+      "stop",
+      "beforeToolUse",
+      "afterToolUse",
+      "toolUseFailed",
+      "subagentStart",
+      "subagentStop",
+    ],
+    "gemini-cli": [],
+    antigravity: ["PreInvocation", "PostInvocation", "PreToolUse", "PostToolUse"],
+  };
+
+  const eventNamesFor = async (providerId: string): Promise<readonly string[]> => {
+    switch (providerId) {
+      case "claude-code":
+        return (await import("../../src/providers/claude/schema.js")).CLAUDE_HOOK_EVENT_NAMES;
+      case "codex":
+        return (await import("../../src/providers/codex/payload.js")).CODEX_HOOK_EVENT_NAMES;
+      case "cursor":
+        return (await import("../../src/providers/cursor/payload.js")).CURSOR_HOOK_EVENT_NAMES;
+      case "gemini-cli":
+        return (await import("../../src/providers/gemini/schema.js")).GEMINI_HOOK_EVENT_NAMES;
+      default:
+        return (await import("../../src/providers/antigravity/payload.js"))
+          .ANTIGRAVITY_HOOK_EVENT_NAMES;
+    }
+  };
+
+  for (const providerId of ["claude-code", "codex", "cursor", "gemini-cli", "antigravity"]) {
+    it(`explains every ${providerId} callback it cannot identify`, async () => {
+      const adapter = adapterFor(providerId);
+      const gaps = adapter.deliveryGaps ?? {};
+      const alwaysIdentified = ALWAYS_IDENTIFIED[providerId] ?? [];
+
+      for (const name of await eventNamesFor(providerId)) {
+        if (alwaysIdentified.includes(name)) {
+          continue;
+        }
+        // Every remaining callback either has no identity or has one only when an
+        // optional field is present. Both cases end in the same diagnostic, so both
+        // owe an operator a reason naming the field that would close the gap.
+        expect(readDeliveryGap(adapter, name), `${providerId} ${name}`).toBeDefined();
+      }
+
+      // And nothing is documented that the adapter does not recognize, which would
+      // be a gap table drifting away from the protocol it describes.
+      const recognized = new Set(await eventNamesFor(providerId));
+      for (const documented of Object.keys(gaps)) {
+        expect(recognized.has(documented), `${providerId} ${documented}`).toBe(true);
+      }
+    });
+  }
+
+  it("declares a gap table even for the adapter that identifies nothing", () => {
+    // Especially for that one: `provider-declares-none` is where a bare reason code
+    // is least useful, because the answer is a property of the protocol and only the
+    // adapter can state it.
+    const gemini = adapterFor("gemini-cli");
+    expect(gemini.capabilities.deliveryIdentifier).toBe("none");
+    expect(readDeliveryGap(gemini, "SessionStart")).toContain("resume");
+    expect(readDeliveryGap(gemini, "BeforeTool")).toContain("tool-call id");
+  });
+
+  it("refuses a gap reason that carries a filesystem path or a newline", () => {
+    // The same containment as a component guard, for the opposite purpose: a
+    // component must be identifier-shaped, a reason must be one line of prose that
+    // cannot smuggle a home directory into stderr.
+    const adapter: ProviderAdapter = {
+      ...createFixtureAdapter(),
+      deliveryGaps: {
+        leaky: "no id; see /home/someone/private-repo/notes.md",
+        multiline: "no id;\nand here is a payload dump",
+        fine: "no request id in this protocol version",
+      },
+    };
+    expect(readDeliveryGap(adapter, "leaky")).toBeUndefined();
+    expect(readDeliveryGap(adapter, "multiline")).toBeUndefined();
+    expect(readDeliveryGap(adapter, "fine")).toBe("no request id in this protocol version");
+  });
+
+  it("does not read an inherited property when the event name is a prototype key", () => {
+    // The event name comes from a payload, and `__proto__` is a string like any
+    // other. A bare property read would return Object.prototype here.
+    const adapter: ProviderAdapter = { ...createFixtureAdapter(), deliveryGaps: { real: "no id" } };
+    for (const name of ["__proto__", "constructor", "toString", "hasOwnProperty"]) {
+      expect(readDeliveryGap(adapter, name), name).toBeUndefined();
+    }
+  });
+
+  it("treats an adapter with no gap table as simply having nothing to add", () => {
+    expect(readDeliveryGap(createFixtureAdapter(), "tool")).toBeUndefined();
+    expect(readDeliveryGap(adapterFor("claude-code"), undefined)).toBeUndefined();
+    // An event the adapter does not recognize is not an error either.
+    expect(readDeliveryGap(adapterFor("claude-code"), "NotAnEvent")).toBeUndefined();
+  });
+
+  it("caps how many gaps one adapter may declare", () => {
+    expect(
+      providerDeliveryGapsSchema.safeParse(
+        Object.fromEntries(
+          Array.from({ length: MAX_DELIVERY_GAPS + 1 }, (_, index) => [
+            `Event${String(index)}`,
+            "no id",
+          ]),
+        ),
+      ).success,
+    ).toBe(false);
   });
 });
 

@@ -17,7 +17,7 @@ import {
   type ProviderParseResult,
 } from "../adapter.js";
 import { createEventFactory } from "../builder.js";
-import { antigravityDeliveryIdentity } from "./delivery.js";
+import { ANTIGRAVITY_DELIVERY_GAPS, antigravityDeliveryIdentity } from "./delivery.js";
 import {
   ANTIGRAVITY_SUBAGENT_TOOL_NAME,
   antigravityHookPayloadSchema,
@@ -239,6 +239,7 @@ export const createAntigravityAdapter = (
     detect,
     identify,
     deliveryIdentity: antigravityDeliveryIdentity,
+    deliveryGaps: ANTIGRAVITY_DELIVERY_GAPS,
     parse,
     hookResponse,
   };

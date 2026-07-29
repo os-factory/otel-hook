@@ -244,11 +244,17 @@ describe("hook runtime: delivery deduplication", () => {
 
     expect(first.duplicateDelivery).toBe(false);
     expect(second.duplicateDelivery).toBe(false);
-    expect(first.delivery).toEqual({
+    const { detail, ...report } = first.delivery;
+    expect(report).toEqual({
       deduplicated: false,
       reason: "callback-not-identifiable",
       capability: "partial",
+      // Named, so a host auditing its own coverage knows which callback is
+      // uncovered and why. Coverage is per callback; the provider id and the
+      // capability are the same for every one of them and so identify nothing.
+      sourceEventName: "Stop",
     });
+    expect(detail).toContain("stop_hook_active");
     expect(first.ingest.identity?.invocationId).not.toBe(second.ingest.identity?.invocationId);
   });
 
