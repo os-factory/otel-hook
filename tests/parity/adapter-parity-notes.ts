@@ -40,9 +40,7 @@ export type AdapterParityNoteKind =
   /** The adapter cannot know this without cross-invocation state it must not hold. */
   | "stateless-adapter"
   /** The fixture and the adapter disagree about a protocol field name. */
-  | "contract-mismatch"
-  /** The two sides of the comparison consume different envelopes. */
-  | "envelope-bridge";
+  | "contract-mismatch";
 
 export type AdapterParityNote = {
   readonly id: string;
@@ -122,23 +120,6 @@ export const ADAPTER_PARITY_NOTES: readonly AdapterParityNote[] = [
       "context_tokens_after, estimated_tokens_removed, or a dropped-message count — and no hook event in the " +
       "protocol carries a token counter at all. Asserted in tests/providers/claude/compaction.test.ts; see " +
       "docs/claude-code-usage-contract.md (findings 1 and 6).",
-  },
-  {
-    id: "ADAPTER-NOTE-005",
-    providerId: "cursor",
-    kind: "envelope-bridge",
-    title: "Cursor parity needs an envelope bridge on our side of the comparison",
-    modelSupports:
-      "The canonical model is envelope-agnostic; the comparison mapper reads Cursor's real snake_case hook " +
-      "JSON directly.",
-    adapterEmits:
-      "The shipped Cursor adapter targets the payload contract in src/providers/cursor/payload.ts, which that " +
-      "file documents as synthetic: camelCase keys, a required timestampMillis, and per-event required " +
-      "fields. A real-shaped fixture does not validate against it.",
-    resolution:
-      "bridgeCursorParityPayload renames the envelope (and performs the one documented seconds-to-milliseconds " +
-      "conversion) without inventing semantic fields. Every Cursor parity claim that depends on the bridge says " +
-      "so. Removing the bridge requires the provider owner to replace the synthetic contract with a verified one.",
   },
 ];
 

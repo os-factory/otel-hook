@@ -76,16 +76,28 @@ const runRegistration = async (
 const readJson = async (filePath: string): Promise<Record<string, unknown>> =>
   JSON.parse(await readFile(filePath, "utf8")) as Record<string, unknown>;
 
+/**
+ * Every managed command in a hook document, across both shapes this tool writes:
+ * the nested matcher-group form (Claude Code, Codex, Gemini CLI) and the flat
+ * one-entry-per-event form (Cursor, Antigravity).
+ */
 const commandsIn = (document: Record<string, unknown>): readonly string[] => {
-  const hooks = document.hooks as Record<string, readonly { hooks: readonly { command: string }[] }[]>;
-  return Object.values(hooks ?? {}).flatMap((groups) =>
-    groups.flatMap((group) => group.hooks.map((hook) => hook.command)),
+  const hooks = (document.hooks ?? {}) as Record<string, readonly Record<string, unknown>[]>;
+  return Object.values(hooks).flatMap((entries) =>
+    entries.flatMap((entry) => {
+      const nested = entry.hooks;
+      if (Array.isArray(nested)) {
+        return (nested as readonly { command: string }[]).map((hook) => hook.command);
+      }
+      return typeof entry.command === "string" ? [entry.command] : [];
+    }),
   );
 };
 
 const VERIFIED_PROVIDERS = [
   { providerId: "claude-code", segments: [".claude", "settings.json"] },
   { providerId: "codex", segments: [".codex", "hooks.json"] },
+  { providerId: "cursor", segments: [".cursor", "hooks.json"] },
   { providerId: "gemini-cli", segments: [".gemini", "settings.json"] },
 ] as const;
 
@@ -281,17 +293,67 @@ describe("otel-hook diagnose", () => {
   });
 });
 
-describe("otel-hook setup: providers this repository will not guess for", () => {
-  it("refuses cursor and names the evidence blocker", async () => {
+describe("otel-hook setup: cursor's own document shape", () => {
+  it("writes the documented flat shape, and reverses it exactly", async () => {
     const roots = await withRoots();
-    const result = await runRegistration(["setup", "--provider", "cursor"], roots);
+    const hooksPath = path.join(roots.project, ".cursor", "hooks.json");
 
-    expect(result.code).toBe(1);
-    expect(result.report.outcomes[0]?.status).toBe("unsupported");
-    expect(result.report.outcomes[0]?.problems.join(" ")).toContain("synthetic");
-    await expect(readFile(path.join(roots.project, ".cursor", "hooks.json"), "utf8")).rejects.toThrow();
+    const result = await runRegistration(["setup", "--provider", "cursor"], roots);
+    expect(result.code).toBe(0);
+    expect(result.report.outcomes[0]?.status).toBe("applied");
+
+    const document = await readJson(hooksPath);
+    expect(document.version).toBe(1);
+    const hooks = document.hooks as Record<string, readonly Record<string, unknown>[]>;
+    // A flat list per event, not a matcher group: an entry with a `command`, not
+    // an entry with a nested `hooks` array.
+    expect(hooks.preToolUse?.[0]).toEqual({
+      type: "command",
+      command: "otel-hook run --provider cursor",
+    });
+    // The pairs that would report one shell or MCP call twice are not registered.
+    for (const event of [
+      "beforeShellExecution",
+      "afterShellExecution",
+      "beforeMCPExecution",
+      "afterMCPExecution",
+      "afterAgentResponse",
+    ]) {
+      expect(Object.keys(hooks), event).not.toContain(event);
+    }
+
+    const removed = await runRegistration(["uninstall", "--provider", "cursor"], roots);
+    expect(removed.code).toBe(0);
+    // Setup created the file, so uninstall leaves nothing behind — not even the
+    // version key it had to add.
+    expect(await readFile(hooksPath, "utf8")).toBe("{}\n");
   });
 
+  it("preserves a developer's own cursor hooks and their version", async () => {
+    const roots = await withRoots();
+    const hooksPath = path.join(roots.project, ".cursor", "hooks.json");
+    await mkdir(path.dirname(hooksPath), { recursive: true });
+    const original = `${JSON.stringify(
+      {
+        version: 1,
+        hooks: { preToolUse: [{ command: "./scripts/audit.sh" }] },
+      },
+      null,
+      2,
+    )}\n`;
+    await writeFile(hooksPath, original, "utf8");
+
+    await runRegistration(["setup", "--provider", "cursor"], roots);
+    const merged = await readJson(hooksPath);
+    expect(commandsIn(merged)).toContain("./scripts/audit.sh");
+    expect(commandsIn(merged)).toContain("otel-hook run --provider cursor");
+
+    await runRegistration(["uninstall", "--provider", "cursor"], roots);
+    expect(await readFile(hooksPath, "utf8")).toBe(original);
+  });
+});
+
+describe("otel-hook setup: providers this repository will not guess for", () => {
   it("refuses antigravity without a path, and accepts one the caller supplies", async () => {
     const roots = await withRoots();
     const refused = await runRegistration(["setup", "--provider", "antigravity"], roots);

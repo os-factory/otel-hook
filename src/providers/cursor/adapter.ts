@@ -1,9 +1,7 @@
 import { createErrorInfo } from "../../errors/index.js";
 import type { EventOutcome, ModelDescriptor } from "../../model/events.js";
 import { identityClaimSchema, type IdentityClaim } from "../../model/identity.js";
-import { invocationIdSchema } from "../../model/primitives.js";
 import { deriveWorkspaceIdentity } from "../../privacy/workspace.js";
-import type { IdGenerator } from "../../runtime/ports.js";
 import {
   asProviderId,
   providerDetectionSchema,
@@ -23,25 +21,28 @@ import {
 import { createEventFactory } from "../builder.js";
 import { CURSOR_DELIVERY_GAPS, cursorDeliveryIdentity } from "./delivery.js";
 import {
+  CURSOR_DECISION_EVENTS,
   CURSOR_PROVIDER_ID,
-  normalizeCursorPayload,
-  type CursorModelInput,
+  recognizeCursorPayload,
   type CursorPayload,
 } from "./payload.js";
+import { normalizeCursorUsage } from "./usage.js";
 
-/** Hook event names whose protocol expects a decision response on stdout. */
-const DECISION_EVENT_NAMES: ReadonlySet<string> = new Set([
-  "beforeSubmitPrompt",
-  "before_user_prompt",
-  "beforeToolUse",
-  "before_tool_use",
-  "beforeShellExecution",
-  "before_shell_execution",
-  "beforeMCPExecution",
-  "before_mcp_execution",
-  "beforeReadFile",
-  "before_read_file",
-]);
+/**
+ * Provider adapter for Cursor's agent hooks.
+ *
+ * `./payload.ts` carries the full provenance note: the contract is derived from
+ * Cursor's published hooks reference plus four real redacted capture runs, and
+ * this module maps only what those establish. Three lifecycle decisions follow
+ * from that evidence rather than from convenience, and each is stated where it
+ * is made below:
+ *
+ * - `generation.end` comes from `stop`, not `afterAgentResponse`.
+ * - The shell and MCP tool ends report outcome `unknown`, because Cursor sends
+ *   no exit status on those callbacks.
+ * - Both subagent callbacks are ignored, because `subagentStop` carries no
+ *   subagent identifier to pair with `subagentStart`.
+ */
 
 export const CURSOR_CAPABILITIES: ProviderCapabilities = Object.freeze({
   lifecycleEvents: Object.freeze([
@@ -52,188 +53,215 @@ export const CURSOR_CAPABILITIES: ProviderCapabilities = Object.freeze({
     "generation.end",
     "tool.start",
     "tool.end",
-    "subagent.start",
-    "subagent.end",
     "compaction.performed",
   ] as const),
   usageTemporality: "delta",
-  // Cursor hooks carry no authoritative token or cache breakdown: every usage
-  // capability below is declared false rather than guessed from a partial total.
-  reportsCachedInput: false,
+  // Cursor's `cache_read_tokens` is read as a subset of `input_tokens`; see
+  // `./usage.ts` for the captured evidence and the guard when a payload
+  // contradicts it.
+  reportsCachedInput: true,
+  // `cache_write_tokens` is reported by Cursor but its accounting is
+  // undocumented, so it is surfaced as an extension rather than folded into a
+  // canonical total. See `./usage.ts`.
   reportsCacheCreation: false,
   cacheCreationAccounting: "not-reported",
   reportsReasoningOutput: false,
   reportsProviderTotal: false,
   reportsCost: false,
-  emitsSubagentEvents: true,
+  // `subagentStop` carries no subagent id, so no pairable subagent lifecycle can
+  // be produced. See the `ignored` branch below.
+  emitsSubagentEvents: false,
   emitsCompactionEvents: true,
   requiresHookResponse: true,
-  // Tool, generation, subagent, and session-lifecycle callbacks carry a
-  // replay-stable id; the dedicated shell/MCP/file callbacks and `preCompact` do
-  // not. See `./delivery.ts` for which and why.
+  // Tool and generation callbacks carry a replay-stable id; the dedicated
+  // shell/MCP/file callbacks and `preCompact` do not. See `./delivery.ts`.
   deliveryIdentifier: "partial",
 });
 
-/** Sentinel used when a payload carries no model information at all. */
+/** Sentinel used when a payload names no model at all. */
 const UNKNOWN_MODEL: ModelDescriptor = Object.freeze({ modelId: "unknown" });
 
-const toModelDescriptor = (model: CursorModelInput | undefined): ModelDescriptor =>
-  model === undefined
-    ? UNKNOWN_MODEL
-    : { modelId: model.name, ...(model.provider === undefined ? {} : { vendor: model.provider }) };
+/**
+ * Cursor reports a model *variant* in `model` and its base in `model_id` — the
+ * captures show `model: "composer-2.5-fast"` beside `model_id: "composer-2.5"`.
+ * The variant is the identifier of what ran, so it becomes `modelId`; the base
+ * becomes `family`, and is dropped when it merely repeats the variant. Vendor is
+ * never guessed: Cursor names no vendor anywhere in the payload.
+ */
+const toModelDescriptor = (payload: CursorPayload): ModelDescriptor => {
+  const modelId = payload.model;
+  if (modelId === undefined || modelId.length === 0) {
+    return UNKNOWN_MODEL;
+  }
+  const family = payload.model_id;
+  return {
+    modelId,
+    ...(family === undefined || family.length === 0 || family === modelId ? {} : { family }),
+  };
+};
 
-const STOP_REASON_TO_OUTCOME: Readonly<Record<"completed" | "cancelled" | "error" | "timeout", EventOutcome>> =
-  Object.freeze({
-    completed: "ok",
-    cancelled: "cancelled",
-    error: "error",
-    timeout: "timeout",
-  });
+const SESSION_END_REASONS: Readonly<
+  Record<string, "completed" | "aborted" | "error" | "timeout" | "unknown">
+> = Object.freeze({
+  completed: "completed",
+  aborted: "aborted",
+  error: "error",
+  // Both documented "the window/user closed it" reasons are an abort from the
+  // agent's point of view: work stopped without finishing.
+  window_close: "aborted",
+  user_close: "aborted",
+});
+
+/** `stop.status` and `subagentStop.status` share this vocabulary. */
+const STOP_STATUS_TO_OUTCOME: Readonly<Record<string, EventOutcome>> = Object.freeze({
+  completed: "ok",
+  aborted: "cancelled",
+  error: "error",
+});
+
+const COMPACT_TRIGGERS: Readonly<Record<string, "automatic" | "manual">> = Object.freeze({
+  auto: "automatic",
+  manual: "manual",
+});
 
 /**
- * Derive privacy-safe workspace identity from Cursor's observed workspace
- * roots. Never falls back to a process cwd: an absent or empty list simply
- * contributes no workspace claim, letting the core's `unknown` fallback apply.
+ * Derive privacy-safe workspace identity from the payload's own directory facts.
+ *
+ * `workspace_roots` first, `cwd` only as a fallback — and never a process cwd:
+ * an absent or empty list simply contributes no workspace claim, letting the
+ * core's `unknown` fallback apply. The CLI captures report `cwd: ""`, which is
+ * treated as absent rather than as the filesystem root.
  */
 const deriveWorkspace = (
   context: ProviderContext,
-  workspaceRoots: readonly string[] | undefined,
+  payload: CursorPayload,
 ): ReturnType<typeof deriveWorkspaceIdentity> | undefined => {
-  if (workspaceRoots === undefined || workspaceRoots.length === 0) {
-    return undefined;
+  const roots = (payload.workspace_roots ?? []).filter((root) => root.length > 0);
+  if (roots.length === 1) {
+    return deriveWorkspaceIdentity(context.privacy, {
+      kind: "working-directory",
+      absolutePath: roots[0] ?? "",
+    });
   }
-  if (workspaceRoots.length === 1) {
-    const [root] = workspaceRoots;
-    return deriveWorkspaceIdentity(context.privacy, { kind: "working-directory", absolutePath: root ?? "" });
+  if (roots.length > 1) {
+    return deriveWorkspaceIdentity(context.privacy, {
+      kind: "explicit",
+      value: [...roots].sort().join("\n"),
+    });
   }
-  const sortedRoots = [...workspaceRoots].sort();
-  return deriveWorkspaceIdentity(context.privacy, { kind: "explicit", value: sortedRoots.join("\n") });
+  if (payload.cwd !== undefined && payload.cwd.length > 0) {
+    return deriveWorkspaceIdentity(context.privacy, {
+      kind: "working-directory",
+      absolutePath: payload.cwd,
+    });
+  }
+  return undefined;
 };
 
 /**
- * Stable per-call uniqueness fed into the invocation id hash. Never derived
- * from process state or wall-clock reads: every value here comes from the
- * payload itself, so replaying the same payload reproduces the same id.
+ * Stable per-call uniqueness fed into the invocation id hash. Every value comes
+ * from the payload itself, never from process state, so replaying a payload
+ * reproduces the same id.
  */
 const invocationDiscriminator = (payload: CursorPayload): string | undefined => {
-  switch (payload.hookEventName) {
+  switch (payload.hook_event_name) {
     case "sessionStart":
     case "sessionEnd":
       return undefined;
-    case "beforeSubmitPrompt":
-      return payload.turnIndex === undefined ? payload.generationId : `turn:${String(payload.turnIndex)}`;
-    case "afterAgentResponse":
-    case "stop":
-    case "afterAgentThought":
-      return payload.generationId;
-    case "beforeToolUse":
-    case "afterToolUse":
-    case "toolUseFailed":
-      return payload.toolCallId;
+    case "preToolUse":
+    case "postToolUse":
+    case "postToolUseFailure":
+      return payload.tool_use_id ?? payload.tool_name;
     case "beforeShellExecution":
-      return payload.toolCallId ?? `before:${payload.command}`;
     case "afterShellExecution":
-      return payload.toolCallId ?? `after:${payload.command}`;
+      return payload.generation_id;
     case "beforeMCPExecution":
-      return payload.toolCallId ?? `before:${payload.server}:${payload.tool}`;
     case "afterMCPExecution":
-      return payload.toolCallId ?? `after:${payload.server}:${payload.tool}`;
+      return payload.tool_name;
+    case "beforeReadFile":
+    case "afterFileEdit":
+      return payload.generation_id;
     case "subagentStart":
+      return payload.subagent_id;
     case "subagentStop":
-      return payload.subagentInvocationId;
+      return payload.subagent_type;
     case "preCompact":
       return payload.trigger;
-    case "afterFileEdit":
-      return payload.toolCallId ?? `edit:${payload.filePath}`;
-    case "beforeReadFile":
-      return payload.toolCallId ?? `read:${payload.filePath}`;
+    default:
+      return payload.generation_id;
   }
 };
-
-type ToolCorrelation = "explicit" | "matched" | "uncorrelated";
 
 /**
- * Resolve the tool call a dedicated "after" shell/MCP hook belongs to.
+ * A tool call id for a callback that carries none.
  *
- * Cursor's dedicated shell/MCP callbacks do not always carry the same call id
- * across the before/after pair. When it is absent, correlation is attempted
- * against the candidate open invocations the payload itself reports; a match
- * is only trusted when exactly one candidate is compatible. Zero or multiple
- * candidates stay uncorrelated rather than guessing.
+ * `beforeShellExecution`/`afterShellExecution` and the MCP pair report no
+ * `tool_use_id`, so the pair is joined on the fields that *are* stable across
+ * it: the generation and the command (or server-qualified tool name). Both
+ * halves of a pair derive the same id from the same payload facts, which is what
+ * lets the span correlator match them — and none of it is a clock or process
+ * read, so a replay derives the same id again.
  */
-const resolveShellToolCallId = (
-  payload: Extract<CursorPayload, { hookEventName: "afterShellExecution" }>,
-  ids: IdGenerator,
+const derivedToolCallId = (
+  context: ProviderContext,
   sessionId: string,
-): { readonly toolCallId: string; readonly correlation: ToolCorrelation } => {
-  if (payload.toolCallId !== undefined) {
-    return { toolCallId: payload.toolCallId, correlation: "explicit" };
-  }
-  const candidates = (payload.openInvocations ?? []).filter(
-    (candidate) => candidate.command === payload.command,
-  );
-  if (candidates.length === 1) {
-    return { toolCallId: candidates[0]?.toolCallId ?? "", correlation: "matched" };
-  }
-  return {
-    toolCallId: ids.newOpaqueId([sessionId, "shell", payload.command, String(payload.timestampMillis)]),
-    correlation: "uncorrelated",
-  };
+  parts: readonly string[],
+): string => context.ids.newOpaqueId([sessionId, ...parts]);
+
+/** The validated payload, or `undefined` for anything this adapter cannot map. */
+const asModelled = (payload: unknown): CursorPayload | undefined => {
+  const recognized = recognizeCursorPayload(payload);
+  return recognized?.status === "modelled" ? recognized.payload : undefined;
 };
 
-const resolveMcpToolCallId = (
-  payload: Extract<CursorPayload, { hookEventName: "afterMCPExecution" }>,
-  ids: IdGenerator,
-  sessionId: string,
-): { readonly toolCallId: string; readonly correlation: ToolCorrelation } => {
-  if (payload.toolCallId !== undefined) {
-    return { toolCallId: payload.toolCallId, correlation: "explicit" };
-  }
-  const candidates = (payload.openInvocations ?? []).filter(
-    (candidate) => candidate.server === payload.server && candidate.tool === payload.tool,
-  );
-  if (candidates.length === 1) {
-    return { toolCallId: candidates[0]?.toolCallId ?? "", correlation: "matched" };
-  }
-  return {
-    toolCallId: ids.newOpaqueId([sessionId, "mcp", payload.server, payload.tool, String(payload.timestampMillis)]),
-    correlation: "uncorrelated",
-  };
-};
+/** Longest detection reason the contract accepts. */
+const MAX_DETECTION_REASON_LENGTH = 160;
+
+const bounded = (reason: string): string =>
+  reason.length <= MAX_DETECTION_REASON_LENGTH
+    ? reason
+    : `${reason.slice(0, MAX_DETECTION_REASON_LENGTH - 1)}…`;
 
 export type CursorAdapterOptions = {
   readonly version?: string;
 };
 
-/**
- * Provider adapter for Cursor's coding-agent hooks.
- *
- * See `./payload.ts` for the full provenance note on the synthetic payload
- * contract this adapter interprets.
- */
+export const CURSOR_ADAPTER_VERSION = "2.0.0";
+
 export const createCursorAdapter = (options: CursorAdapterOptions = {}): ProviderAdapter => {
   const id = asProviderId(CURSOR_PROVIDER_ID);
-  const version = options.version ?? "1.0.0";
+  const version = options.version ?? CURSOR_ADAPTER_VERSION;
   const capabilities = CURSOR_CAPABILITIES;
 
   const detect = (input: ProviderDetectionInput): ProviderDetection => {
-    const normalized = normalizeCursorPayload(input.payload);
-    if (normalized === undefined) {
-      return unknownDetection(["payload does not match the cursor hook contract (current or legacy)"]);
+    const recognized = recognizeCursorPayload(input.payload);
+    if (recognized === undefined) {
+      return unknownDetection(["payload does not match the cursor hook contract"]);
     }
-    const reasons = normalized.isLegacy
-      ? [
-          `payload.hook_event_name "${normalized.rawEventName}" recognized as a legacy alias for "${normalized.payload.hookEventName}"`,
-        ]
-      : [`payload.hookEventName "${normalized.rawEventName}" recognized`];
+    // Detection reasons are bounded at 160 characters, and both branches below
+    // interpolate a provider-supplied string, so each is trimmed to fit rather
+    // than thrown away by the schema.
+    if (recognized.status === "unmodelled") {
+      return unknownDetection([
+        bounded(`cursor documents "${recognized.eventName}" but this adapter does not model it`),
+      ]);
+    }
+    if (recognized.status === "invalid") {
+      return unknownDetection([
+        bounded(
+          `cursor "${recognized.eventName}" payload does not satisfy its contract: ${recognized.detail}`,
+        ),
+      ]);
+    }
+    const { payload } = recognized;
     return providerDetectionSchema.parse({
       providerId: id,
       confidence: "exact",
-      reasons,
-      ...(normalized.payload.agentVersion === undefined
+      reasons: [`payload.hook_event_name "${payload.hook_event_name}" recognized`],
+      ...(payload.cursor_version === undefined || payload.cursor_version.length === 0
         ? {}
-        : { providerVersion: normalized.payload.agentVersion }),
-      sourceEventName: normalized.rawEventName,
+        : { providerVersion: payload.cursor_version }),
+      sourceEventName: payload.hook_event_name,
     });
   };
 
@@ -241,29 +269,32 @@ export const createCursorAdapter = (options: CursorAdapterOptions = {}): Provide
     input: ProviderIdentityInput,
     context: ProviderContext,
   ): readonly IdentityClaim[] => {
-    const normalized = normalizeCursorPayload(input.payload);
-    if (normalized === undefined) {
+    const payload = asModelled(input.payload);
+    if (payload === undefined) {
       return [];
     }
-    const { payload } = normalized;
-    const workspace = deriveWorkspace(context, payload.workspaceRoots);
+    const workspace = deriveWorkspace(context, payload);
     const discriminator = invocationDiscriminator(payload);
+    // Cursor sends no timestamp on any hook — see `./payload.ts`. The clock is
+    // the only available reading, as it is for Claude Code.
+    const occurredAt = context.clock.now();
     const invocationId = context.ids.newInvocationId({
       providerId: id,
-      sessionId: payload.conversationId,
-      sourceEventName: payload.hookEventName,
-      occurredAt: payload.timestampMillis,
+      sessionId: payload.conversation_id,
+      sourceEventName: payload.hook_event_name,
+      occurredAt,
       ...(discriminator === undefined ? {} : { discriminator }),
     });
     const claim = identityClaimSchema.parse({
       source: `adapter:${id}`,
       confidence: input.detection.confidence,
       fields: {
-        // Cursor's own conversation id is used exactly as reported: never
+        // Cursor's own conversation id, used exactly as reported: never
         // normalized, parent/child matched, or substituted for a derived value.
-        sessionId: payload.conversationId,
+        // `session_id` repeats it in every capture and is not preferred over it.
+        sessionId: payload.conversation_id,
         invocationId,
-        startedAt: payload.timestampMillis,
+        startedAt: occurredAt,
         ...(workspace === undefined ? {} : { workspace }),
       },
     });
@@ -271,46 +302,72 @@ export const createCursorAdapter = (options: CursorAdapterOptions = {}): Provide
   };
 
   const parse = (input: ProviderParseInput, context: ProviderContext): ProviderParseResult => {
-    const normalized = normalizeCursorPayload(input.payload);
-    if (normalized === undefined) {
+    const recognized = recognizeCursorPayload(input.payload);
+    if (recognized === undefined) {
       return {
         status: "failed",
         error: createErrorInfo({
           code: "invalid-input",
           phase: "parsing",
-          detail: "payload does not match the cursor hook contract (current or legacy)",
+          detail: "payload does not match the cursor hook contract",
+        }),
+      };
+    }
+    if (recognized.status === "unmodelled") {
+      return {
+        status: "ignored",
+        reason: `cursor "${recognized.eventName}" is not modelled: ${recognized.reason}`,
+      };
+    }
+    if (recognized.status === "invalid") {
+      return {
+        status: "failed",
+        error: createErrorInfo({
+          code: "invalid-input",
+          phase: "parsing",
+          detail: `cursor "${recognized.eventName}" payload is malformed (${recognized.detail})`,
         }),
       };
     }
 
-    const { payload, isLegacy, rawEventName } = normalized;
-    const warnings: string[] = [];
-    if (isLegacy) {
-      warnings.push(`legacy event name "${rawEventName}" normalized to "${payload.hookEventName}"`);
-    }
+    const { payload } = recognized;
 
-    if (payload.hookEventName === "stop" && payload.generationCompleted) {
-      return {
-        status: "ignored",
-        reason: "generation outcome already reported by afterAgentResponse",
-      };
-    }
-
-    if (payload.hookEventName === "afterAgentThought") {
+    if (payload.hook_event_name === "afterAgentResponse") {
       return {
         status: "ignored",
         reason:
-          "afterAgentThought is a reasoning notification, not a generation lifecycle event; " +
-          "no canonical event type represents it and thought text is never exported",
+          "the generation's terminal outcome is reported from stop, which carries a status field and the " +
+          "identical token snapshot (captured: 43859/1076/28384/0 on both callbacks of one generation); " +
+          "emitting generation.end from both would double-count usage, and this adapter holds no " +
+          "cross-invocation state to deduplicate them",
       };
     }
 
-    if (payload.hookEventName === "beforeReadFile") {
+    if (payload.hook_event_name === "afterAgentThought") {
       return {
         status: "ignored",
         reason:
-          "beforeReadFile has no corresponding completion callback in the cursor hook protocol; " +
-          "emitting tool.start here would leave a tool lifecycle that never closes",
+          "afterAgentThought is a reasoning notification, not a generation lifecycle event; no canonical " +
+          "event type represents it and thought text is never exported",
+      };
+    }
+
+    if (payload.hook_event_name === "beforeReadFile") {
+      return {
+        status: "ignored",
+        reason:
+          "beforeReadFile has no completion callback in the cursor hook protocol, so emitting tool.start " +
+          "here would leave a tool lifecycle that never closes",
+      };
+    }
+
+    if (payload.hook_event_name === "subagentStart" || payload.hook_event_name === "subagentStop") {
+      return {
+        status: "ignored",
+        reason:
+          "cursor's subagentStop payload carries no subagent identifier — the reference gives subagent_id to " +
+          "subagentStart only — so the two callbacks cannot be paired; emitting subagent.start alone would " +
+          "leave a delegation that never closes, and minting an id for the end would produce an unpairable one",
       };
     }
 
@@ -319,299 +376,362 @@ export const createCursorAdapter = (options: CursorAdapterOptions = {}): Provide
       sequenceBase: input.sequenceBase,
       context,
     });
-    const occurredAt = payload.timestampMillis;
+    const warnings: string[] = [];
     const sessionId = input.identity.sessionId;
+    const model = toModelDescriptor(payload);
 
-    switch (payload.hookEventName) {
+    switch (payload.hook_event_name) {
       case "sessionStart":
         factory.build({
           type: "session.start",
-          sessionKind: payload.sessionKind ?? "unknown",
-          ...(payload.agentName === undefined ? {} : { agentName: payload.agentName }),
-          ...(payload.agentVersion === undefined ? {} : { agentVersion: payload.agentVersion }),
-          ...(payload.model === undefined ? {} : { model: toModelDescriptor(payload.model) }),
-          occurredAt,
+          // A background agent runs unattended; an interactive session is the
+          // only other state Cursor reports here.
+          sessionKind:
+            payload.is_background_agent === undefined
+              ? "unknown"
+              : payload.is_background_agent
+                ? "non-interactive"
+                : "interactive",
+          agentName: "cursor",
+          ...(payload.cursor_version === undefined || payload.cursor_version.length === 0
+            ? {}
+            : { agentVersion: payload.cursor_version }),
+          ...(model === UNKNOWN_MODEL ? {} : { model }),
+          ...(payload.composer_mode === undefined
+            ? {}
+            : { extensions: { "cursor.composer_mode": payload.composer_mode } }),
         });
         break;
 
       case "sessionEnd":
         factory.build({
           type: "session.end",
-          reason: payload.reason ?? "unknown",
-          ...(payload.durationMillis === undefined ? {} : { durationMillis: payload.durationMillis }),
-          occurredAt,
+          reason:
+            payload.reason === undefined ? "unknown" : (SESSION_END_REASONS[payload.reason] ?? "unknown"),
+          ...(payload.duration_ms === undefined ? {} : { durationMillis: payload.duration_ms }),
+          ...(payload.final_status === undefined
+            ? {}
+            : { extensions: { "cursor.final_status": payload.final_status } }),
         });
         break;
 
-      case "beforeSubmitPrompt":
+      case "beforeSubmitPrompt": {
         factory.build({
           type: "prompt.submitted",
-          promptSource: payload.promptSource ?? "unknown",
-          ...(payload.turnIndex === undefined ? {} : { turnIndex: payload.turnIndex }),
-          ...(payload.promptText === undefined
+          // Cursor reports no prompt provenance. `user` would be a guess: this
+          // hook also fires for an automation-driven or resumed turn.
+          promptSource: "unknown",
+          ...(payload.prompt === undefined
             ? {}
             : {
                 content: context.privacy.describeContent({
                   kind: "prompt",
                   role: "user",
-                  text: payload.promptText,
+                  text: payload.prompt,
                 }),
               }),
-          occurredAt,
-        });
-        factory.build({
-          type: "generation.start",
-          generationId: payload.generationId,
-          model: toModelDescriptor(payload.model),
-          occurredAt,
-        });
-        break;
-
-      case "afterAgentResponse":
-        factory.build({
-          type: "generation.end",
-          generationId: payload.generationId,
-          model: toModelDescriptor(payload.model),
-          outcome: payload.outcome ?? "ok",
-          ...(payload.durationMillis === undefined ? {} : { durationMillis: payload.durationMillis }),
-          ...(payload.responseText === undefined
+          ...(payload.attachments === undefined
             ? {}
-            : {
-                outputContent: [
-                  context.privacy.describeContent({
-                    kind: "response",
-                    role: "assistant",
-                    text: payload.responseText,
-                  }),
-                ],
-              }),
-          occurredAt,
+            : { extensions: { "cursor.attachment_count": payload.attachments.length } }),
         });
+        // `generation_id` is present on every captured agent payload, but the
+        // reference does not mark it required, so an absent one degrades to a
+        // prompt with no generation rather than to a fabricated id.
+        if (payload.generation_id !== undefined && payload.generation_id.length > 0) {
+          factory.build({
+            type: "generation.start",
+            generationId: payload.generation_id,
+            model,
+          });
+        } else {
+          warnings.push(
+            "beforeSubmitPrompt carried no generation_id, so no generation.start was emitted",
+          );
+        }
         break;
+      }
 
-      case "beforeToolUse":
+      case "preToolUse":
         factory.build({
           type: "tool.start",
-          toolCallId: payload.toolCallId,
-          toolName: payload.toolName,
-          toolKind: payload.toolKind ?? "other",
-          ...(payload.generationId === undefined ? {} : { generationId: payload.generationId }),
-          ...(payload.toolInput === undefined
+          toolCallId:
+            payload.tool_use_id ??
+            derivedToolCallId(context, sessionId, [
+              "tool",
+              payload.generation_id ?? "",
+              payload.tool_name,
+            ]),
+          toolName: payload.tool_name,
+          // Cursor names its tools but does not classify them, and the names are
+          // not a closed set. `unknown` says so; `other` would claim a lookup
+          // happened and found nothing.
+          toolKind: "unknown",
+          ...(payload.generation_id === undefined || payload.generation_id.length === 0
+            ? {}
+            : { generationId: payload.generation_id }),
+          ...(payload.tool_input === undefined
             ? {}
             : {
                 input: context.privacy.describeStructured({
                   kind: "tool-input",
-                  value: payload.toolInput,
-                  label: payload.toolName,
+                  value: payload.tool_input,
+                  label: payload.tool_name,
                 }),
               }),
-          occurredAt,
         });
         break;
 
-      case "afterToolUse":
+      case "postToolUse":
         factory.build({
           type: "tool.end",
-          toolCallId: payload.toolCallId,
-          toolName: payload.toolName,
+          toolCallId:
+            payload.tool_use_id ??
+            derivedToolCallId(context, sessionId, [
+              "tool",
+              payload.generation_id ?? "",
+              payload.tool_name,
+            ]),
+          toolName: payload.tool_name,
+          // Cursor routes failures to the separate postToolUseFailure callback,
+          // so reaching this one *is* the success signal.
           outcome: "ok",
-          ...(payload.durationMillis === undefined ? {} : { durationMillis: payload.durationMillis }),
-          ...(payload.toolOutput === undefined
+          ...(payload.duration === undefined ? {} : { durationMillis: payload.duration }),
+          ...(payload.tool_output === undefined
             ? {}
             : {
                 output: context.privacy.describeStructured({
                   kind: "tool-output",
-                  value: payload.toolOutput,
-                  label: payload.toolName,
+                  value: payload.tool_output,
+                  label: payload.tool_name,
                 }),
               }),
-          occurredAt,
         });
         break;
 
-      case "toolUseFailed":
+      case "postToolUseFailure":
         factory.build({
           type: "tool.end",
-          toolCallId: payload.toolCallId,
-          toolName: payload.toolName,
-          outcome: "error",
-          ...(payload.durationMillis === undefined ? {} : { durationMillis: payload.durationMillis }),
-          ...(payload.errorText === undefined
+          toolCallId:
+            payload.tool_use_id ??
+            derivedToolCallId(context, sessionId, [
+              "tool",
+              payload.generation_id ?? "",
+              payload.tool_name,
+            ]),
+          toolName: payload.tool_name,
+          outcome:
+            payload.failure_type === "timeout"
+              ? "timeout"
+              : payload.failure_type === "permission_denied"
+                ? "denied"
+                : payload.is_interrupt === true
+                  ? "cancelled"
+                  : "error",
+          ...(payload.failure_type === "permission_denied"
+            ? { permissionDecision: "denied" as const }
+            : {}),
+          ...(payload.duration === undefined ? {} : { durationMillis: payload.duration }),
+          ...(payload.error_message === undefined
             ? {}
             : {
                 output: context.privacy.describeContent({
                   kind: "error-message",
-                  text: payload.errorText,
+                  text: payload.error_message,
                 }),
               }),
-          occurredAt,
         });
         break;
 
-      case "beforeShellExecution": {
-        const toolCallId =
-          payload.toolCallId ??
-          context.ids.newOpaqueId([sessionId, "shell", payload.command, String(occurredAt)]);
+      case "beforeShellExecution":
         factory.build({
           type: "tool.start",
-          toolCallId,
+          toolCallId: derivedToolCallId(context, sessionId, [
+            "shell",
+            payload.generation_id ?? "",
+            payload.command,
+          ]),
           toolName: "shell",
           toolKind: "execute",
-          ...(payload.generationId === undefined ? {} : { generationId: payload.generationId }),
-          input: context.privacy.describeContent({ kind: "tool-input", text: payload.command, label: "shell" }),
-          occurredAt,
+          ...(payload.generation_id === undefined || payload.generation_id.length === 0
+            ? {}
+            : { generationId: payload.generation_id }),
+          input: context.privacy.describeContent({
+            kind: "tool-input",
+            text: payload.command,
+            label: "shell",
+          }),
+          ...(payload.sandbox === undefined ? {} : { extensions: { "cursor.sandbox": payload.sandbox } }),
         });
         break;
-      }
 
-      case "afterShellExecution": {
-        const resolved = resolveShellToolCallId(payload, context.ids, sessionId);
-        const outcome: EventOutcome = payload.exitCode !== undefined && payload.exitCode !== 0 ? "error" : "ok";
+      case "afterShellExecution":
         factory.build({
           type: "tool.end",
-          toolCallId: resolved.toolCallId,
+          toolCallId: derivedToolCallId(context, sessionId, [
+            "shell",
+            payload.generation_id ?? "",
+            payload.command,
+          ]),
           toolName: "shell",
-          outcome,
-          ...(payload.durationMillis === undefined ? {} : { durationMillis: payload.durationMillis }),
-          ...(payload.outputText === undefined
+          // No exit code and no status field on this callback, in the reference
+          // or in the captures. Reporting `ok` would assert a success Cursor
+          // never claimed.
+          outcome: "unknown",
+          ...(payload.duration === undefined ? {} : { durationMillis: payload.duration }),
+          ...(payload.output === undefined
             ? {}
             : {
                 output: context.privacy.describeContent({
                   kind: "tool-output",
-                  text: payload.outputText,
+                  text: payload.output,
                   label: "shell",
                 }),
               }),
-          occurredAt,
-          extensions: { "cursor.tool_correlation": resolved.correlation },
+          ...(payload.sandbox === undefined ? {} : { extensions: { "cursor.sandbox": payload.sandbox } }),
         });
         break;
-      }
 
-      case "beforeMCPExecution": {
-        const toolCallId =
-          payload.toolCallId ??
-          context.ids.newOpaqueId([sessionId, "mcp", payload.server, payload.tool, String(occurredAt)]);
-        const toolName = `${payload.server}:${payload.tool}`;
+      case "beforeMCPExecution":
         factory.build({
           type: "tool.start",
-          toolCallId,
-          toolName,
-          toolKind: "other",
-          ...(payload.generationId === undefined ? {} : { generationId: payload.generationId }),
-          ...(payload.input === undefined
+          toolCallId: derivedToolCallId(context, sessionId, [
+            "mcp",
+            payload.generation_id ?? "",
+            payload.tool_name,
+          ]),
+          toolName: payload.tool_name,
+          toolKind: "network",
+          ...(payload.generation_id === undefined || payload.generation_id.length === 0
+            ? {}
+            : { generationId: payload.generation_id }),
+          ...(payload.tool_input === undefined
             ? {}
             : {
                 input: context.privacy.describeStructured({
                   kind: "tool-input",
-                  value: payload.input,
-                  label: toolName,
+                  value: payload.tool_input,
+                  label: payload.tool_name,
                 }),
               }),
-          occurredAt,
         });
         break;
-      }
 
-      case "afterMCPExecution": {
-        const resolved = resolveMcpToolCallId(payload, context.ids, sessionId);
-        const toolName = `${payload.server}:${payload.tool}`;
+      case "afterMCPExecution":
         factory.build({
           type: "tool.end",
-          toolCallId: resolved.toolCallId,
-          toolName,
-          outcome: payload.isError === true ? "error" : "ok",
-          ...(payload.durationMillis === undefined ? {} : { durationMillis: payload.durationMillis }),
-          ...(payload.output === undefined
+          toolCallId: derivedToolCallId(context, sessionId, [
+            "mcp",
+            payload.generation_id ?? "",
+            payload.tool_name,
+          ]),
+          toolName: payload.tool_name,
+          // As with the shell pair: `result_json` is opaque and there is no
+          // status field to read an outcome from.
+          outcome: "unknown",
+          ...(payload.duration === undefined ? {} : { durationMillis: payload.duration }),
+          ...(payload.result_json === undefined
             ? {}
             : {
-                output: context.privacy.describeStructured({
+                output: context.privacy.describeContent({
                   kind: "tool-output",
-                  value: payload.output,
-                  label: toolName,
+                  text: payload.result_json,
+                  label: payload.tool_name,
                 }),
               }),
-          occurredAt,
-          extensions: { "cursor.tool_correlation": resolved.correlation },
-        });
-        break;
-      }
-
-      case "subagentStart":
-        factory.build({
-          type: "subagent.start",
-          subagentInvocationId: invocationIdSchema.parse(payload.subagentInvocationId),
-          ...(payload.subagentType === undefined ? {} : { subagentType: payload.subagentType }),
-          delegationDepth: payload.delegationDepth ?? 1,
-          ...(payload.model === undefined ? {} : { model: toModelDescriptor(payload.model) }),
-          occurredAt,
-        });
-        break;
-
-      case "subagentStop":
-        factory.build({
-          type: "subagent.end",
-          subagentInvocationId: invocationIdSchema.parse(payload.subagentInvocationId),
-          outcome: payload.outcome ?? "unknown",
-          ...(payload.durationMillis === undefined ? {} : { durationMillis: payload.durationMillis }),
-          occurredAt,
-        });
-        break;
-
-      case "preCompact":
-        factory.build({
-          type: "compaction.performed",
-          trigger: payload.trigger ?? "unknown",
-          ...(payload.contextTokensBefore === undefined
-            ? {}
-            : { contextTokensBefore: payload.contextTokensBefore }),
-          occurredAt,
-        });
-        break;
-
-      case "stop":
-        // `generationCompleted` is checked above; only non-completed (i.e.
-        // cancelled/error/timeout) statuses reach here, since a normal
-        // completion was already reported by `afterAgentResponse`.
-        factory.build({
-          type: "generation.end",
-          generationId: payload.generationId,
-          model: toModelDescriptor(payload.model),
-          outcome: STOP_REASON_TO_OUTCOME[payload.stopReason],
-          stopReason: payload.stopReason,
-          ...(payload.durationMillis === undefined ? {} : { durationMillis: payload.durationMillis }),
-          occurredAt,
         });
         break;
 
       case "afterFileEdit": {
-        const toolCallId =
-          payload.toolCallId ??
-          context.ids.newOpaqueId([sessionId, "file-edit", payload.filePath, String(occurredAt)]);
-        const label = payload.editKind ?? "modify";
+        const toolCallId = derivedToolCallId(context, sessionId, [
+          "file-edit",
+          payload.generation_id ?? "",
+          payload.file_path,
+        ]);
+        // Cursor exposes no "before edit" callback, so the pair is emitted from
+        // this one firing: an edit that reached this hook has completed.
         factory.build({
           type: "tool.start",
           toolCallId,
           toolName: "edit_file",
           toolKind: "write",
-          ...(payload.generationId === undefined ? {} : { generationId: payload.generationId }),
-          occurredAt,
+          ...(payload.generation_id === undefined || payload.generation_id.length === 0
+            ? {}
+            : { generationId: payload.generation_id }),
+          input: context.privacy.describeContent({
+            kind: "tool-input",
+            text: payload.file_path,
+            label: "edit_file",
+          }),
         });
         factory.build({
           type: "tool.end",
           toolCallId,
           toolName: "edit_file",
           outcome: "ok",
-          output: context.privacy.describeContent({ kind: "tool-output", text: payload.filePath, label }),
-          occurredAt,
+          // `edits[].old_string`/`new_string` are file content and are never
+          // exported, in described form or otherwise. Only how many edits landed.
+          ...(payload.edits === undefined
+            ? {}
+            : { extensions: { "cursor.edit_count": payload.edits.length } }),
         });
         break;
       }
 
-      // "beforeReadFile" and "afterAgentThought" are handled by the early
-      // `ignored` returns above: the former has no completion callback in the
-      // protocol, and the latter has no canonical event type. Neither case
-      // reaches this switch.
+      case "preCompact":
+        factory.build({
+          type: "compaction.performed",
+          trigger:
+            payload.trigger === undefined ? "unknown" : (COMPACT_TRIGGERS[payload.trigger] ?? "unknown"),
+          // Cursor exposes no post-compaction callback, so `contextTokensAfter`
+          // is structurally unavailable and is never estimated.
+          ...(payload.context_tokens === undefined
+            ? {}
+            : { contextTokensBefore: payload.context_tokens }),
+          ...(payload.messages_to_compact === undefined
+            ? {}
+            : { droppedMessageCount: payload.messages_to_compact }),
+          extensions: {
+            ...(payload.context_window_size === undefined
+              ? {}
+              : { "cursor.context_window_size": payload.context_window_size }),
+            ...(payload.message_count === undefined
+              ? {}
+              : { "cursor.message_count": payload.message_count }),
+            ...(payload.is_first_compaction === undefined
+              ? {}
+              : { "cursor.is_first_compaction": payload.is_first_compaction }),
+          },
+        });
+        break;
+
+      case "stop": {
+        const usage = normalizeCursorUsage(payload);
+        warnings.push(...usage.warnings);
+        const generationId = payload.generation_id;
+        if (generationId === undefined || generationId.length === 0) {
+          return {
+            status: "ignored",
+            reason:
+              "stop carried no generation_id, so the generation it ends cannot be named; " +
+              "generation.end requires one and this adapter will not mint it",
+          };
+        }
+        factory.build({
+          type: "generation.end",
+          generationId,
+          model,
+          outcome:
+            payload.status === undefined ? "unknown" : (STOP_STATUS_TO_OUTCOME[payload.status] ?? "unknown"),
+          ...(payload.status === undefined ? {} : { stopReason: payload.status }),
+          ...(usage.usage === undefined ? {} : { usage: usage.usage }),
+          ...(payload.loop_count === undefined
+            ? {}
+            : { extensions: { "cursor.loop_count": payload.loop_count } }),
+        });
+        break;
+      }
+
+      // Every remaining event name returned early above.
     }
 
     return {
@@ -621,16 +741,32 @@ export const createCursorAdapter = (options: CursorAdapterOptions = {}): Provide
     };
   };
 
+  /**
+   * Answer the decision callbacks in their own vocabulary.
+   *
+   * Cursor reads a JSON object from stdout for six events, keyed `permission`
+   * for five of them and `continue` for `beforeSubmitPrompt`. Writing nothing
+   * would rely on Cursor's default; writing the wrong key would be silently
+   * ignored, which is the same thing while looking deliberate. So the answer is
+   * always "proceed", spelled the way each event spells it. Never `"ask"` — a
+   * telemetry hook must not open a prompt — and never `"deny"`: ADR 0004 forbids
+   * this hook from being able to block the host agent, and the response type
+   * pins `exitCode` to 0 for the same reason.
+   */
   const hookResponse = (input: ProviderHookResponseInput): ProviderHookResponse => {
     const sourceEventName = input.detection?.sourceEventName;
-    if (sourceEventName !== undefined && DECISION_EVENT_NAMES.has(sourceEventName)) {
-      return {
-        exitCode: 0,
-        contract: "provider-protocol",
-        stdout: JSON.stringify({ continue: true }),
-      };
+    const decisionKey =
+      sourceEventName === undefined ? undefined : CURSOR_DECISION_EVENTS[sourceEventName];
+    if (decisionKey === undefined) {
+      return SILENT_HOOK_RESPONSE;
     }
-    return SILENT_HOOK_RESPONSE;
+    return {
+      exitCode: 0,
+      contract: "provider-protocol",
+      stdout: JSON.stringify(
+        decisionKey === "continue" ? { continue: true } : { permission: "allow" },
+      ),
+    };
   };
 
   return {

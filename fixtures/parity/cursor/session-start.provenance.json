@@ -1,11 +1,12 @@
 {
   "fixture": "session-start.json",
-  "sourceContract": "Cursor hook JSON protocol (sessionStart, camelCase event naming)",
+  "sourceContract": "Cursor agent hook `sessionStart` (snake_case stdin JSON), per cursor.com/docs/agent/hooks",
   "provider": "cursor",
-  "capturedDate": "2026-07-25",
-  "author": "otel-hook parity owner (agent)",
-  "sanitization": "All values are invented placeholders under a synthetic repository root.",
-  "licenseBasis": "Original synthetic authorship.",
-  "sha256": "d5c253a3b9f397ab534ecbbe53e3c383dc6d681773c1530c8000e1b4298b249e",
-  "notes": "Exercises provider-specific event-name aliasing (camelCase -> canonical) distinct from Claude Code's PascalCase names."
+  "capturedDate": "2026-07-29",
+  "author": "otel-hook cursor provider owner (agent)",
+  "sanitization": "Real key set, synthetic values. Conversation/session/generation ids are invented UUID-shaped placeholders, the workspace root is a synthetic path, and user_email/transcript_path are null rather than redacted strings so no address or home path exists to leak.",
+  "licenseBasis": "Original authorship; only the field names and their types are taken from the published reference and the cited capture set, neither of which is copyrightable subject matter as used here.",
+  "providerVersionObserved": "cursor 3.12.17 (IDE) and 2026.07.17-3e2a980 (CLI)",
+  "sha256": "8fe2a047cc15afc6ad953baf5ead950858e752f0ab85f52b75fd1f0c3c5d3450",
+  "notes": "Key set matches the sessionStart payloads recorded in colinsurprenant/director hack/canary/cursor-cli/findings (CLI runs 2026-07-21 and 2026-07-22; IDE run 2026-07-21), which additionally establish that composer_mode is IDE-only and that transcript_path is null at session start."
 }

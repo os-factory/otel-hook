@@ -1,6 +1,15 @@
 {
+  "conversation_id": "3f7c1d2e-0000-4a00-8000-000000000001",
+  "generation_id": "3f7c1d2e-0000-4a00-8000-000000000001",
+  "model": "fixture-composer-fast",
+  "model_id": "fixture-composer",
+  "model_params": [{ "id": "fast", "value": "true" }],
+  "is_background_agent": false,
+  "composer_mode": "agent",
+  "session_id": "3f7c1d2e-0000-4a00-8000-000000000001",
   "hook_event_name": "sessionStart",
-  "conversation_id": "conv-parity-cursor-001",
-  "cwd": "/workspace/fixture-repo",
-  "composer_mode": "agent"
+  "cursor_version": "2026.07.17-fixture",
+  "workspace_roots": ["/workspace/fixture-repo"],
+  "user_email": null,
+  "transcript_path": null
 }

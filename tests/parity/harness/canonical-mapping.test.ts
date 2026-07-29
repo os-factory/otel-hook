@@ -85,6 +85,7 @@ describe("canonical mapping harness (comparison-only, not a shipped adapter)", (
     });
 
     const toolEnd = events.find((event) => event.type === "tool.end");
-    expect(toolEnd?.type === "tool.end" ? toolEnd.durationMillis : undefined).toBeCloseTo(84, 5);
+    // Cursor's `duration` is milliseconds, passed through unscaled.
+    expect(toolEnd?.type === "tool.end" ? toolEnd.durationMillis : undefined).toBeCloseTo(84.5, 5);
   });
 });

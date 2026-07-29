@@ -173,17 +173,20 @@ export const PROVIDER_CASES: readonly ProviderCase[] = [
   {
     providerId: "cursor",
     payload: (sessionId) => ({
-      hookEventName: "beforeSubmitPrompt",
-      conversationId: sessionId,
-      generationId: "gen-e2e-1",
-      timestampMillis: 1_700_000_000_000,
-      workspaceRoots: ["/workspace/fixture-repo"],
-      promptSource: "user",
-      promptText: CURSOR_SECRET,
-      model: { name: "cursor-model", provider: "anthropic" },
+      hook_event_name: "beforeSubmitPrompt",
+      conversation_id: sessionId,
+      generation_id: "gen-e2e-1",
+      session_id: sessionId,
+      model: "cursor-model",
+      cursor_version: "2026.07.17-e2e",
+      workspace_roots: ["/workspace/fixture-repo"],
+      prompt: CURSOR_SECRET,
+      user_email: "cursor-e2e@example.invalid",
+      transcript_path: null,
     }),
-    // beforeSubmitPrompt is a decision event in the Cursor hook protocol, so the
-    // adapter must answer with the protocol's continue response and nothing else.
+    // beforeSubmitPrompt is the one Cursor decision event keyed `continue` rather
+    // than `permission`, so the adapter must answer with exactly that and nothing
+    // else.
     expectedStdout: '{"continue":true}',
     secret: CURSOR_SECRET,
   },

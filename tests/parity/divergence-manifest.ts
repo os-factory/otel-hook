@@ -136,7 +136,48 @@ export const DIVERGENCE_MANIFEST: readonly DivergenceEntry[] = [
       "expressed in the canonical type. Nothing is renamed into another provider's vocabulary.",
     citation:
       "empirically confirmed against fixtures/parity/gemini-cli/before-tool.json: the emitted span reports " +
-      'hook.event="PreToolUse" with hook.original_event="BeforeTool" and provider_adapter="gemini"',
+      'hook.event="PreToolUse" with hook.original_event="BeforeTool" and provider_adapter="gemini"; the same ' +
+      "rewriting is observable for Cursor, whose beforeSubmitPrompt becomes UserPromptSubmit",
+  },
+  {
+    id: "DIVERGENCE-008",
+    title: "Cursor's `duration` is read inconsistently: scaled 1000x on one event, dropped on another",
+    dimension: "lifecycle",
+    pythonBehavior:
+      "Cursor sends its tool durations under the key `duration`, in milliseconds. The reference treats that key " +
+      "as seconds for AfterMCPExecution — `data[\"duration_ms\"] = float(duration) * 1000` — so a payload " +
+      "reporting duration 84.5 emits gen_ai.client.duration_ms=84500, a thousandfold overstatement. For " +
+      "AfterShellExecution it reads only `duration_ms`, a key Cursor does not send, so the duration is dropped " +
+      "and the span carries none at all. PostToolUse happens to be correct, but only for MCP-encoded tool names, " +
+      "because that path alone falls back to `duration`.",
+    ourBehavior:
+      "The Cursor adapter reads `duration` as milliseconds on every callback that carries it and passes the value " +
+      "through unscaled, so 84.5 stays 84.5 and the shell duration survives. The unit is established twice over: " +
+      "cursor.com/docs/agent/hooks states it, and a captured `printenv` call reports duration 169.812 — 170ms, " +
+      "not 170s. See fixtures/parity/cursor/post-tool-use-mcp.provenance.json.",
+    citation:
+      "_normalize_cursor_mcp_duration (otel_hook.py:1498-1508) and the AfterShellExecution attribute map " +
+      "(otel_hook.py:516); empirically confirmed against fixtures/parity/cursor/after-mcp-execution.json " +
+      "(84.5 in, 84500 out) and after-shell-execution.json (169.812 in, no duration attribute out)",
+  },
+  {
+    id: "DIVERGENCE-009",
+    title: "Cursor's cache-read tokens are dropped, leaving input tokens with no breakdown",
+    dimension: "usage",
+    pythonBehavior:
+      "Cursor's `stop` and `afterAgentResponse` payloads carry input_tokens, output_tokens, cache_read_tokens, " +
+      "and cache_write_tokens. The reference emits gen_ai.usage.input_tokens and gen_ai.usage.output_tokens and " +
+      "no cache attribute of any kind, so a consumer cannot tell a fully cached prompt from an uncached one.",
+    ourBehavior:
+      "normalizeCursorUsage reads cache_read_tokens as a subset of the inclusive input total, so canonical usage " +
+      "reports cachedInputTokens and the derived uncachedInputTokens alongside it. cache_write_tokens is " +
+      "deliberately *not* mapped: canonical usage requires an explicit cacheCreationAccounting and no source " +
+      "establishes whether Cursor bills cache writes inside or beside input_tokens, so a non-zero value produces " +
+      "a warning naming the dropped field instead of either guess.",
+    citation:
+      "empirically confirmed against fixtures/parity/cursor/stop.json: the reference's Stop span reports " +
+      "gen_ai.usage.input_tokens=43859 and output_tokens=1076 with no cache attribute, while the adapter reports " +
+      "cachedInputTokens=28384 and uncachedInputTokens=15475",
   },
   {
     id: "DIVERGENCE-008",

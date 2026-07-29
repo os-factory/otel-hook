@@ -340,65 +340,76 @@ describe("delivery identity: Codex", () => {
 });
 
 describe("delivery identity: Cursor", () => {
-  const base = { conversationId: "conv-1", timestampMillis: 1_700_000_000_000 };
+  const base = { conversation_id: "conv-1", generation_id: "gen-1" };
 
   it("identifies a tool call, a generation edge, and the session edges", () => {
     expect(
       claimFor("cursor", {
         ...base,
-        hookEventName: "afterToolUse",
-        toolCallId: "call-9",
-        toolName: "read_file",
+        hook_event_name: "postToolUse",
+        tool_use_id: "call-9",
+        tool_name: "Read",
       }).claim?.components,
     ).toEqual(["call-9"]);
     expect(
       claimFor("cursor", {
         ...base,
-        hookEventName: "beforeSubmitPrompt",
-        generationId: "gen-1",
-        promptText: "cursor secret prompt",
+        hook_event_name: "beforeSubmitPrompt",
+        prompt: "cursor secret prompt",
       }).claim?.components,
     ).toEqual(["gen-1"]);
     expect(
-      claimFor("cursor", { ...base, hookEventName: "sessionStart" }).claim?.components,
+      claimFor("cursor", { ...base, hook_event_name: "sessionStart" }).claim?.components,
     ).toEqual(["sessionStart"]);
   });
 
-  it("gives a legacy snake_case payload the same identity as its current-shape twin", () => {
-    const current = claimFor("cursor", {
+  it("separates the two edges of one tool call, so neither suppresses the other", () => {
+    const before = claimFor("cursor", {
       ...base,
-      hookEventName: "afterToolUse",
-      toolCallId: "call-9",
-      toolName: "read_file",
+      hook_event_name: "preToolUse",
+      tool_use_id: "call-9",
+      tool_name: "Read",
     }).claim;
-    const legacy = claimFor("cursor", {
-      conversation_id: "conv-1",
-      timestamp_millis: 1_700_000_000_000,
-      hook_event_name: "after_tool_use",
-      tool_call_id: "call-9",
-      tool_name: "read_file",
+    const after = claimFor("cursor", {
+      ...base,
+      hook_event_name: "postToolUse",
+      tool_use_id: "call-9",
+      tool_name: "Read",
     }).claim;
 
-    expect(legacy).toEqual(current);
+    expect(before?.components).toEqual(after?.components);
+    expect(before?.sourceEventName).not.toBe(after?.sourceEventName);
+  });
+
+  it("refuses a tool callback that carries no tool_use_id", () => {
+    expect(
+      claimFor("cursor", { ...base, hook_event_name: "postToolUse", tool_name: "Read" }).claim,
+    ).toBeUndefined();
   });
 
   it("refuses the callbacks whose only distinguishing field is a command or a path", () => {
     expect(
       claimFor("cursor", {
         ...base,
-        hookEventName: "afterShellExecution",
+        hook_event_name: "afterShellExecution",
         command: "npm run check",
       }).claim,
     ).toBeUndefined();
     expect(
       claimFor("cursor", {
         ...base,
-        hookEventName: "beforeReadFile",
-        filePath: "/home/someone/private.txt",
+        hook_event_name: "beforeReadFile",
+        file_path: "/workspace/demo/private.txt",
       }).claim,
     ).toBeUndefined();
     expect(
-      claimFor("cursor", { ...base, hookEventName: "preCompact", trigger: "automatic" }).claim,
+      claimFor("cursor", { ...base, hook_event_name: "preCompact", trigger: "auto" }).claim,
+    ).toBeUndefined();
+  });
+
+  it("refuses a generation edge with no generation_id to name it", () => {
+    expect(
+      claimFor("cursor", { conversation_id: "conv-1", hook_event_name: "stop" }).claim,
     ).toBeUndefined();
   });
 });

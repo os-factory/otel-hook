@@ -243,14 +243,26 @@ describe("setup", () => {
     expect(await readFile(path.join(codexDir, "config.toml"), "utf8")).toBe(toml);
   });
 
-  it("refuses cursor with the evidence blocker and writes nothing", async () => {
+  it("writes cursor's documented hooks.json, version key included", async () => {
     const roots = await scratch();
     const outcome = only(await run(roots, { providerIds: ["cursor"] }));
 
-    expect(outcome.status).toBe("unsupported");
-    expect(outcome.problems[0]).toContain("synthetic");
-    expect(outcome.configPath).toBeUndefined();
-    await expect(readFile(path.join(roots.project, ".cursor", "hooks.json"), "utf8")).rejects.toThrow();
+    expect(outcome.status).toBe("applied");
+    expect(outcome.problems).toEqual([]);
+    const written = JSON.parse(
+      await readFile(path.join(roots.project, ".cursor", "hooks.json"), "utf8"),
+    ) as { version: number; hooks: Record<string, { command: string; type: string }[]> };
+
+    // Cursor's schema is `{ version, hooks: { <event>: [ { command } ] } }` — a
+    // flat list per event, not the matcher-group nesting the other providers use.
+    expect(written.version).toBe(1);
+    expect(written.hooks.preToolUse?.[0]).toMatchObject({
+      type: "command",
+      command: "otel-hook run --provider cursor",
+    });
+    // The events that would double-count a shell or MCP call are not registered.
+    expect(Object.keys(written.hooks)).not.toContain("beforeShellExecution");
+    expect(Object.keys(written.hooks)).not.toContain("afterMCPExecution");
   });
 
   it("refuses antigravity without an explicit path, because none is verified", async () => {

@@ -1,0 +1,12 @@
+{
+  "fixture": "after-shell-execution.json",
+  "sourceContract": "Cursor agent hook `afterShellExecution`: `command`, `output`, `duration` (ms), `sandbox` — and no exit status",
+  "provider": "cursor",
+  "capturedDate": "2026-07-29",
+  "author": "otel-hook cursor provider owner (agent)",
+  "sanitization": "Real key set, synthetic values. The command is an invented environment probe against an invented variable name and its output is that probe's miss.",
+  "licenseBasis": "Original authorship; only the field names, their types, and one duration measurement are taken from the published reference and the cited capture set.",
+  "providerVersionObserved": "cursor 2026.07.17-3e2a980 (CLI)",
+  "sha256": "a35f14542de052ca8aa14e5c067d88f48ca2f5b069358deda3f380fb0f8f98f4",
+  "notes": "Two facts this fixture pins. First, the absence of an exit code: neither the reference nor the capture carries one, so the adapter reports outcome `unknown` on this tool end rather than assuming success. Second, the unit: the captured `duration` of 169.812 for a `printenv` call is milliseconds, kept verbatim here. The capture's fired.log also shows this same shell call firing preToolUse, beforeShellExecution, afterShellExecution, and postToolUse in that order, which is why the registration planner registers only the generic pair."
+}

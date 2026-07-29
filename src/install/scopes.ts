@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { ANTIGRAVITY_PROVIDER_ID } from "../providers/antigravity/adapter.js";
 import { CLAUDE_CODE_PROVIDER_ID } from "../providers/claude/detect.js";
 import { CODEX_PROVIDER_ID } from "../providers/codex/version.js";
+import { CURSOR_PROVIDER_ID } from "../providers/cursor/payload.js";
 import { GEMINI_PROVIDER_ID } from "../providers/gemini/adapter.js";
 
 /**
@@ -37,6 +38,13 @@ const CODEX_EVIDENCE =
   "learn.chatgpt.com/docs/hooks discovery-locations list, cross-checked against o11y-dev/opentelemetry-hooks v0.14.0 setup.sh";
 const GEMINI_EVIDENCE =
   "o11y-dev/opentelemetry-hooks v0.14.0 setup.sh (setup_gemini) and its supported-agents table";
+/**
+ * Cursor also documents enterprise-managed locations (`/etc/cursor/hooks.json`
+ * and the macOS/Windows equivalents). They are deliberately not offered as a
+ * scope: they are MDM-owned and outside any home directory.
+ */
+const CURSOR_EVIDENCE =
+  "cursor.com/docs/agent/hooks configuration-levels list (user and project), cross-checked against o11y-dev/opentelemetry-hooks v0.14.0 setup.sh";
 
 export const PROVIDER_INSTALL_LOCATIONS: readonly InstallLocation[] = Object.freeze([
   Object.freeze({
@@ -62,6 +70,18 @@ export const PROVIDER_INSTALL_LOCATIONS: readonly InstallLocation[] = Object.fre
     scope: "project" as const,
     segments: Object.freeze([".codex", "hooks.json"]),
     evidence: CODEX_EVIDENCE,
+  }),
+  Object.freeze({
+    providerId: CURSOR_PROVIDER_ID,
+    scope: "global" as const,
+    segments: Object.freeze([".cursor", "hooks.json"]),
+    evidence: CURSOR_EVIDENCE,
+  }),
+  Object.freeze({
+    providerId: CURSOR_PROVIDER_ID,
+    scope: "project" as const,
+    segments: Object.freeze([".cursor", "hooks.json"]),
+    evidence: CURSOR_EVIDENCE,
   }),
   Object.freeze({
     providerId: GEMINI_PROVIDER_ID,

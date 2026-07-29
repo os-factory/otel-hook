@@ -156,6 +156,8 @@ const runSmokeTest = async ({ skipBuild = false } = {}) => {
           "--provider",
           "codex",
           "--provider",
+          "cursor",
+          "--provider",
           "gemini-cli",
           "--scope",
           "project",
@@ -183,30 +185,30 @@ const runSmokeTest = async ({ skipBuild = false } = {}) => {
           `bin ${binName} setup --dry-run --json: planned ${setupReport.outcomes.length} target(s), wrote nothing`,
         );
 
-        // An unsupported provider must fail loudly and machine-readably rather
-        // than write a guessed configuration shape.
-        let cursorStdout;
+        // A provider whose install *location* is unverified must fail loudly and
+        // machine-readably rather than write a guessed path into a home directory.
+        let refusedStdout;
         try {
-          ({ stdout: cursorStdout } = await runBin([
+          ({ stdout: refusedStdout } = await runBin([
             "setup",
             "--provider",
-            "cursor",
+            "antigravity",
             "--project-dir",
             scratchProject,
             "--json",
           ]));
-          throw new Error(`bin ${binName} setup --provider cursor unexpectedly succeeded`);
+          throw new Error(`bin ${binName} setup --provider antigravity unexpectedly succeeded`);
         } catch (error) {
           if (typeof error?.stdout !== "string" || error.stdout.length === 0) {
             throw error;
           }
-          cursorStdout = error.stdout;
+          refusedStdout = error.stdout;
         }
-        const cursorReport = JSON.parse(cursorStdout);
-        if (cursorReport.ok !== false || cursorReport.outcomes[0]?.status !== "unsupported") {
-          throw new Error(`bin ${binName} setup --provider cursor did not report "unsupported"`);
+        const refusedReport = JSON.parse(refusedStdout);
+        if (refusedReport.ok !== false || refusedReport.outcomes[0]?.status !== "unsupported") {
+          throw new Error(`bin ${binName} setup --provider antigravity did not report "unsupported"`);
         }
-        steps.push(`bin ${binName} setup --provider cursor: unsupported, exit 1`);
+        steps.push(`bin ${binName} setup --provider antigravity: unsupported, exit 1`);
       }
     }
 
