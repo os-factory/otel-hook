@@ -141,6 +141,12 @@ export type ProviderCatalogEntry = AdapterDescription & {
   readonly promotionGates: readonly string[];
   /** True when the provider's protocol reads a structured response from stdout. */
   readonly requiresHookResponse: boolean;
+  /**
+   * Which series this provider's `cumulative` counters accumulate over, so a
+   * consumer summing deltas knows whether a per-turn snapshot is a per-turn
+   * figure or a session-wide one. Absent for `delta` providers.
+   */
+  readonly cumulativeUsageSeries?: string;
   readonly reportsCachedInput: boolean;
   readonly reportsCacheCreation: boolean;
   readonly cacheCreationAccounting: string;
@@ -184,6 +190,9 @@ export const describeProviderCatalog = (
       title: descriptor.title,
       promotionGates: [...descriptor.promotionGates],
       requiresHookResponse: capabilities.requiresHookResponse,
+      ...(capabilities.cumulativeUsageSeries === undefined
+        ? {}
+        : { cumulativeUsageSeries: capabilities.cumulativeUsageSeries }),
       reportsCachedInput: capabilities.reportsCachedInput,
       reportsCacheCreation: capabilities.reportsCacheCreation,
       cacheCreationAccounting: capabilities.cacheCreationAccounting,

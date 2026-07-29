@@ -34,10 +34,18 @@ indistinguishable in the data.
 | Provider id   | Agent              | Maturity     | stdout protocol | Usage temporality | Registration                 |
 | ------------- | ------------------ | ------------ | --------------- | ----------------- | ---------------------------- |
 | `claude-code` | Claude Code        | stable       | silent          | delta             | `setup` (global and project) |
-| `codex`       | OpenAI Codex CLI   | stable       | silent          | cumulative        | `setup` (global and project) |
+| `codex`       | OpenAI Codex CLI   | stable       | silent          | cumulative[^1]    | `setup` (global and project) |
 | `cursor`      | Cursor             | stable       | provider JSON   | delta             | unsupported                  |
 | `gemini-cli`  | Gemini CLI         | stable       | silent          | cumulative        | `setup` (global and project) |
 | `antigravity` | Google Antigravity | experimental | silent          | delta             | `setup --settings-file`      |
+
+[^1]: Codex's counters are cumulative over the **whole session**, not per turn:
+    every usage-bearing hook stamps the rollout's running `total_token_usage`.
+    Deltas are therefore diffed against the session's previous snapshot rather
+    than per `turn_id`, which is what keeps a three-turn session from billing its
+    first turn three times. `otel-hook providers` prints this as
+    `usage temporality  cumulative (series: session-lifetime)`; see
+    [docs/usage-semantics.md](docs/usage-semantics.md#which-series-a-cumulative-report-continues).
 
 `antigravity` is registered but marked `experimental`: parts of its field and
 lifecycle mapping are reconstructions pending confirmation against real captures.
@@ -754,9 +762,10 @@ fixing one means updating that test rather than discovering a silent change.
     `opentelemetry-hooks==0.14.0` reference rewrites Gemini's `BeforeTool` into
     Claude Code's `PreToolUse` (`DIVERGENCE-007`), and reads Codex's
     `gen_ai.client.version` from whichever `codex` binary is on the *host's* PATH
-    rather than from the payload — host-dependent, and wrong for a replayed
-    payload. `tests/parity/codex-gemini.parity.test.ts` establishes our own
-    semantics and pins the divergence instead of asserting agreement.
+    rather than from the payload's own `codex_version` — host-dependent, and wrong
+    for a replayed payload (`DIVERGENCE-008`).
+    `tests/parity/codex-gemini.parity.test.ts` establishes our own semantics and
+    pins both divergences instead of asserting agreement.
 10. **Only OTLP HTTP/protobuf traces are exported.** `http/json` falls back to a
     disabled sink with a warning, and there is no metrics or logs pipeline.
 11. **Gemini CLI cache and reasoning tokens never reach a hook.** The CLI's hook

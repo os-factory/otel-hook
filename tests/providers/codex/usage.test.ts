@@ -130,6 +130,61 @@ describe("codex usage: end-to-end through the hook", () => {
     expect(replay.usageObservations[0]?.resetDetected).toBe(false);
   });
 
+  it("diffs a new turn against the previous turn, because Codex's counter is session-wide", async () => {
+    const { hook } = harness();
+    const base = loadHookFixture("stop.json") as Record<string, unknown>;
+
+    // A real second turn: a *different* turn_id carrying the session's advanced
+    // running total. Keying the baseline by turn_id would find no predecessor and
+    // emit the whole 20000-token snapshot again, billing turn 1 twice.
+    const first = await hook.ingest({ payload: base, transport: "hook-stdin" });
+    const second = await hook.ingest({
+      payload: {
+        ...base,
+        turn_id: "turn-0002",
+        usage: {
+          input_tokens: 20000,
+          cached_input_tokens: 15000,
+          output_tokens: 2500,
+          reasoning_output_tokens: 900,
+          total_tokens: 22500,
+        },
+        occurred_at: 1_700_000_004_000,
+      },
+      transport: "hook-stdin",
+    });
+
+    expect(first.usageObservations[0]?.delta.totalTokens).toBe(13500);
+    expect(second.usageObservations[0]?.delta.totalTokens).toBe(9000);
+    expect(second.usageObservations[0]?.resetDetected).toBe(false);
+    // The observation is still attributed to the turn that reported it; only the
+    // baseline it was diffed against is session-scoped.
+    expect(second.usageObservations[0]?.scope).toBe("generation");
+    expect(second.usageObservations[0]?.scopeKey).toBe("turn-0002");
+  });
+
+  it("declares the session-lifetime series it actually accumulates", () => {
+    const adapter = createCodexAdapter();
+    expect(adapter.capabilities.usageTemporality).toBe("cumulative");
+    expect(adapter.capabilities.cumulativeUsageSeries).toBe("session-lifetime");
+  });
+
+  it("keeps a subagent's smaller snapshot off the parent session's series", async () => {
+    const { hook } = harness();
+    // The session is already at 13500 when a subagent reports its own 4800. On the
+    // session series that would read as a reset; on its own series it is a first
+    // observation.
+    await hook.ingest({ payload: loadHookFixture("stop.json"), transport: "hook-stdin" });
+    const outcome = await hook.ingest({
+      payload: loadHookFixture("subagent-stop.json"),
+      transport: "hook-stdin",
+    });
+
+    expect(outcome.usageObservations[0]?.scope).toBe("subagent");
+    expect(outcome.usageObservations[0]?.delta.totalTokens).toBe(4800);
+    expect(outcome.usageObservations[0]?.resetDetected).toBe(false);
+  });
+
   it("never sums two cumulative snapshots: the second event still reports its own total, not an addition", async () => {
     const { hook, sink } = harness();
     const base = loadHookFixture("stop.json") as Record<string, unknown>;

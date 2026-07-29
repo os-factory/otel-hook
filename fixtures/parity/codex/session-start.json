@@ -1,0 +1,9 @@
+{
+  "hook_event_name": "SessionStart",
+  "session_id": "sess-parity-codex-001",
+  "cwd": "/workspace/fixture-repo",
+  "model": "gpt-5-codex",
+  "codex_version": "0.42.0-fixture",
+  "source": "startup",
+  "occurred_at": 1700000000000
+}

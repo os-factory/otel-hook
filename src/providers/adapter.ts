@@ -126,6 +126,24 @@ export const providerCapabilitiesSchema = z.strictObject({
   /** Event types the adapter can produce. */
   lifecycleEvents: z.array(canonicalEventTypeSchema).max(32).readonly(),
   usageTemporality: usageTemporalitySchema,
+  /**
+   * Which accumulator series a `cumulative` report continues — that is, which
+   * previous snapshot the next one should be diffed against.
+   *
+   * Only meaningful when `usageTemporality` is `cumulative`; omit otherwise.
+   *
+   * - `event-scope` (the default when omitted) — each event scope keeps its own
+   *   running total, so a `generation.end` snapshot is diffed against the
+   *   previous snapshot *for that same generation*.
+   * - `session-lifetime` — the provider maintains **one** running total for the
+   *   whole session and stamps it onto whichever callback happens to report it.
+   *   Diffing such a snapshot per event scope would restart the baseline on
+   *   every new generation id and re-count the entire session total each turn,
+   *   so session-level and generation-level snapshots share one baseline.
+   *   Subagent snapshots keep their own series regardless: a delegated agent's
+   *   counter is not a point on the parent session's curve.
+   */
+  cumulativeUsageSeries: z.enum(["event-scope", "session-lifetime"]).optional(),
   reportsCachedInput: z.boolean(),
   reportsCacheCreation: z.boolean(),
   cacheCreationAccounting: cacheCreationAccountingSchema,
