@@ -1,9 +1,9 @@
 {
   "session_id": "ses_gemini_demo_1",
   "hook_event_name": "BeforeTool",
+  "transcript_path": "/workspace/demo-repo/.gemini-sessions/ses_gemini_demo_1.json",
   "cwd": "/workspace/demo-repo",
   "timestamp": "2026-07-25T10:00:09.000Z",
   "tool_name": "write_file",
-  "tool_input": { "path": "src/retry.ts", "content": "// original content" },
-  "original_request_name": "write_file"
+  "tool_input": { "file_path": "src/retry.ts", "content": "// original content" }
 }

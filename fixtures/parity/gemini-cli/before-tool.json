@@ -1,8 +1,9 @@
 {
   "session_id": "sess-parity-gemini-001",
-  "hook_event_name": "BeforeTool",
+  "transcript_path": "/workspace/fixture-repo/.gemini-sessions/sess-parity-gemini-001.json",
   "cwd": "/workspace/fixture-repo",
+  "hook_event_name": "BeforeTool",
   "timestamp": "2026-07-25T10:00:06.000Z",
   "tool_name": "read_file",
-  "tool_input": { "path": "src/retry.ts" }
+  "tool_input": { "file_path": "src/retry.ts" }
 }

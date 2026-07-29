@@ -1,0 +1,16 @@
+{
+  "hook_event_name": "PostCompact",
+  "session_id": "sess-parity-codex-001",
+  "cwd": "/workspace/fixture-repo",
+  "trigger": "auto",
+  "context_tokens_after": 32000,
+  "dropped_message_count": 12,
+  "usage": {
+    "input_tokens": 22600,
+    "cached_input_tokens": 15000,
+    "output_tokens": 2700,
+    "reasoning_output_tokens": 900,
+    "total_tokens": 25300
+  },
+  "occurred_at": 1700000008000
+}

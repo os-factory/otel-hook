@@ -16,7 +16,8 @@ machine-readable version is `PROVIDER_REGISTRATION_SUPPORT` in
 `src/install/support.ts`, and `tests/install/registration.test.ts` asserts that
 every unsupported entry carries a blocker.
 
-Sources were read on 2026-07-26.
+Sources were read on 2026-07-26, and the Gemini CLI row was re-verified against
+upstream source on 2026-07-29.
 
 ## Verified
 
@@ -24,10 +25,32 @@ Sources were read on 2026-07-26.
 | ------------- | ---------------------------- | ---------------------------- | --------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
 | `claude-code` | `~/.claude/settings.json`    | `.claude/settings.json`      | `hooks.<Event>[] = { matcher?, hooks: [{ type: "command", command, timeout? }] }`          | [code.claude.com/docs/en/hooks][cc]; cross-checked against `o11y-dev/opentelemetry-hooks` v0.14.0    |
 | `codex`       | `~/.codex/hooks.json`        | `.codex/hooks.json`          | same nested shape                                                                         | [learn.chatgpt.com/docs/hooks][cx] (`developers.openai.com/codex/hooks` redirects here); same cross-check |
-| `gemini-cli`  | `~/.gemini/settings.json`    | `.gemini/settings.json`      | same nested shape, plus a `name` field on each handler                                    | `o11y-dev/opentelemetry-hooks` v0.14.0 `setup.sh` (`setup_gemini`) and its supported-agents table    |
+| `gemini-cli`  | `~/.gemini/settings.json`    | `.gemini/settings.json`      | same nested shape, plus `name` on each handler and `sequential` on each group             | [geminicli.com/docs/hooks/reference][gm]; cross-checked against `google-gemini/gemini-cli@3499c84` and `o11y-dev/opentelemetry-hooks` v0.14.0 `setup.sh` (`setup_gemini`) |
 | `antigravity` | *not verified — see below*   | *not verified — see below*   | `hooks.<Event>[] = { command, matcher? }` (flat), recorded by this repository's adapter    | `src/providers/antigravity/payload.ts`                                                               |
 
-`timeout` is in seconds in every one of these vocabularies.
+### `timeout` is not one unit across these vocabularies
+
+`timeout` is in **seconds** for Claude Code, the Codex CLI, and Antigravity, and
+in **milliseconds** for the Gemini CLI — its reference states "Execution timeout
+in milliseconds (default: 60000)", and `hookRunner` passes the value straight to
+`setTimeout`. `--timeout-seconds 30` written verbatim into a Gemini
+`settings.json` would kill the hook after 30 milliseconds, so
+`mergeGeminiHookRegistration` takes seconds like every other planner and converts
+at the boundary. `tests/install/registration.test.ts` pins both spellings against
+one flag value.
+
+### Two more things specific to the Gemini CLI
+
+- **`"*"` is a real matcher, and the one this planner writes.**
+  `HookPlanner.matchesContext` special-cases `""` and `"*"` as match-everything
+  *before* compiling a matcher as a regex — which matters, because `new
+  RegExp("*")` throws. The other planners omit the key instead; both spellings
+  mean the same thing and `normalizeMatcher` compares them equal.
+- **Not every key under `hooks` is an event.** `HOOKS_CONFIG_FIELDS` is
+  `['enabled', 'disabled', 'notifications']`, so `hooks.enabled: true` sits beside
+  the event arrays. Removal therefore names the event vocabulary explicitly rather
+  than scanning the object's keys: a scan reads `hooks.enabled` as a malformed
+  event list, reports a conflict, and abandons the whole uninstall.
 
 ## Writing into a file this project does not own
 
@@ -77,8 +100,15 @@ fires and emits nothing is a process spawn per occurrence for no data.
 | `claude-code` | `PreCompact`        | compaction is reported once it completes, at `PostCompact`                              |
 | `codex`       | `PermissionRequest` | as above                                                                                |
 | `codex`       | `SessionEnd`        | documented by Codex, but **not modelled by this adapter** — the payload would be rejected |
+| `gemini-cli`  | `AfterAgent`        | marks turn completion; the canonical model has no event for it distinct from `generation.end` |
+| `gemini-cli`  | `BeforeToolSelection` | carries tool-choice configuration only                                                 |
+| `gemini-cli`  | `Notification`      | observability-only in this protocol; no canonical event type corresponds                 |
 
 `--event` overrides the default set in either direction.
+
+The Gemini exclusions earn more than they usually would: `AfterModel` fires once
+per streaming chunk, so a Gemini session already spawns this hook far more often
+than the others do. Every event that emits nothing is worth not registering.
 
 ## Blocked
 
@@ -127,3 +157,4 @@ convention for the runner in use.
 [cc]: https://code.claude.com/docs/en/hooks
 [cx]: https://learn.chatgpt.com/docs/hooks
 [cu]: https://cursor.com/docs/agent/hooks
+[gm]: https://geminicli.com/docs/hooks/reference/

@@ -37,7 +37,11 @@
 export type CommandHookEntry = {
   readonly type: "command";
   readonly command: string;
-  /** Seconds. Both documented vocabularies use seconds, not milliseconds. */
+  /**
+   * Whatever unit the *provider's* vocabulary uses — seconds for Claude Code and
+   * the Codex CLI, milliseconds for the Gemini CLI. Each planner converts before
+   * building its entry; this engine only copies the number through.
+   */
   readonly timeout?: number;
   readonly [key: string]: unknown;
 };
