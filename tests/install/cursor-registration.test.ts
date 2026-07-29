@@ -1,3 +1,5 @@
+import path from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -232,12 +234,12 @@ describe("cursor registration: which events, and why not the others", () => {
 
 describe("cursor registration: where the document lives", () => {
   it("resolves the two documented user and project locations", () => {
-    const roots = { homeDir: "/home-root", projectDir: "/project-root" };
+    const roots = { homeDir: path.resolve("home-root"), projectDir: path.resolve("project-root") };
     expect(resolveInstallPath(findInstallLocation("cursor", "global")!, roots)).toBe(
-      "/home-root/.cursor/hooks.json",
+      path.join(roots.homeDir, ".cursor", "hooks.json"),
     );
     expect(resolveInstallPath(findInstallLocation("cursor", "project")!, roots)).toBe(
-      "/project-root/.cursor/hooks.json",
+      path.join(roots.projectDir, ".cursor", "hooks.json"),
     );
   });
 
