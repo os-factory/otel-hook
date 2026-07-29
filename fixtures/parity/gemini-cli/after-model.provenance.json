@@ -1,11 +1,12 @@
 {
   "fixture": "after-model.json",
-  "sourceContract": "Gemini CLI command hook protocol (AfterModel) carrying a terminal llm_response with usageMetadata",
+  "sourceContract": "Gemini CLI command hook protocol (AfterModel), final streaming chunk carrying finishReason and the closing usageMetadata snapshot",
   "provider": "gemini-cli",
-  "capturedDate": "2026-07-25",
+  "providerVersionObserved": "google-gemini/gemini-cli@3499c84 (2026-07-28)",
+  "capturedDate": "2026-07-29",
   "author": "otel-hook integration owner (agent)",
-  "sanitization": "Prompt and response text are invented single sentences; token counts are invented figures.",
+  "sanitization": "Prompt and response text are invented single sentences; token counts are invented figures; the session id and repository root are synthetic placeholders.",
   "licenseBasis": "Original synthetic authorship.",
-  "sha256": "302cba78029d5477bf6aeaf904a8bdfafa3ab8570404dba784091081ada62c6b",
-  "notes": "Exercises Gemini usageMetadata mapping (cached content and thoughts tokens) against the real adapter."
+  "sha256": "2d81e52165f1a9ddd30077c2588ba051303d3fcc9c6d658f3ed3af73616556cf",
+  "notes": "Shape re-derived from HookTranslatorGenAIv1.toHookLLMResponse: candidates[].content.parts is string[], and usageMetadata carries only promptTokenCount, candidatesTokenCount, and totalTokenCount — the translator drops cachedContentTokenCount and thoughtsTokenCount before any hook runs."
 }

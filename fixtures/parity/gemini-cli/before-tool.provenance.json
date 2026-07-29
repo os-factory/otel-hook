@@ -1,11 +1,12 @@
 {
   "fixture": "before-tool.json",
-  "sourceContract": "Gemini CLI command hook protocol (BeforeTool), per https://geminicli.com/docs/hooks/reference/",
+  "sourceContract": "Gemini CLI command hook protocol (BeforeTool), per https://geminicli.com/docs/hooks/reference/ and packages/core/src/hooks/types.ts (BeforeToolInput)",
   "provider": "gemini-cli",
-  "capturedDate": "2026-07-25",
+  "providerVersionObserved": "google-gemini/gemini-cli@3499c84 (2026-07-28)",
+  "capturedDate": "2026-07-29",
   "author": "otel-hook integration owner (agent)",
   "sanitization": "Tool input path and session id are invented placeholders under a synthetic repository root.",
   "licenseBasis": "Original synthetic authorship.",
-  "sha256": "a267276fbbaf0511001e7e1bf5f6fec7091804bd8d123536d164fd7bd3e6265f",
-  "notes": "Exercises the real gemini-cli adapter, and pins DIVERGENCE-007: the pinned Python reference rewrites the provider's own BeforeTool event name to Claude Code's PreToolUse."
+  "sha256": "cbda3385e944e145a4a20074ddcfd02b75faac8e65debd3b59061fb0a48ca1db",
+  "notes": "Exercises the real gemini-cli adapter, and pins DIVERGENCE-007: the pinned Python reference rewrites the provider's own BeforeTool event name to Claude Code's PreToolUse. The read_file argument key is Gemini's own `file_path` (PARAM_FILE_PATH), not the `path` an earlier revision of this fixture invented."
 }

@@ -1,8 +1,10 @@
 {
   "session_id": "ses_gemini_demo_1",
   "hook_event_name": "Notification",
+  "transcript_path": "/workspace/demo-repo/.gemini-sessions/ses_gemini_demo_1.json",
   "cwd": "/workspace/demo-repo",
   "timestamp": "2026-07-25T10:00:13.000Z",
   "notification_type": "ToolPermission",
-  "message": "run_shell_command requires approval"
+  "message": "run_shell_command requires approval",
+  "details": { "tool_name": "run_shell_command" }
 }

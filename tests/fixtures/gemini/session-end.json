@@ -1,6 +1,7 @@
 {
   "session_id": "ses_gemini_demo_1",
   "hook_event_name": "SessionEnd",
+  "transcript_path": "/workspace/demo-repo/.gemini-sessions/ses_gemini_demo_1.json",
   "cwd": "/workspace/demo-repo",
   "timestamp": "2026-07-25T10:05:00.000Z",
   "reason": "exit"

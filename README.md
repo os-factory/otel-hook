@@ -36,7 +36,7 @@ indistinguishable in the data.
 | `claude-code` | Claude Code        | stable       | silent          | delta             | `setup` (global and project) |
 | `codex`       | OpenAI Codex CLI   | stable       | silent          | cumulative        | `setup` (global and project) |
 | `cursor`      | Cursor             | stable       | provider JSON   | delta             | unsupported                  |
-| `gemini-cli`  | Gemini CLI         | stable       | silent          | delta             | `setup` (global and project) |
+| `gemini-cli`  | Gemini CLI         | stable       | silent          | cumulative        | `setup` (global and project) |
 | `antigravity` | Google Antigravity | experimental | silent          | delta             | `setup --settings-file`      |
 
 `antigravity` is registered but marked `experimental`: parts of its field and
@@ -759,6 +759,24 @@ fixing one means updating that test rather than discovering a silent change.
     semantics and pins the divergence instead of asserting agreement.
 10. **Only OTLP HTTP/protobuf traces are exported.** `http/json` falls back to a
     disabled sink with a warning, and there is no metrics or logs pipeline.
+11. **Gemini CLI cache and reasoning tokens never reach a hook.** The CLI's hook
+    translator rebuilds `usageMetadata` as exactly
+    `{ promptTokenCount, candidatesTokenCount, totalTokenCount }`, so
+    `cachedContentTokenCount` and `thoughtsTokenCount` — both present on the SDK
+    response it reads — are dropped before any hook runs. The adapter declares
+    `reportsCachedInput: false` and `reportsReasoningOutput: false` accordingly,
+    and still maps both counters in case a later translator version stops
+    stripping them. Unblocking this needs a change upstream, not here.
+
+    Relatedly, `AfterModel` fires once **per streaming chunk**, and a chunk's
+    counters are a snapshot of the response so far rather than that chunk's
+    increment — the CLI's own `loggingStreamWrapper` keeps `lastUsageMetadata`
+    and never sums. The adapter therefore reports `cumulative` temporality, so
+    several usage-bearing chunks of one stream diff against a single
+    generation-scoped baseline and are billed once in total. Asserted in
+    `tests/providers/gemini/usage.test.ts`,
+    `tests/providers/gemini/integration.test.ts`, and
+    `tests/parity/codex-gemini.parity.test.ts`.
 
 ## Architecture decisions
 

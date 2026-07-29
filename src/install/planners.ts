@@ -20,8 +20,9 @@ import {
 } from "../providers/codex/registration.js";
 import { CODEX_PROVIDER_ID } from "../providers/codex/version.js";
 import { GEMINI_PROVIDER_ID } from "../providers/gemini/adapter.js";
-import { GEMINI_HOOK_EVENT_NAMES, type GeminiHookEventName } from "../providers/gemini/schema.js";
+import { type GeminiHookEventName } from "../providers/gemini/schema.js";
 import {
+  GEMINI_REGISTRABLE_HOOK_EVENTS,
   mergeGeminiHookRegistration,
   readGeminiHookRegistrations,
   removeGeminiHookRegistration,
@@ -349,14 +350,16 @@ const PLANNERS: readonly ProviderRegistrationPlanner[] = Object.freeze([
   }),
   Object.freeze({
     providerId: GEMINI_PROVIDER_ID,
-    defaultEvents: GEMINI_HOOK_EVENT_NAMES,
+    defaultEvents: GEMINI_REGISTRABLE_HOOK_EVENTS,
     merge: (input: RegistrationPlanInput): NestedHookDocumentResult => {
       const merged = mergeGeminiHookRegistration(input.existing, {
         name: MANAGED_HOOK_NAME,
         command: input.command,
-        events: (input.events ?? GEMINI_HOOK_EVENT_NAMES) as readonly GeminiHookEventName[],
+        events: (input.events ?? GEMINI_REGISTRABLE_HOOK_EVENTS) as readonly GeminiHookEventName[],
         ...(input.matcher === undefined ? {} : { matcher: input.matcher }),
-        ...(input.timeoutSeconds === undefined ? {} : { timeout: input.timeoutSeconds }),
+        // Seconds in; the Gemini planner converts to the milliseconds that
+        // vocabulary uses.
+        ...(input.timeoutSeconds === undefined ? {} : { timeoutSeconds: input.timeoutSeconds }),
         identifies: input.identifies,
       });
       return {

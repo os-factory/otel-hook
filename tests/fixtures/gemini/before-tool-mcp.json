@@ -1,0 +1,15 @@
+{
+  "session_id": "ses_gemini_demo_1",
+  "hook_event_name": "BeforeTool",
+  "transcript_path": "/workspace/demo-repo/.gemini-sessions/ses_gemini_demo_1.json",
+  "cwd": "/workspace/demo-repo",
+  "timestamp": "2026-07-25T10:00:16.000Z",
+  "tool_name": "mcp_issue_tracker_list_open_issues",
+  "tool_input": { "milestone": "v0.1.0" },
+  "mcp_context": {
+    "server_name": "issue-tracker",
+    "tool_name": "list_open_issues",
+    "command": "issue-tracker-mcp",
+    "args": ["--stdio"]
+  }
+}

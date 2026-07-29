@@ -4,6 +4,7 @@ import { SILENT_HOOK_RESPONSE, type ProviderContext, type ProviderDetectionInput
 import {
   createGeminiCliAdapter,
   DEFAULT_GEMINI_CAPABILITIES,
+  GEMINI_HOOK_EVENT_NAMES,
   GEMINI_PROVIDER_ID,
 } from "../../../src/providers/gemini/index.js";
 import {
@@ -45,9 +46,39 @@ describe("gemini-cli adapter: identity and capabilities", () => {
       "tool.end",
       "compaction.performed",
     ]);
+    // AfterModel fires per streaming chunk and each usageMetadata is a snapshot
+    // of the response so far, so the counters compose by diffing, not by adding.
+    expect(adapter.capabilities.usageTemporality).toBe("cumulative");
+    // The CLI's hook translator rebuilds usageMetadata as exactly
+    // { promptTokenCount, candidatesTokenCount, totalTokenCount }, dropping the
+    // cache and thought counters before any hook runs.
+    expect(adapter.capabilities.reportsCachedInput).toBe(false);
+    expect(adapter.capabilities.reportsReasoningOutput).toBe(false);
+    expect(adapter.capabilities.reportsProviderTotal).toBe(true);
+    // No subagent hook events exist; delegation is visible only as the
+    // `invoke_agent` tool's BeforeTool/AfterTool pair.
     expect(adapter.capabilities.emitsSubagentEvents).toBe(false);
     expect(adapter.capabilities.reportsCacheCreation).toBe(false);
     expect(adapter.capabilities.cacheCreationAccounting).toBe("not-reported");
+  });
+
+  it("recognizes every event name in the CLI's HookEventName enum, and no others", () => {
+    // packages/core/src/hooks/types.ts at google-gemini/gemini-cli@3499c84.
+    expect([...GEMINI_HOOK_EVENT_NAMES].sort()).toEqual(
+      [
+        "BeforeTool",
+        "AfterTool",
+        "BeforeAgent",
+        "Notification",
+        "AfterAgent",
+        "SessionStart",
+        "SessionEnd",
+        "PreCompress",
+        "BeforeModel",
+        "AfterModel",
+        "BeforeToolSelection",
+      ].sort(),
+    );
   });
 
   it("always returns the silent hook response", () => {
@@ -194,12 +225,29 @@ describe("gemini-cli adapter: parse per event", () => {
     }
   });
 
-  it("ignores an intermediate AfterModel streaming chunk with no terminal usage", () => {
+  it("ignores an AfterModel streaming chunk that carries no usageMetadata snapshot", () => {
     const result = parseFixture("after-model-chunk");
     expect(result.status).toBe("ignored");
   });
 
-  it("parses a terminal AfterModel into generation.end with mapped usage", () => {
+  it("reads the string parts the CLI's translator emits, not just the SDK's { text } form", () => {
+    // toHookLLMResponse maps candidates to `parts: string[]`, so a fixture using
+    // the object spelling would be testing a shape no hook ever receives.
+    const payload = loadGeminiFixture("after-model-final") as {
+      llm_response: { candidates: [{ content: { parts: unknown[] } }] };
+    };
+    expect(payload.llm_response.candidates[0]?.content.parts.every((part) => typeof part === "string")).toBe(
+      true,
+    );
+
+    const result = parseFixture("after-model-final");
+    if (result.status === "parsed" && result.events[0]?.type === "generation.end") {
+      expect(result.events[0].outputContent).toHaveLength(1);
+      expect(result.events[0].outputContent?.[0]?.characterLength).toBeGreaterThan(0);
+    }
+  });
+
+  it("parses a closing AfterModel into generation.end with the usage snapshot it carries", () => {
     const result = parseFixture("after-model-final");
     expect(result.status).toBe("parsed");
     if (result.status === "parsed" && result.events[0]?.type === "generation.end") {
@@ -207,16 +255,41 @@ describe("gemini-cli adapter: parse per event", () => {
       expect(event.outcome).toBe("ok");
       expect(event.stopReason).toBe("STOP");
       expect(event.usage).toMatchObject({
+        temporality: "cumulative",
         inputTokens: 512,
-        cachedInputTokens: 128,
         outputTokens: 136,
-        reasoningOutputTokens: 40,
         providerTotalTokens: 648,
         providerTotalAgreement: "agrees",
         cacheCreationAccounting: "not-reported",
         cacheCreationInputTokens: 0,
       });
+      // Not reported by this protocol, so normalization pins them to zero rather
+      // than the adapter inventing a cache read or a reasoning bucket.
+      expect(event.usage?.cachedInputTokens).toBe(0);
+      expect(event.usage?.reasoningOutputTokens).toBe(0);
       expect(event.outputContent).toHaveLength(1);
+    }
+  });
+
+  it("closes the same generation from an earlier usage-bearing chunk of one stream", () => {
+    const chunk = parseFixture("after-model-chunk-usage");
+    const final = parseFixture("after-model-final");
+    expect(chunk.status).toBe("parsed");
+    expect(final.status).toBe("parsed");
+    if (
+      chunk.status === "parsed" &&
+      final.status === "parsed" &&
+      chunk.events[0]?.type === "generation.end" &&
+      final.events[0]?.type === "generation.end"
+    ) {
+      // Both chunks carry the same llm_request, which is what correlates them.
+      expect(chunk.events[0].generationId).toBe(final.events[0].generationId);
+      // The earlier chunk has no finishReason yet; only the closing one does.
+      expect(chunk.events[0].stopReason).toBeUndefined();
+      expect(chunk.events[0].outcome).toBe("unknown");
+      // Each carries a snapshot of the whole response so far, not an increment.
+      expect(chunk.events[0].usage?.inputTokens).toBe(512);
+      expect(final.events[0].usage?.inputTokens).toBe(512);
     }
   });
 
@@ -259,9 +332,12 @@ describe("gemini-cli adapter: parse per event", () => {
     }
   });
 
-  it("correlates BeforeTool/AfterTool ids across a host-side input replacement", () => {
-    const before = parseFixture("before-tool-replaced");
-    const after = parseFixture("after-tool-replaced");
+  it("correlates BeforeTool/AfterTool across a hook's tool_input rewrite", () => {
+    // A BeforeTool hook's `hookSpecificOutput.tool_input` is merged into
+    // `invocation.params` in place, so AfterTool echoes arguments BeforeTool
+    // never saw. Keying on the input would split one call into two halves.
+    const before = parseFixture("before-tool-input-rewritten");
+    const after = parseFixture("after-tool-input-rewritten");
     expect(before.status).toBe("parsed");
     expect(after.status).toBe("parsed");
     if (
@@ -271,6 +347,50 @@ describe("gemini-cli adapter: parse per event", () => {
       after.events[0]?.type === "tool.end"
     ) {
       expect(after.events[0].toolCallId).toBe(before.events[0].toolCallId);
+    }
+  });
+
+  it("keeps a tail tool call apart from the call it replaced, and paired with itself", () => {
+    // `original_request_name` names the tool the model asked for; `tool_name`
+    // names the tool the CLI substituted. Keying on the original alone would
+    // hand two different tools one span.
+    const original = parseFixture("before-tool-input-rewritten");
+    const tailBefore = parseFixture("before-tool-tail-call");
+    const tailAfter = parseFixture("after-tool-tail-call");
+    expect(tailBefore.status).toBe("parsed");
+    expect(tailAfter.status).toBe("parsed");
+    if (
+      original.status === "parsed" &&
+      tailBefore.status === "parsed" &&
+      tailAfter.status === "parsed" &&
+      original.events[0]?.type === "tool.start" &&
+      tailBefore.events[0]?.type === "tool.start" &&
+      tailAfter.events[0]?.type === "tool.end"
+    ) {
+      expect(tailBefore.events[0].toolCallId).not.toBe(original.events[0].toolCallId);
+      expect(tailAfter.events[0].toolCallId).toBe(tailBefore.events[0].toolCallId);
+      // The provider's own names survive: the executing tool is reported, not
+      // the one it stood in for.
+      expect(tailBefore.events[0].toolName).toBe("run_shell_command");
+      expect(tailBefore.events[0].toolKind).toBe("execute");
+    }
+  });
+
+  it("classifies Gemini's subagent entry point as delegation", () => {
+    const result = parseFixture("before-tool-invoke-agent");
+    expect(result.status).toBe("parsed");
+    if (result.status === "parsed" && result.events[0]?.type === "tool.start") {
+      expect(result.events[0].toolName).toBe("invoke_agent");
+      expect(result.events[0].toolKind).toBe("delegate");
+    }
+  });
+
+  it("leaves an MCP tool unknown: its behaviour is defined by the connected server", () => {
+    const result = parseFixture("before-tool-mcp");
+    expect(result.status).toBe("parsed");
+    if (result.status === "parsed" && result.events[0]?.type === "tool.start") {
+      expect(result.events[0].toolName).toBe("mcp_issue_tracker_list_open_issues");
+      expect(result.events[0].toolKind).toBe("unknown");
     }
   });
 

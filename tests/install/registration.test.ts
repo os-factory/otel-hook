@@ -16,6 +16,11 @@ import {
   SUPPORTED_REGISTRATION_PROVIDER_IDS,
 } from "../../src/install/index.js";
 import { PROVIDER_DESCRIPTORS } from "../../src/providers/defaults.js";
+import { GEMINI_HOOK_EVENT_NAMES } from "../../src/providers/gemini/schema.js";
+import {
+  GEMINI_REGISTRABLE_HOOK_EVENTS,
+  GEMINI_UNREGISTERED_HOOK_EVENTS,
+} from "../../src/providers/gemini/setup.js";
 
 const OURS = managedHookPredicate("otel-hook");
 
@@ -101,6 +106,57 @@ describe("registrable event sets", () => {
     expect(CODEX_REGISTRABLE_HOOK_EVENTS).not.toContain("SessionEnd");
     expect(CODEX_UNREGISTERED_HOOK_EVENTS.SessionEnd).toContain("not modelled");
     expect(CODEX_UNREGISTERED_HOOK_EVENTS.PermissionRequest).toBeDefined();
+  });
+
+  it("registers only Gemini CLI events the adapter turns into telemetry", () => {
+    for (const event of GEMINI_REGISTRABLE_HOOK_EVENTS) {
+      expect(GEMINI_HOOK_EVENT_NAMES, event).toContain(event);
+    }
+    const skipped = GEMINI_HOOK_EVENT_NAMES.filter(
+      (event) => !GEMINI_REGISTRABLE_HOOK_EVENTS.includes(event),
+    );
+    // AfterModel fires once per streaming chunk, so this set is the difference
+    // between a process per chunk that emits telemetry and one that emits none.
+    expect([...skipped].sort()).toEqual(["AfterAgent", "BeforeToolSelection", "Notification"]);
+    for (const event of skipped) {
+      expect(GEMINI_UNREGISTERED_HOOK_EVENTS[event], event).toBeDefined();
+    }
+  });
+});
+
+describe("timeout units per vocabulary", () => {
+  const firstHandler = (document: Record<string, unknown>, event: string): Record<string, unknown> => {
+    const hooks = document.hooks as Record<string, readonly { hooks: Record<string, unknown>[] }[]>;
+    return hooks[event]?.[0]?.hooks?.[0] ?? {};
+  };
+
+  it("writes seconds for Claude Code and the Codex CLI, milliseconds for the Gemini CLI", () => {
+    // Claude Code and the Codex CLI document `timeout` in seconds; the Gemini
+    // CLI documents milliseconds (default 60000) and passes the value straight
+    // to setTimeout. One `--timeout-seconds 30` therefore has to be written two
+    // different ways, or the Gemini hook is killed after 30ms.
+    const claude = planProviderRegistration({
+      providerId: "claude-code",
+      options: { command: "otel-hook run", timeoutSeconds: 30 },
+    });
+    const codex = planProviderRegistration({
+      providerId: "codex",
+      options: { command: "otel-hook run", timeoutSeconds: 30 },
+    });
+    const gemini = planProviderRegistration({
+      providerId: "gemini-cli",
+      options: { command: "otel-hook run", timeoutSeconds: 30 },
+    });
+
+    expect(claude.status).toBe("planned");
+    expect(codex.status).toBe("planned");
+    expect(gemini.status).toBe("planned");
+    if (claude.status !== "planned" || codex.status !== "planned" || gemini.status !== "planned") {
+      return;
+    }
+    expect(firstHandler(claude.document, "SessionStart").timeout).toBe(30);
+    expect(firstHandler(codex.document, "SessionStart").timeout).toBe(30);
+    expect(firstHandler(gemini.document, "SessionStart").timeout).toBe(30_000);
   });
 });
 

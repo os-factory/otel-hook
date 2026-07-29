@@ -33,7 +33,50 @@ describe("gemini-cli adapter: end-to-end via the hook runtime", () => {
     ]);
   });
 
-  it("only completes a model invocation on the terminal streaming chunk", async () => {
+  it("bills a stream whose chunks each carry a usage snapshot exactly once", async () => {
+    const harness = createTestHook({ adapters: [createGeminiCliAdapter()] });
+
+    await harness.hook.ingest(ingest(loadGeminiFixture("before-model")));
+    const first = await harness.hook.ingest(ingest(loadGeminiFixture("after-model-chunk-usage")));
+    const second = await harness.hook.ingest(ingest(loadGeminiFixture("after-model-final")));
+
+    const observations = [...first.usageObservations, ...second.usageObservations];
+    expect(observations).toHaveLength(2);
+    // Both chunks belong to one generation, so they diff against one baseline.
+    expect(new Set(observations.map((observation) => observation.scopeKey)).size).toBe(1);
+    expect(observations.every((observation) => observation.scope === "generation")).toBe(true);
+    expect(observations.every((observation) => observation.reportedTemporality === "cumulative")).toBe(
+      true,
+    );
+
+    // The snapshots are 512/40 then 512/136. Summed as deltas that would be
+    // 1024 input tokens for a prompt that was sent once; diffed it is 512.
+    expect(observations[0]?.delta.inputTokens).toBe(512);
+    expect(observations[0]?.delta.outputTokens).toBe(40);
+    expect(observations[1]?.delta.inputTokens).toBe(0);
+    expect(observations[1]?.delta.outputTokens).toBe(96);
+    const billed = observations.reduce(
+      (total, observation) => total + observation.delta.inputTokens + observation.delta.outputTokens,
+      0,
+    );
+    expect(billed).toBe(648);
+    expect(observations.some((observation) => observation.resetDetected)).toBe(false);
+  });
+
+  it("counts a redelivered closing chunk as a zero delta, not a second charge", async () => {
+    const harness = createTestHook({ adapters: [createGeminiCliAdapter()] });
+    const payload = loadGeminiFixture("after-model-final");
+
+    const first = await harness.hook.ingest(ingest(payload));
+    const second = await harness.hook.ingest(ingest(payload));
+
+    expect(first.usageObservations[0]?.delta.inputTokens).toBe(512);
+    expect(second.usageObservations[0]?.delta.inputTokens).toBe(0);
+    expect(second.usageObservations[0]?.delta.outputTokens).toBe(0);
+    expect(second.usageObservations[0]?.resetDetected).toBe(false);
+  });
+
+  it("only completes a model invocation on a chunk carrying a usage snapshot", async () => {
     const harness = createTestHook({ adapters: [createGeminiCliAdapter()] });
 
     const beforeModel = await harness.hook.ingest(ingest(loadGeminiFixture("before-model")));
@@ -81,9 +124,8 @@ describe("gemini-cli adapter: end-to-end via the hook runtime", () => {
     const noUsagePayload = {
       ...(loadGeminiFixture("after-model-final") as Record<string, unknown>),
       llm_response: {
-        candidates: [
-          { content: { role: "model", parts: [{ text: "no usage reported" }] }, finishReason: "STOP" },
-        ],
+        text: "no usage reported",
+        candidates: [{ content: { role: "model", parts: ["no usage reported"] }, finishReason: "STOP" }],
       },
     };
 

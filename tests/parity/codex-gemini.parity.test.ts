@@ -46,7 +46,7 @@ const loadSession = async (
   );
 
 const CODEX_FILES = ["user-prompt-submit.json", "stop.json"] as const;
-const GEMINI_FILES = ["before-tool.json", "after-model.json"] as const;
+const GEMINI_FILES = ["before-tool.json", "after-model-chunk.json", "after-model.json"] as const;
 
 const availability = await isPythonReferenceAvailable();
 
@@ -125,39 +125,72 @@ describe("codex: shipped adapter semantics", () => {
 });
 
 describe("gemini-cli: shipped adapter semantics", () => {
-  it("attributes both fixtures and preserves the provider's own event names", async () => {
+  it("attributes every fixture and preserves the provider's own event names", async () => {
     const run = await runThroughRealAdapter("gemini-cli", await loadSession("gemini-cli", GEMINI_FILES));
 
-    expect(run.attributions).toEqual(["attributed", "attributed"]);
+    expect(run.attributions).toEqual(["attributed", "attributed", "attributed"]);
     expect(run.diagnosticCodes).toEqual([]);
-    expect(run.events.map((event) => event.type)).toEqual(["tool.start", "generation.end"]);
+    expect(run.events.map((event) => event.type)).toEqual([
+      "tool.start",
+      "generation.end",
+      "generation.end",
+    ]);
     // The canonical type is provider-neutral; the provider's own name survives
     // verbatim in provenance instead of being translated.
     expect(run.events.map((event) => event.provenance.sourceEventName)).toEqual([
       "BeforeTool",
       "AfterModel",
+      "AfterModel",
     ]);
   });
 
-  it("treats Gemini thought tokens as a subset of output, not an extra bucket", async () => {
+  it("reports each chunk's usageMetadata as a cumulative snapshot of one generation", async () => {
     const run = await runThroughRealAdapter("gemini-cli", await loadSession("gemini-cli", GEMINI_FILES));
-    const generationEnd = run.events.find((event) => event.type === "generation.end");
-    const usage = generationEnd?.type === "generation.end" ? generationEnd.usage : undefined;
+    const ends = run.events.filter((event) => event.type === "generation.end");
 
+    // AfterModel fires per chunk, and each usage-bearing chunk closes the same
+    // generation — its `llm_request` is identical across the stream.
+    expect(ends).toHaveLength(2);
+    const generationIds = ends.map((event) =>
+      event.type === "generation.end" ? event.generationId : undefined,
+    );
+    expect(new Set(generationIds).size).toBe(1);
+    for (const event of ends) {
+      const usage = event.type === "generation.end" ? event.usage : undefined;
+      expect(usage?.temporality).toBe("cumulative");
+      // Neither counter reaches a hook: the CLI's translator rebuilds
+      // usageMetadata as exactly { prompt, candidates, total }.
+      expect(usage?.cachedInputTokens).toBe(0);
+      expect(usage?.reasoningOutputTokens).toBe(0);
+    }
+    expect(createGeminiCliAdapter().capabilities.usageTemporality).toBe("cumulative");
+    expect(createGeminiCliAdapter().capabilities.reportsCachedInput).toBe(false);
+    expect(createGeminiCliAdapter().capabilities.reportsReasoningOutput).toBe(false);
+  });
+
+  it("bills the two-chunk stream once by diffing the snapshots, never by summing them", async () => {
+    const run = await runThroughRealAdapter("gemini-cli", await loadSession("gemini-cli", GEMINI_FILES));
+    const observations = run.outcomes.flatMap((outcome) => outcome.usageObservations);
+
+    expect(observations).toHaveLength(2);
+    expect(observations.every((observation) => observation.scope === "generation")).toBe(true);
+    // Snapshots 512/40 then 512/136. Summed as deltas the prompt would be
+    // charged twice; diffed against the generation's baseline it is charged once.
+    expect(observations[0]?.delta.inputTokens).toBe(512);
+    expect(observations[1]?.delta.inputTokens).toBe(0);
+    expect(observations[1]?.delta.outputTokens).toBe(96);
+    expect(observations.some((observation) => observation.resetDetected)).toBe(false);
+
+    const ends = run.events.filter((event) => event.type === "generation.end");
+    const closing = ends[ends.length - 1];
+    const usage = closing?.type === "generation.end" ? closing.usage : undefined;
     expect(usage).toMatchObject({
-      temporality: "delta",
       inputTokens: 512,
-      cachedInputTokens: 128,
-      // candidatesTokenCount (96) + thoughtsTokenCount (40): Gemini reports
-      // thoughts separately, and the canonical model folds them into output with
-      // the thought count retained as the reasoning subset.
       outputTokens: 136,
-      reasoningOutputTokens: 40,
       providerTotalTokens: 648,
       providerTotalAgreement: "agrees",
     });
-    expect(usage?.uncachedInputTokens).toBe(384);
-    expect(createGeminiCliAdapter().capabilities.reportsReasoningOutput).toBe(true);
+    expect(usage?.uncachedInputTokens).toBe(512);
   });
 
   it("omits tool input and response text, and never exports the raw path", async () => {
