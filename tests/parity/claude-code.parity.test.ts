@@ -340,15 +340,19 @@ describe("claude-code parity: the shipped adapter on the same fixtures", () => {
     expect(compaction?.type === "compaction.performed" ? compaction.contextTokensAfter : undefined).toBe(
       42_000,
     );
-    // The model supports it and the comparison mapper produces it; a stateless
-    // adapter cannot. If this ever becomes 180000, the note must be retired.
+    // The model supports it and the comparison mapper produces it from this
+    // fixture, whose PreCompact carries a context_tokens_before the real protocol
+    // never sends. The adapter declines it: an exclusion confirmed upstream, not a
+    // gap awaiting injected state. See tests/providers/claude/compaction.test.ts.
     expect(
       compaction?.type === "compaction.performed" ? compaction.contextTokensBefore : undefined,
     ).toBeUndefined();
     expect(
       mapClaudeCodeSession(payloads).events.find((event) => event.type === "compaction.performed"),
     ).toMatchObject({ contextTokensBefore: 180_000 });
-    expect(note.kind).toBe("stateless-adapter");
+    expect(note.kind).toBe("capability-exclusion");
+    // Settled entries name their capture; open ones must not pretend to.
+    expect(note.evidence).toContain("2.1.220");
   });
 
   it("accepts the current PostCompact trigger field", async () => {
@@ -399,7 +403,11 @@ describe("claude-code parity: the shipped adapter on the same fixtures", () => {
       (event) => event.type === "generation.end",
     );
     expect(mapped?.type === "generation.end" ? mapped.usage?.reasoningOutputTokens : undefined).toBe(15);
-    expect(note.kind).toBe("declared-capability");
+    // Settled against real captures: the provider reports neither counter, so this
+    // is an exclusion rather than an unknown. The fixture's top-level fields are a
+    // probe of the Python reference, not a claim about Claude Code.
+    expect(note.kind).toBe("capability-exclusion");
+    expect(note.evidence).toContain("4,999");
   });
 
   it("keeps every canonical event free of the provider's raw payload", async () => {

@@ -1,0 +1,35 @@
+{
+  "hook_event_name": "SubagentStop",
+  "session_id": "ses-contract-claude-0001",
+  "transcript_path": "/workspace/contract-repo/.transcripts/session.jsonl",
+  "cwd": "/workspace/contract-repo",
+  "agent_id": "agent-contract-0001",
+  "agent_type": "Explore",
+  "agent_transcript_path": "/workspace/contract-repo/.transcripts/agent.jsonl",
+  "stop_hook_active": false,
+  "last_assistant_message": "Synthetic placeholder for the subagent's final message.",
+  "usage": {
+    "input_tokens": 2,
+    "output_tokens": 1830,
+    "cache_read_input_tokens": 713000,
+    "cache_creation_input_tokens": 0,
+    "cache_creation": {
+      "ephemeral_5m_input_tokens": 0,
+      "ephemeral_1h_input_tokens": 0
+    },
+    "server_tool_use": {
+      "web_search_requests": 0,
+      "web_fetch_requests": 0
+    },
+    "service_tier": "standard",
+    "iterations": [
+      {
+        "type": "message",
+        "input_tokens": 2,
+        "output_tokens": 1830,
+        "cache_read_input_tokens": 713000,
+        "cache_creation_input_tokens": 0
+      }
+    ]
+  }
+}

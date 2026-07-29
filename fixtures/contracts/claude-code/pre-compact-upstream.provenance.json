@@ -1,0 +1,12 @@
+{
+  "fixture": "pre-compact-upstream.json",
+  "sourceContract": "Claude Code hook JSON protocol (PreCompact), read from the shipped CLI's own hook-input schemas: trigger plus a nullable custom_instructions, and no token counter of any kind",
+  "provider": "claude-code",
+  "providerVersionObserved": "2.1.220",
+  "capturedDate": "2026-07-29",
+  "author": "otel-hook claude-code provider owner (agent)",
+  "sanitization": "Shape only; session id and paths are fabricated. custom_instructions is null, which is a real permitted value rather than a redaction.",
+  "licenseBasis": "Original synthetic authorship: field names reproduce a third-party CLI's documented hook contract, all values are this repository's own.",
+  "sha256": "5a0d64bff470eb161fc0f34596c7d86db71833a9c7e832835e280676be0a5730",
+  "notes": "The unembellished upstream PreCompact. Exists to pin the absence that settles ADAPTER-NOTE-002: there is no context_tokens_before to carry across the compaction boundary, because the provider never states one. Pairs with post-compact-upstream.json."
+}

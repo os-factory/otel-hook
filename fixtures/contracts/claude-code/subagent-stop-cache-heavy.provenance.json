@@ -1,0 +1,12 @@
+{
+  "fixture": "subagent-stop-cache-heavy.json",
+  "sourceContract": "Claude Code hook JSON protocol (SubagentStop), read from the shipped CLI's own hook-input schemas, with a harness-attached `usage` object in the observed `message.usage` shape",
+  "provider": "claude-code",
+  "providerVersionObserved": "2.1.220",
+  "capturedDate": "2026-07-29",
+  "author": "otel-hook claude-code provider owner (agent)",
+  "sanitization": "Shape only. Session, agent, and path values are fabricated; the assistant message is a placeholder. The counts are round numbers picked to sit at the extreme end of the observed ratio (a two-token fresh prompt against a 713,000-token cache read), chosen to prove the fold does not overflow or overlap at that ratio rather than to report any real turn.",
+  "licenseBasis": "Original synthetic authorship: field names reproduce a third-party CLI's documented hook contract, all values are this repository's own.",
+  "sha256": "e12222dbaa8c2559466fe7000848c8c637abccb74826ecb438a461b0551f6600",
+  "notes": "The cache-heavy case: almost nothing is fresh input. Pins that uncachedInputTokens falls out to the provider's own input_tokens even when cache reads dominate by five orders of magnitude. Exercised by tests/providers/claude/usage-contract.test.ts."
+}

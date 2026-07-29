@@ -1,0 +1,12 @@
+{
+  "fixture": "stop-usage-foreign-counters.json",
+  "sourceContract": "Claude Code hook JSON protocol (Stop) with a `usage` object a foreign harness has extended with counters Claude Code does not report",
+  "provider": "claude-code",
+  "providerVersionObserved": "2.1.220",
+  "capturedDate": "2026-07-29",
+  "author": "otel-hook claude-code provider owner (agent)",
+  "sanitization": "Shape only; every value invented. The token counts intentionally mirror those in fixtures/parity/claude-code/stop.json so the two fixtures can be compared directly, and total_tokens (620) intentionally disagrees with the canonical arithmetic total so that honouring it would be visible.",
+  "licenseBasis": "Original synthetic authorship: field names reproduce a third-party CLI's documented hook contract, all values are this repository's own.",
+  "sha256": "7aba8951d56c3d74765cb827f666174bc4c25519e21e3ddc0ce6f15f21376136",
+  "notes": "Pins the ADAPTER-NOTE-001 exclusion: 0 of 4,999 real usage objects carried a total-token or reasoning-token key, so usage.total_tokens and usage.reasoning_output_tokens are declined and named in a parse warning rather than absorbed into counters the declared capabilities say are absent. Exercised by tests/providers/claude/usage-contract.test.ts."
+}
