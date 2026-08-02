@@ -23,6 +23,7 @@ import { CURSOR_DELIVERY_GAPS, cursorDeliveryIdentity } from "./delivery.js";
 import {
   CURSOR_DECISION_EVENTS,
   CURSOR_PROVIDER_ID,
+  cursorSessionId,
   recognizeCursorPayload,
   type CursorPayload,
 } from "./payload.js";
@@ -275,12 +276,21 @@ export const createCursorAdapter = (options: CursorAdapterOptions = {}): Provide
     }
     const workspace = deriveWorkspace(context, payload);
     const discriminator = invocationDiscriminator(payload);
+    // Cursor's own conversation id, used exactly as reported: never
+    // normalized, parent/child matched, or substituted for a derived value.
+    // `session_id` repeats it in every capture, and is the fallback
+    // `recognizeCursorPayload` guarantees is present when `conversation_id`
+    // is not — see `cursorSessionId`.
+    const sessionId = cursorSessionId(payload);
+    if (sessionId === undefined) {
+      return [];
+    }
     // Cursor sends no timestamp on any hook — see `./payload.ts`. The clock is
     // the only available reading, as it is for Claude Code.
     const occurredAt = context.clock.now();
     const invocationId = context.ids.newInvocationId({
       providerId: id,
-      sessionId: payload.conversation_id,
+      sessionId,
       sourceEventName: payload.hook_event_name,
       occurredAt,
       ...(discriminator === undefined ? {} : { discriminator }),
@@ -289,10 +299,7 @@ export const createCursorAdapter = (options: CursorAdapterOptions = {}): Provide
       source: `adapter:${id}`,
       confidence: input.detection.confidence,
       fields: {
-        // Cursor's own conversation id, used exactly as reported: never
-        // normalized, parent/child matched, or substituted for a derived value.
-        // `session_id` repeats it in every capture and is not preferred over it.
-        sessionId: payload.conversation_id,
+        sessionId,
         invocationId,
         startedAt: occurredAt,
         ...(workspace === undefined ? {} : { workspace }),

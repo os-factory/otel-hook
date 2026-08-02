@@ -161,11 +161,12 @@ export const CURSOR_USAGE_INCLUSIVITY_NOTE =
 /**
  * Fields the reference lists as present on every agent hook.
  *
- * `conversation_id` is the only one this adapter requires: it is the session
- * identity, and every captured agent payload carries it. `cwd` is *not*
- * `.min(1)` — the CLI captures report `"cwd": ""` for a workspace-rooted call,
- * and rejecting an empty string would drop the whole event over a field the
- * adapter never reads for identity.
+ * `conversation_id` is the session identity every captured agent payload
+ * carries, and `session_id` repeats it in every capture — see
+ * {@link cursorSessionId} for why the schema no longer hard-requires the
+ * former by itself. `cwd` is *not* `.min(1)` — the CLI captures report
+ * `"cwd": ""` for a workspace-rooted call, and rejecting an empty string would
+ * drop the whole event over a field the adapter never reads for identity.
  *
  * `user_email` and `transcript_path` are declared so they parse rather than
  * being silently stripped, and are then never read by any code path. They are a
@@ -173,7 +174,12 @@ export const CURSOR_USAGE_INCLUSIVITY_NOTE =
  * neither reaches a sink.
  */
 const envelopeShape = {
-  conversation_id: z.string().min(1),
+  // Not `.min(1)`: see `cursorSessionId`. A payload naming neither
+  // `conversation_id` nor `session_id` is still rejected — by
+  // `recognizeCursorPayload`'s post-parse check — but rejecting it here would
+  // fail the whole discriminated union on a field the adapter can source from
+  // either name.
+  conversation_id: z.string().optional(),
   generation_id: z.string().optional(),
   session_id: z.string().optional(),
   model: z.string().optional(),
@@ -426,6 +432,13 @@ export const recognizeCursorPayload = (payload: unknown): CursorRecognition | un
           : `${issue.path.join(".") || "<root>"}: ${issue.message}`,
     };
   }
+  if (cursorSessionId(parsed.data) === undefined) {
+    return {
+      status: "invalid",
+      eventName,
+      detail: "payload names neither conversation_id nor session_id, so it carries no session to attribute telemetry to",
+    };
+  }
   return { status: "modelled", payload: parsed.data };
 };
 
@@ -433,4 +446,27 @@ export const recognizeCursorPayload = (payload: unknown): CursorRecognition | un
 export const normalizeCursorPayload = (payload: unknown): CursorPayload | undefined => {
   const recognized = recognizeCursorPayload(payload);
   return recognized?.status === "modelled" ? recognized.payload : undefined;
+};
+
+/**
+ * The session identity to attribute a modelled payload to.
+ *
+ * `conversation_id` is preferred, but some live Cursor Agent-surface
+ * `beforeSubmitPrompt` deliveries have been observed missing it while still
+ * carrying `session_id` — which every capture in `./payload.ts`'s provenance
+ * note shows repeating `conversation_id` exactly. Previously the schema
+ * required `conversation_id` unconditionally, so any callback missing it —
+ * this one included — failed detection outright and was silently declined as
+ * `provider-unknown`, with no `prompt.submitted` ever emitted for that
+ * conversation. Falling back to `session_id` is not a guess: it is reading the
+ * same identity from the field Cursor's own envelope repeats it in, and
+ * `recognizeCursorPayload` still rejects a payload naming neither.
+ */
+export const cursorSessionId = (payload: CursorPayload): string | undefined => {
+  if (payload.conversation_id !== undefined && payload.conversation_id.length > 0) {
+    return payload.conversation_id;
+  }
+  return payload.session_id !== undefined && payload.session_id.length > 0
+    ? payload.session_id
+    : undefined;
 };

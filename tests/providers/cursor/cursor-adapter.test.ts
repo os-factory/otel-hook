@@ -260,6 +260,38 @@ describe("cursor adapter: lifecycle contract", () => {
     }
   });
 
+  it("still emits prompt.submitted when a live delivery omits conversation_id but carries session_id", async () => {
+    // Regression for #32: some live Cursor Agent-surface beforeSubmitPrompt
+    // deliveries were observed missing conversation_id while still carrying
+    // session_id — which every capture shows repeating conversation_id. Before
+    // the fix, the envelope's hard `conversation_id` requirement rejected the
+    // whole payload and no prompt.submitted was ever emitted for it.
+    const harness = harnessWithCursor();
+    const outcome = await ingest(
+      harness,
+      beforeSubmitPromptPayload({ conversation_id: undefined, session_id: CONVERSATION_A }),
+    );
+    expect(outcome.attribution).toBe("attributed");
+    const prompt = eventOfType(harness.sink.events(), "prompt.submitted");
+    expect(prompt.promptSource).toBe("unknown");
+  });
+
+  it("still declines a beforeSubmitPrompt payload naming neither conversation_id nor session_id", async () => {
+    const harness = harnessWithCursor();
+    const outcome = await ingest(
+      harness,
+      beforeSubmitPromptPayload({ conversation_id: undefined, session_id: undefined }),
+    );
+    expect(outcome.attribution).toBe("declined");
+    expect(harness.sink.events()).toEqual([]);
+    // The decline is diagnosable, not just a silent "provider not attributed":
+    // the specific reason cursor's own detect() gave is surfaced rather than
+    // being flattened into the registry's generic "no adapter recognized" text.
+    expect(outcome.diagnostics.some((diagnostic) => diagnostic.message.includes("session_id"))).toBe(
+      true,
+    );
+  });
+
   it("maps preToolUse/postToolUse to a matching tool.start/tool.end pair", async () => {
     const harness = harnessWithCursor();
     await ingest(harness, preToolUsePayload());

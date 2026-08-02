@@ -1,11 +1,12 @@
 import type { ProviderDeliveryClaim, ProviderIdentityInput } from "../adapter.js";
-import { normalizeCursorPayload, type CursorPayload } from "./payload.js";
+import { cursorSessionId, normalizeCursorPayload, type CursorPayload } from "./payload.js";
 
 /**
  * Which Cursor callbacks carry an identifier that survives a redelivery.
  *
- * Cursor's envelope always carries `conversation_id`, which scopes the identity.
- * On top of it:
+ * Cursor's envelope scopes the identity by `conversation_id`, or by
+ * `session_id` on the live deliveries observed missing it — see
+ * `cursorSessionId` in `./payload.ts`. On top of it:
  *
  * - `tool_use_id` names one tool call, and the event name separates its
  *   before-edge from its after-edge and from its failure edge.
@@ -113,12 +114,16 @@ export const cursorDeliveryIdentity = (
   if (payload === undefined) {
     return undefined;
   }
+  const sessionId = cursorSessionId(payload);
+  if (sessionId === undefined) {
+    return undefined;
+  }
   const identified = deliveryComponents(payload);
   if (identified === undefined) {
     return undefined;
   }
   return {
-    sessionId: payload.conversation_id,
+    sessionId,
     sourceEventName: payload.hook_event_name,
     components: identified.components,
     evidence: identified.evidence,
