@@ -95,6 +95,17 @@ export const createProviderRegistry = (
         };
       }
 
+      // Reasons from adapters that recognized the callback well enough to
+      // explain why they declined it — as opposed to one that never looked at
+      // this payload shape at all. Kept only for the "no-candidates" outcome
+      // below: a payload every adapter genuinely ignores should still read as
+      // the generic message, but a payload one adapter recognized and rejected
+      // (e.g. Cursor's own envelope contract) must not be flattened into that
+      // same generic message — that is the difference between "provider
+      // unknown" and "provider known, payload rejected for a stated reason",
+      // and only the raw per-adapter `detect()` result carries the latter.
+      const nearMisses: string[] = [];
+
       for (const adapter of frozen) {
         let detection: ProviderDetection;
         try {
@@ -105,6 +116,10 @@ export const createProviderRegistry = (
           continue;
         }
         if (detection.confidence === "none") {
+          for (const reason of detection.reasons) {
+            const prefixed = `${adapter.id}: ${reason}`;
+            nearMisses.push(prefixed.length <= 160 ? prefixed : `${prefixed.slice(0, 159)}…`);
+          }
           continue;
         }
         if (detection.providerId !== adapter.id) {
@@ -125,7 +140,7 @@ export const createProviderRegistry = (
         return {
           status: "unknown",
           reason: "no-candidates",
-          detection: unknownDetection(),
+          detection: unknownDetection(nearMisses.length === 0 ? undefined : nearMisses.slice(0, 8)),
           candidates,
           errors,
         };
