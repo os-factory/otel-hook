@@ -38,6 +38,15 @@ describe("CLI argument parsing", () => {
     expect(expectRun(["run", "--provider=cursor"]).providerId).toBe("cursor");
   });
 
+  it("accepts legacy --cursor as shorthand for --provider cursor", () => {
+    expect(expectRun(["run", "--cursor"]).providerId).toBe("cursor");
+  });
+
+  it("accepts legacy --claude and --codex provider shorthands", () => {
+    expect(expectRun(["run", "--claude"]).providerId).toBe("claude-code");
+    expect(expectRun(["run", "--codex"]).providerId).toBe("codex");
+  });
+
   it("applies the default stdin bound and validates an explicit one", () => {
     expect(expectRun(["run"]).maxInputBytes).toBe(DEFAULT_MAX_INPUT_BYTES);
     expect(expectRun(["run", "--max-input-bytes", "4096"]).maxInputBytes).toBe(4096);

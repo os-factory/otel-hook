@@ -204,6 +204,25 @@ type Tokenized = {
   readonly errors: readonly string[];
 };
 
+const LEGACY_PROVIDER_FLAGS: Readonly<Record<string, string>> = {
+  "--cursor": "cursor",
+  "--claude": "claude-code",
+  "--codex": "codex",
+};
+
+function normalizeLegacyProviderFlags(argv: readonly string[]): readonly string[] {
+  const out: string[] = [];
+  for (const token of argv) {
+    const providerId = LEGACY_PROVIDER_FLAGS[token];
+    if (providerId !== undefined) {
+      out.push("--provider", providerId);
+      continue;
+    }
+    out.push(token);
+  }
+  return out;
+}
+
 const tokenize = (argv: readonly string[]): Tokenized => {
   const values = new Map<string, string[]>();
   const booleans = new Set<string>();
@@ -644,7 +663,7 @@ export const parseCliArgs = (argv: readonly string[]): CliParseResult => {
     return { status: "help", topic: command };
   }
 
-  const tokens = tokenize(rest);
+  const tokens = tokenize(normalizeLegacyProviderFlags(rest));
   const errors = [...tokens.errors];
 
   if (command === "providers") {
