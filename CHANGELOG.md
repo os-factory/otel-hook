@@ -1,3 +1,10 @@
+## [0.1.3](https://github.com/os-factory/otel-hook/compare/v0.1.2...v0.1.3) (2026-08-10)
+
+
+### Bug Fixes
+
+* **cli:** accept legacy --cursor/--claude/--codex provider shorthands ([#31](https://github.com/os-factory/otel-hook/issues/31)) ([a04ac7f](https://github.com/os-factory/otel-hook/commit/a04ac7f84b7450adc414a18c8370023b5667e1a1))
+
 ## [0.1.2](https://github.com/os-factory/otel-hook/compare/v0.1.1...v0.1.2) (2026-08-02)
 
 
