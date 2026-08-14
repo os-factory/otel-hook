@@ -153,6 +153,14 @@ describe("Claude Code adapter: lifecycle mapping", () => {
     expect(end.outcome).toBe("ok");
     expect(end.model).toEqual({ modelId: "unknown" });
     expect(end.usage?.temporality).toBe("delta");
+    expect(end.outputContent).toHaveLength(1);
+    expect(end.outputContent?.[0]).toMatchObject({
+      kind: "response",
+      role: "assistant",
+      disclosure: "omitted",
+      characterLength: fixtures.stop.last_assistant_message.length,
+    });
+    expect(end.outputContent?.[0]?.text).toBeUndefined();
   });
 
   it("Stop without usage omits the usage field entirely", async () => {
@@ -161,6 +169,16 @@ describe("Claude Code adapter: lifecycle mapping", () => {
     const end = eventOfType(outcome.events, "generation.end");
     if (end.type !== "generation.end") throw new Error("unreachable");
     expect(end.usage).toBeUndefined();
+  });
+
+  it("Stop without last_assistant_message omits outputContent", async () => {
+    const { last_assistant_message, ...payload } = fixtures.stop;
+    expect(last_assistant_message).toBeDefined();
+    const { run } = ingest(payload);
+    const outcome = await run();
+    const end = eventOfType(outcome.events, "generation.end");
+    if (end.type !== "generation.end") throw new Error("unreachable");
+    expect(end.outputContent).toBeUndefined();
   });
 
   it("StopFailure(rate_limit) -> generation.end outcome error with stopReason", async () => {
