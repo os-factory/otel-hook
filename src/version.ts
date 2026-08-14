@@ -4,4 +4,4 @@
  *
  * Updated by `scripts/release/sync-version.mjs` during semantic-release.
  */
-export const VERSION = "0.1.3";
+export const VERSION = "0.2.0";

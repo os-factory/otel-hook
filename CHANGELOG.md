@@ -1,3 +1,10 @@
+# [0.2.0](https://github.com/os-factory/otel-hook/compare/v0.1.3...v0.2.0) (2026-08-14)
+
+
+### Features
+
+* **claude:** capture final response content ([#34](https://github.com/os-factory/otel-hook/issues/34)) ([d612b8a](https://github.com/os-factory/otel-hook/commit/d612b8ad261f55cde5a586dc13f6873072cb64e6))
+
 ## [0.1.3](https://github.com/os-factory/otel-hook/compare/v0.1.2...v0.1.3) (2026-08-10)
 
 
