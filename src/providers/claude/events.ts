@@ -240,6 +240,17 @@ export const parseClaudeCode = (
         generationId,
         model: UNKNOWN_MODEL,
         outcome: "ok",
+        ...(payload.last_assistant_message === undefined || payload.last_assistant_message === ""
+          ? {}
+          : {
+              outputContent: [
+                context.privacy.describeContent({
+                  kind: "response",
+                  role: "assistant",
+                  text: payload.last_assistant_message,
+                }),
+              ],
+            }),
         ...withUsage(payload.usage),
       });
       break;

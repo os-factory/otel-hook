@@ -74,4 +74,19 @@ describe("Claude Code adapter: privacy (redact policy)", () => {
     const outcome = await harness.hook.ingest({ payload: fixtures.postToolUseWithSecrets, transport: "hook-stdin" });
     expect(batchContains(outcome.events, "synthetic-secret-cookie-value")).toBe(false);
   });
+
+  it("discloses the final assistant response through the privacy service", async () => {
+    const harness = harnessWithRedact();
+    const outcome = await harness.hook.ingest({ payload: fixtures.stop, transport: "hook-stdin" });
+    expect(findDisclosureViolations(outcome.events, "redacted")).toEqual([]);
+
+    const generationEnd = outcome.events.find((event) => event.type === "generation.end");
+    if (generationEnd?.type !== "generation.end") throw new Error("expected a generation.end event");
+    expect(generationEnd.outputContent?.[0]).toMatchObject({
+      kind: "response",
+      role: "assistant",
+      disclosure: "redacted",
+      text: fixtures.stop.last_assistant_message,
+    });
+  });
 });
