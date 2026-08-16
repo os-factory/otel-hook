@@ -221,7 +221,14 @@ export type PostCompactPayload = z.infer<typeof postCompactPayloadSchema>;
 export const stopPayloadSchema = z.object({
   ...commonFields,
   hook_event_name: z.literal("Stop"),
+  /**
+   * Interactive Stop field (Claude Code ≥ 2.1.47). Print / `-p` / Agent SDK
+   * result messages use `result` instead; `events.ts` reads both (and camelCase
+   * `lastAssistantMessage`) through `extractClaudeAssistantText`.
+   */
   last_assistant_message: z.string().optional(),
+  /** Print / `-p` JSON result field; accepted so a harness can attach it as-is. */
+  result: z.string().optional(),
   /**
    * True when this stop fired because a hook continued the turn.
    *

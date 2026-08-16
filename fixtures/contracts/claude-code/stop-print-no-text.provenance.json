@@ -1,0 +1,11 @@
+{
+  "fixture": "stop-print-no-text.json",
+  "sourceContract": "Claude Code hook JSON protocol (Stop) for a print / `claude -p` session that reports usage but no assistant text field",
+  "provider": "claude-code",
+  "capturedDate": "2026-08-16",
+  "author": "otel-hook claude adapter (agent)",
+  "sanitization": "session, prompt, and path values are fabricated; token counts are arbitrary small integers, not measurements of any real model call. No assistant text is present — that absence is the point of the fixture.",
+  "licenseBasis": "Original synthetic authorship.",
+  "sha256": "f99740f68fda8678a287f449701910d3b0acc0b9fed9726b44ef493c5c15bc24",
+  "notes": "Supports os-factory/har#203 / os-factory/har#220: generation.end must be metadata_only when the provider sent no assistant text, never an invented body."
+}

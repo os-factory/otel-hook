@@ -10,6 +10,7 @@ import {
 } from "../errors/index.js";
 import {
   isContentFactConsistent,
+  isUnavailableContentFact,
   type ContentFact,
 } from "../model/content.js";
 import type { CanonicalEvent } from "../model/events.js";
@@ -563,7 +564,9 @@ export const createOtelHook = (deps: OtelHookDependencies): OtelHook => {
 
       const facts = collectContentFacts(event);
       const offending = facts.find(
-        (fact) => fact.disclosure !== expectedDisclosure || !isContentFactConsistent(fact),
+        (fact) =>
+          !isUnavailableContentFact(fact) &&
+          (fact.disclosure !== expectedDisclosure || !isContentFactConsistent(fact)),
       );
       if (offending !== undefined) {
         reject(

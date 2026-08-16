@@ -564,3 +564,81 @@ describe("canonicalEventsToReadableSpans", () => {
     expect(spans[0]?.duration).toEqual([0, 0]);
   });
 });
+
+describe("canonicalEventsToReadableSpans: trajectory export contract", () => {
+  it("exports W3C hex trace_id / span_id / parent_span_id attributes", () => {
+    const events = [
+      buildEvent({
+        type: "session.start",
+        eventId: "s1",
+        sequence: 0,
+        occurredAt: 1_000,
+        sessionKind: "unknown",
+        agentName: "claude-code",
+      }),
+      buildEvent({
+        type: "generation.start",
+        eventId: "g1",
+        sequence: 1,
+        occurredAt: 1_100,
+        generationId: "gen-hex",
+        model: { modelId: "unknown" },
+      }),
+      buildEvent({
+        type: "generation.end",
+        eventId: "g2",
+        sequence: 2,
+        occurredAt: 1_200,
+        generationId: "gen-hex",
+        model: { modelId: "unknown" },
+        outcome: "ok",
+      }),
+    ];
+    const spans = canonicalEventsToReadableSpans(events, { resource });
+    const generation = spans.find((span) => span.name.startsWith("generation"));
+    expect(generation?.attributes.trace_id).toMatch(/^[0-9a-f]{32}$/);
+    expect(generation?.attributes.span_id).toMatch(/^[0-9a-f]{16}$/);
+    expect(generation?.attributes.parent_span_id).toMatch(/^[0-9a-f]{16}$/);
+    expect(generation?.attributes.trace_id).toBe(generation?.spanContext().traceId);
+    expect(generation?.attributes.span_id).toBe(generation?.spanContext().spanId);
+    expect(generation?.attributes["otelhook.provider.id"]).toBe(identity.provenance.providerId);
+    expect(generation?.attributes["otelhook.agent.name"]).toBeUndefined();
+  });
+
+  it("prefers har.session_key on session.id and passes har.* through", () => {
+    const harResource = resourceFromAttributes({
+      "service.name": "test",
+      "har.session_key": "har-session-beta",
+      "har.agent_id": 2,
+      "har.work_unit_id": "wu-1",
+      "har.attempt_id": "at-1",
+    });
+    const events = [
+      buildEvent({
+        type: "session.start",
+        eventId: "s1",
+        sequence: 0,
+        occurredAt: 1_000,
+        sessionKind: "unknown",
+        agentName: "claude-code",
+      }),
+      buildEvent({
+        type: "session.end",
+        eventId: "s2",
+        sequence: 1,
+        occurredAt: 2_000,
+        reason: "completed",
+      }),
+    ];
+    const [span] = canonicalEventsToReadableSpans(events, { resource: harResource });
+    expect(span?.attributes["session.id"]).toBe("har-session-beta");
+    expect(span?.attributes["otelhook.session.id"]).toBe(identity.sessionId);
+    expect(span?.attributes["gen_ai.conversation.id"]).toBe(identity.sessionId);
+    expect(span?.attributes["har.session_key"]).toBe("har-session-beta");
+    expect(span?.attributes["har.agent_id"]).toBe(2);
+    expect(span?.attributes["har.work_unit_id"]).toBe("wu-1");
+    expect(span?.attributes["har.attempt_id"]).toBe("at-1");
+    expect(span?.attributes["otelhook.agent.name"]).toBe("claude-code");
+    expect(span?.attributes["otelhook.provider.id"]).toBe(identity.provenance.providerId);
+  });
+});

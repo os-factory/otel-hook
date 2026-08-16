@@ -18,12 +18,12 @@ import {
   ATTR_GEN_AI_USAGE_INPUT_TOKENS,
   ATTR_GEN_AI_USAGE_OUTPUT_TOKENS,
   ATTR_GEN_AI_USAGE_REASONING_OUTPUT_TOKENS,
-  ATTR_SESSION_ID,
 } from "@opentelemetry/semantic-conventions/incubating";
 
 import type { CanonicalEvent, CanonicalEventType } from "../model/events.js";
 import type { CanonicalUsage } from "../model/usage.js";
 import { VERSION } from "../version.js";
+import { exportIdentityAttributes } from "./export-identity.js";
 
 const SCOPE_NAME = "@osfactory/otel-hook";
 
@@ -32,10 +32,6 @@ export const DEFAULT_INSTRUMENTATION_SCOPE: InstrumentationScope = Object.freeze
   version: VERSION,
 });
 
-const ATTR_OTELHOOK_INVOCATION_ID = "otelhook.invocation.id";
-const ATTR_OTELHOOK_PROVIDER_ID = "otelhook.provider.id";
-const ATTR_OTELHOOK_PROVIDER_VERSION = "otelhook.provider.version";
-const ATTR_OTELHOOK_WORKSPACE_ID = "otelhook.workspace.id";
 const ATTR_OTELHOOK_SPAN_PAIRED = "otelhook.span.paired";
 const ATTR_OTELHOOK_SPAN_PAIRING = "otelhook.span.pairing";
 const ATTR_OTELHOOK_SPAN_ORPHAN = "otelhook.span.orphan";
@@ -320,15 +316,11 @@ const outcomeStatus = (outcome: string | undefined): SpanStatus => {
   return { code: SpanStatusCode.ERROR, message: outcome };
 };
 
-const identityAttributes = (event: CanonicalEvent): Attributes => ({
-  [ATTR_SESSION_ID]: event.sessionId,
-  [ATTR_OTELHOOK_INVOCATION_ID]: event.invocationId,
-  [ATTR_OTELHOOK_PROVIDER_ID]: event.provenance.providerId,
-  ...(event.provenance.providerVersion === undefined
-    ? {}
-    : { [ATTR_OTELHOOK_PROVIDER_VERSION]: event.provenance.providerVersion }),
-  [ATTR_OTELHOOK_WORKSPACE_ID]: event.workspace.workspaceId,
-});
+const identityAttributes = (
+  event: CanonicalEvent,
+  resource: Resource,
+  ids: { readonly traceId: string; readonly spanId: string; readonly parentSpanId?: string },
+): Attributes => exportIdentityAttributes(event, resource, ids);
 
 const usageAttributes = (usage: CanonicalUsage | undefined, resetDetected: boolean): Attributes => {
   if (usage === undefined) {
@@ -467,7 +459,11 @@ const buildLifecycleSpan = (
   // Attributes recovered from the start process sit *beneath* whatever this
   // batch observed: a live edge always wins over a remembered one.
   let attributes: Attributes = {
-    ...identityAttributes(anchor),
+    ...identityAttributes(anchor, resource, {
+      traceId,
+      spanId,
+      ...(parentSpanId === undefined ? {} : { parentSpanId }),
+    }),
     ...resolved.recovered,
     [ATTR_OTELHOOK_SPAN_PAIRED]: resolved.pairing !== "unpaired",
     [ATTR_OTELHOOK_SPAN_PAIRING]: resolved.pairing,
@@ -574,7 +570,16 @@ const buildStandaloneSpan = (
   const traceId = deriveTraceId(providerId, event.sessionId);
   const spanId = deriveStandaloneSpanId(providerId, event.sessionId, event.type, event.eventId);
   const parent = parentScopeRefOf(event);
-  let attributes: Attributes = { ...identityAttributes(event), [ATTR_OTELHOOK_SPAN_PAIRED]: true };
+  const parentSpanId =
+    parent === undefined ? undefined : deriveSpanId(providerId, event.sessionId, parent);
+  let attributes: Attributes = {
+    ...identityAttributes(event, resource, {
+      traceId,
+      spanId,
+      ...(parentSpanId === undefined ? {} : { parentSpanId }),
+    }),
+    [ATTR_OTELHOOK_SPAN_PAIRED]: true,
+  };
   let status: SpanStatus = { code: SpanStatusCode.UNSET };
   let name: string = event.type;
 
@@ -614,9 +619,7 @@ const buildStandaloneSpan = (
     status,
     traceId,
     spanId,
-    ...(parent === undefined
-      ? {}
-      : { parentSpanId: deriveSpanId(providerId, event.sessionId, parent) }),
+    ...(parentSpanId === undefined ? {} : { parentSpanId }),
     resource,
     instrumentationScope: scope,
   });
@@ -810,6 +813,7 @@ const planGroup = (
 export type EventTraceIdentity = {
   readonly traceId: string;
   readonly spanId: string;
+  readonly parentSpanId?: string;
 };
 
 /**
@@ -848,13 +852,24 @@ export const canonicalEventTraceIdentities = (
     const groupKey = layout.groupOf.get(event.eventId);
     const plan = groupKey === undefined ? undefined : plans.get(groupKey);
     if (plan === undefined) {
+      const parent = parentScopeRefOf(event);
       identities.set(event.eventId, {
         traceId: deriveTraceId(providerId, event.sessionId),
         spanId: deriveStandaloneSpanId(providerId, event.sessionId, event.type, event.eventId),
+        ...(parent === undefined
+          ? {}
+          : { parentSpanId: deriveSpanId(providerId, event.sessionId, parent) }),
       });
       continue;
     }
-    identities.set(event.eventId, { traceId: plan.traceId, spanId: plan.spanId });
+    const parent = plan.correlation?.parent ?? parentScopeRefOf(event);
+    identities.set(event.eventId, {
+      traceId: plan.traceId,
+      spanId: plan.spanId,
+      ...(parent === undefined
+        ? {}
+        : { parentSpanId: deriveSpanId(providerId, event.sessionId, parent) }),
+    });
   }
   return identities;
 };

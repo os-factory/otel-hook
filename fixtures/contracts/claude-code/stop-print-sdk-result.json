@@ -1,0 +1,15 @@
+{
+  "type": "result",
+  "subtype": "success",
+  "is_error": false,
+  "session_id": "ses-a1b2c3d4-0000-0000-0000-000000000001",
+  "result": "Synthetic Agent-SDK final answer for the widget loader.",
+  "duration_ms": 1800,
+  "num_turns": 1,
+  "usage": {
+    "input_tokens": 640,
+    "output_tokens": 96,
+    "cache_read_input_tokens": 1024,
+    "cache_creation_input_tokens": 64
+  }
+}

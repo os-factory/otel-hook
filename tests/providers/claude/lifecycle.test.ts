@@ -171,14 +171,21 @@ describe("Claude Code adapter: lifecycle mapping", () => {
     expect(end.usage).toBeUndefined();
   });
 
-  it("Stop without last_assistant_message omits outputContent", async () => {
+  it("Stop without last_assistant_message still emits a zero-length response fact", async () => {
     const { last_assistant_message, ...payload } = fixtures.stop;
     expect(last_assistant_message).toBeDefined();
     const { run } = ingest(payload);
     const outcome = await run();
     const end = eventOfType(outcome.events, "generation.end");
     if (end.type !== "generation.end") throw new Error("unreachable");
-    expect(end.outputContent).toBeUndefined();
+    expect(end.outputContent).toHaveLength(1);
+    expect(end.outputContent?.[0]).toMatchObject({
+      kind: "response",
+      role: "assistant",
+      disclosure: "omitted",
+      characterLength: 0,
+    });
+    expect(end.outputContent?.[0]?.text).toBeUndefined();
   });
 
   it("StopFailure(rate_limit) -> generation.end outcome error with stopReason", async () => {

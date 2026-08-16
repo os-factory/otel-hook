@@ -469,3 +469,92 @@ describe("canonical log mapping: severity, identity, and correlation", () => {
     expect(new Set(traces).size).toBe(2);
   });
 });
+
+describe("canonical log mapping: trajectory export contract", () => {
+  it("emits metadata_only for a generation.end whose provider sent no text", () => {
+    const privacy = createPrivacyService(DEFAULT_CONFIG.privacy);
+    const event = build({
+      type: "generation.end",
+      generationId: "gen-1",
+      model: { modelId: "unknown" },
+      outcome: "ok",
+      outputContent: [privacy.describeContent({ kind: "response", role: "assistant", text: "" })],
+    });
+    const [record] = map([event]).records;
+    expect(record?.attributes["otelhook.content.kind"]).toBe("response");
+    expect(record?.attributes["otelhook.content.disclosure"]).toBe("metadata_only");
+    expect(record?.attributes["otelhook.content.withheld"]).toBeUndefined();
+    expect(record?.body).toBeUndefined();
+  });
+
+  it("emits metadata_only on generation.end when the event carries no content facts", () => {
+    const event = build({
+      type: "generation.end",
+      generationId: "gen-2",
+      model: { modelId: "unknown" },
+      outcome: "ok",
+    });
+    const [record] = map([event]).records;
+    expect(record?.attributes["otelhook.content.kind"]).toBe("response");
+    expect(record?.attributes["otelhook.content.disclosure"]).toBe("metadata_only");
+  });
+
+  it("exports cache usage alongside input/output on generation.end", () => {
+    const event = build({
+      type: "generation.end",
+      generationId: "gen-3",
+      model: { modelId: "unknown" },
+      outcome: "ok",
+      usage: {
+        temporality: "delta",
+        inputTokens: 3350,
+        cachedInputTokens: 2400,
+        cacheCreationInputTokens: 150,
+        cacheCreationAccounting: "included-in-input",
+        outputTokens: 120,
+        reasoningOutputTokens: 0,
+        uncachedInputTokens: 800,
+        totalTokens: 3470,
+        providerTotalAgreement: "unreported",
+      },
+    });
+    const [record] = map([event]).records;
+    expect(record?.attributes["gen_ai.usage.input_tokens"]).toBe(3350);
+    expect(record?.attributes["gen_ai.usage.output_tokens"]).toBe(120);
+    expect(record?.attributes["gen_ai.usage.cache_read.input_tokens"]).toBe(2400);
+    expect(record?.attributes["gen_ai.usage.cache_creation.input_tokens"]).toBe(150);
+  });
+
+  it("exports W3C hex trace_id / span_id attributes and never binary ids", () => {
+    const event = build({ type: "prompt.submitted", promptSource: "user" });
+    const [record] = map([event]).records;
+    expect(record?.attributes.trace_id).toMatch(/^[0-9a-f]{32}$/);
+    expect(record?.attributes.span_id).toMatch(/^[0-9a-f]{16}$/);
+    expect(record?.attributes.trace_id).toBe(record?.spanContext?.traceId);
+    expect(record?.attributes.span_id).toBe(record?.spanContext?.spanId);
+    expect(typeof record?.attributes.trace_id).toBe("string");
+    expect(typeof record?.attributes.span_id).toBe("string");
+  });
+
+  it("prefers har.session_key on session.id and keeps the provider id separate", () => {
+    const harResource = resourceFromAttributes({
+      "service.name": "test",
+      "har.session_key": "har-session-alpha",
+      "har.agent_id": 3,
+      "har.repo_path": "/workspace/fixture-repo",
+      "har.work_dir": "/workspace/fixture-repo/.har/work",
+      "har.branch": "feat/example",
+    });
+    const event = build({ type: "prompt.submitted", promptSource: "user" });
+    const [record] = canonicalEventsToLogRecords([event], { resource: harResource }).records;
+    expect(record?.attributes["session.id"]).toBe("har-session-alpha");
+    expect(record?.attributes["otelhook.session.id"]).toBe(identity.sessionId);
+    expect(record?.attributes["gen_ai.conversation.id"]).toBe(identity.sessionId);
+    expect(record?.attributes["har.session_key"]).toBe("har-session-alpha");
+    expect(record?.attributes["har.agent_id"]).toBe(3);
+    expect(record?.attributes["har.repo_path"]).toBe("/workspace/fixture-repo");
+    expect(record?.attributes["har.work_dir"]).toBe("/workspace/fixture-repo/.har/work");
+    expect(record?.attributes["har.branch"]).toBe("feat/example");
+    expect(record?.attributes["otelhook.provider.id"]).toBe(identity.provenance.providerId);
+  });
+});

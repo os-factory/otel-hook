@@ -1,4 +1,5 @@
 import type { ProviderDeliveryClaim, ProviderIdentityInput } from "../adapter.js";
+import { normalizeClaudeHookPayload } from "./payload-normalize.js";
 import { claudeIdentityFieldsSchema } from "./schema.js";
 
 /**
@@ -57,7 +58,7 @@ const TOOL_SCOPED_EVENTS: readonly string[] = [
 export const claudeDeliveryIdentity = (
   input: ProviderIdentityInput,
 ): ProviderDeliveryClaim | undefined => {
-  const parsed = claudeIdentityFieldsSchema.safeParse(input.payload);
+  const parsed = claudeIdentityFieldsSchema.safeParse(normalizeClaudeHookPayload(input.payload));
   if (!parsed.success) {
     return undefined;
   }

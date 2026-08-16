@@ -11,13 +11,16 @@ import {
   ATTR_GEN_AI_SYSTEM,
   ATTR_GEN_AI_TOOL_CALL_ID,
   ATTR_GEN_AI_TOOL_NAME,
+  ATTR_GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS,
+  ATTR_GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS,
   ATTR_GEN_AI_USAGE_INPUT_TOKENS,
   ATTR_GEN_AI_USAGE_OUTPUT_TOKENS,
-  ATTR_SESSION_ID,
 } from "@opentelemetry/semantic-conventions/incubating";
 
 import type { ContentFact } from "../model/content.js";
 import type { CanonicalEvent, CanonicalEventType } from "../model/events.js";
+import type { CanonicalUsage } from "../model/usage.js";
+import { exportIdentityAttributes } from "./export-identity.js";
 import {
   canonicalEventTraceIdentities,
   DEFAULT_INSTRUMENTATION_SCOPE,
@@ -135,10 +138,6 @@ export const MAX_LOG_RECORDS_PER_BATCH = 2_048;
  */
 export const MAX_LOG_BODY_CHARACTERS = 8_192;
 
-const ATTR_OTELHOOK_INVOCATION_ID = "otelhook.invocation.id";
-const ATTR_OTELHOOK_PROVIDER_ID = "otelhook.provider.id";
-const ATTR_OTELHOOK_PROVIDER_VERSION = "otelhook.provider.version";
-const ATTR_OTELHOOK_WORKSPACE_ID = "otelhook.workspace.id";
 const ATTR_OTELHOOK_EVENT_TYPE = "otelhook.event.type";
 const ATTR_OTELHOOK_EVENT_ID = "otelhook.event.id";
 const ATTR_OTELHOOK_EVENT_SEQUENCE = "otelhook.event.sequence";
@@ -374,15 +373,11 @@ const SEVERITY_TEXT: Readonly<Record<number, string>> = Object.freeze({
   [SeverityNumber.ERROR]: "ERROR",
 });
 
-const identityAttributes = (event: CanonicalEvent): LogAttributes => ({
-  [ATTR_SESSION_ID]: event.sessionId,
-  [ATTR_OTELHOOK_INVOCATION_ID]: event.invocationId,
-  [ATTR_OTELHOOK_PROVIDER_ID]: event.provenance.providerId,
-  ...(event.provenance.providerVersion === undefined
-    ? {}
-    : { [ATTR_OTELHOOK_PROVIDER_VERSION]: event.provenance.providerVersion }),
-  [ATTR_OTELHOOK_WORKSPACE_ID]: event.workspace.workspaceId,
-});
+const identityAttributes = (
+  event: CanonicalEvent,
+  resource: Resource,
+  ids: { readonly traceId: string; readonly spanId: string; readonly parentSpanId?: string },
+): LogAttributes => exportIdentityAttributes(event, resource, ids);
 
 /**
  * Attributes describing the event itself, independent of any content it carries.
@@ -489,14 +484,14 @@ const eventAttributes = (event: CanonicalEvent): LogAttributes => {
   }
 };
 
-const usageAttributes = (
-  usage: { readonly inputTokens: number; readonly outputTokens: number } | undefined,
-): LogAttributes =>
+const usageAttributes = (usage: CanonicalUsage | undefined): LogAttributes =>
   usage === undefined
     ? {}
     : {
         [ATTR_GEN_AI_USAGE_INPUT_TOKENS]: usage.inputTokens,
         [ATTR_GEN_AI_USAGE_OUTPUT_TOKENS]: usage.outputTokens,
+        [ATTR_GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS]: usage.cachedInputTokens,
+        [ATTR_GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS]: usage.cacheCreationInputTokens,
       };
 
 /** Content facts an event carries, paired with the field they came from. */
@@ -521,9 +516,15 @@ const contentFactsOf = (event: CanonicalEvent): readonly ContentFact[] => {
 
 type DisclosedBody =
   | { readonly text: string; readonly truncated: boolean }
-  | { readonly withheld: ContentWithholdingReason };
+  | { readonly withheld: ContentWithholdingReason }
+  | { readonly metadataOnly: true };
 
 const discloseBody = (fact: ContentFact, policy: LogContentPolicy): DisclosedBody => {
+  if (fact.text === undefined && fact.characterLength === 0) {
+    // The provider sent no text. Distinct from a privacy omit of real content:
+    // there is nothing to withhold, and the record must say metadata_only.
+    return { metadataOnly: true };
+  }
   if (fact.text === undefined) {
     return { withheld: "privacy-policy" };
   }
@@ -546,7 +547,7 @@ const discloseBody = (fact: ContentFact, policy: LogContentPolicy): DisclosedBod
 const contentAttributes = (fact: ContentFact, body: DisclosedBody): LogAttributes => ({
   [ATTR_CONTENT_KIND]: fact.kind,
   ...(fact.role === undefined ? {} : { [ATTR_CONTENT_ROLE]: fact.role }),
-  [ATTR_CONTENT_DISCLOSURE]: fact.disclosure,
+  [ATTR_CONTENT_DISCLOSURE]: "metadataOnly" in body ? "metadata_only" : fact.disclosure,
   [ATTR_CONTENT_CHARACTER_LENGTH]: fact.characterLength,
   [ATTR_CONTENT_BYTE_LENGTH]: fact.byteLength,
   [ATTR_CONTENT_HASH]: fact.contentHash,
@@ -555,7 +556,9 @@ const contentAttributes = (fact: ContentFact, body: DisclosedBody): LogAttribute
   ...(fact.label === undefined ? {} : { [ATTR_CONTENT_LABEL]: fact.label }),
   ...("withheld" in body
     ? { [ATTR_CONTENT_WITHHELD]: body.withheld }
-    : { [ATTR_CONTENT_BODY_TRUNCATED]: body.truncated }),
+    : "metadataOnly" in body
+      ? {}
+      : { [ATTR_CONTENT_BODY_TRUNCATED]: body.truncated }),
 });
 
 export type LogMappingOptions = {
@@ -589,6 +592,7 @@ const buildRecord = (input: {
   readonly attributes: LogAttributes;
   readonly body?: string;
   readonly spanContext: SpanContext;
+  readonly parentSpanId?: string;
   readonly resource: Resource;
   readonly scope: InstrumentationScope;
 }): ReadableLogRecord => {
@@ -609,7 +613,11 @@ const buildRecord = (input: {
     resource: input.resource,
     instrumentationScope: input.scope,
     attributes: {
-      ...identityAttributes(input.event),
+      ...identityAttributes(input.event, input.resource, {
+        traceId: input.spanContext.traceId,
+        spanId: input.spanContext.spanId,
+        ...(input.parentSpanId === undefined ? {} : { parentSpanId: input.parentSpanId }),
+      }),
       [ATTR_OTELHOOK_EVENT_TYPE]: input.event.type,
       [ATTR_OTELHOOK_EVENT_ID]: input.event.eventId,
       [ATTR_OTELHOOK_EVENT_SEQUENCE]: input.event.sequence,
@@ -668,8 +676,12 @@ export const canonicalEventsToLogRecords = (
         buildRecord({
           event,
           signal: logSignalOf(event),
-          attributes: shared,
+          attributes:
+            event.type === "generation.end"
+              ? { ...shared, [ATTR_CONTENT_KIND]: "response", [ATTR_CONTENT_DISCLOSURE]: "metadata_only" }
+              : shared,
           spanContext,
+          ...(identity.parentSpanId === undefined ? {} : { parentSpanId: identity.parentSpanId }),
           resource: options.resource,
           scope,
         }),
@@ -690,8 +702,9 @@ export const canonicalEventsToLogRecords = (
           event,
           signal: logSignalOf(event, fact.kind),
           attributes: { ...shared, ...contentAttributes(fact, body) },
-          ...("withheld" in body ? {} : { body: body.text }),
+          ...("text" in body ? { body: body.text } : {}),
           spanContext,
+          ...(identity.parentSpanId === undefined ? {} : { parentSpanId: identity.parentSpanId }),
           resource: options.resource,
           scope,
         }),

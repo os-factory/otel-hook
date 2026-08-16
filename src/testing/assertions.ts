@@ -1,4 +1,9 @@
-import { isContentFactConsistent, type ContentDisclosure, type ContentFact } from "../model/content.js";
+import {
+  isContentFactConsistent,
+  isUnavailableContentFact,
+  type ContentDisclosure,
+  type ContentFact,
+} from "../model/content.js";
 import type { CanonicalEvent } from "../model/events.js";
 
 /** Every content fact attached to an event, regardless of field name. */
@@ -68,6 +73,9 @@ export const findDisclosureViolations = (
   const violations: ContentDisclosureViolation[] = [];
   for (const event of events) {
     for (const fact of collectEventContentFacts(event)) {
+      if (isUnavailableContentFact(fact)) {
+        continue;
+      }
       if (fact.disclosure !== expected) {
         violations.push({
           eventId: event.eventId,
