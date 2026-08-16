@@ -1,7 +1,11 @@
 import { createErrorInfo, type OtelHookErrorInfo } from "../errors/index.js";
 import { detectionConfidenceSchema } from "../model/primitives.js";
 import { contentModeSchema } from "../privacy/policy.js";
-import { parseResourceAttributesValue } from "./resource-attributes.js";
+import {
+  checkResourceAttributeKey,
+  MAX_RESOURCE_ATTRIBUTE_VALUE_LENGTH,
+  parseResourceAttributesValue,
+} from "./resource-attributes.js";
 import type { OtelHookConfigPatch } from "./schema.js";
 
 export type EnvironmentRecord = Readonly<Record<string, string | undefined>>;
@@ -123,7 +127,23 @@ export const parseEnvironmentConfig = (env: EnvironmentRecord): EnvironmentConfi
   for (const detail of resource?.warnings ?? []) {
     warn(ENVIRONMENT_VARIABLES.resourceAttributes, detail);
   }
-  const resourceAttributes = resource?.attributes ?? {};
+  const resourceAttributes: Record<string, string> = { ...(resource?.attributes ?? {}) };
+
+  /**
+   * `HAR_SESSION_KEY` is a resource attribute, not invocation identity
+   * (ADR 0001). `har env launch` also puts `har.session_key` on
+   * `OTEL_RESOURCE_ATTRIBUTES`; this env var is the same fact when only the
+   * dedicated variable is set. It never becomes `InvocationIdentity.sessionId`.
+   */
+  const harSessionKey = readString("HAR_SESSION_KEY");
+  if (
+    harSessionKey !== undefined &&
+    resourceAttributes["har.session_key"] === undefined &&
+    harSessionKey.length <= MAX_RESOURCE_ATTRIBUTE_VALUE_LENGTH &&
+    checkResourceAttributeKey("har.session_key") === undefined
+  ) {
+    resourceAttributes["har.session_key"] = harSessionKey;
+  }
 
   /**
    * Resolve one service field from its sources, highest precedence first.

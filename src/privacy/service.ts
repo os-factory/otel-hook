@@ -75,6 +75,12 @@ export interface PrivacyService {
   /** Opaque namespaced handle suitable for a workspace or resource id. */
   deriveOpaqueId(namespace: string, value: string): string;
   describeContent(input: DescribeContentInput): ContentFact;
+  /**
+   * A content fact for a kind the event can carry when the provider sent no
+   * text. Distinct from describing an empty string: there is nothing to
+   * disclose under any content mode, so the fact is always omitted.
+   */
+  describeUnavailableContent(input: Omit<DescribeContentInput, "text">): ContentFact;
   describeStructured(input: DescribeStructuredInput): ContentFact;
   isSecretKey(key: string): boolean;
   sanitizeStructured(value: unknown): SanitizeResult;
@@ -440,6 +446,17 @@ export const createPrivacyService = (policyInput: PrivacyPolicy): PrivacyService
     deriveOpaqueId: (namespace: string, value: string): string =>
       hash(`${namespace}\0${value}`),
     describeContent: describeText,
+    describeUnavailableContent: (input: Omit<DescribeContentInput, "text">): ContentFact => ({
+      kind: input.kind,
+      ...(input.role === undefined ? {} : { role: input.role }),
+      characterLength: 0,
+      byteLength: 0,
+      contentHash: hash(""),
+      disclosure: "omitted",
+      truncated: false,
+      secretsRedacted: 0,
+      ...(input.label === undefined ? {} : { label: input.label }),
+    }),
     describeStructured: (input: DescribeStructuredInput): ContentFact => {
       const serialized = stableStringify(input.value);
       const sanitized = sanitizeStructured(input.value);

@@ -3,9 +3,11 @@ import type { ModelDescriptor } from "../../model/index.js";
 import { createEventFactory } from "../builder.js";
 import type { ProviderContext, ProviderParseInput, ProviderParseResult } from "../adapter.js";
 import { subagentInvocationIdFor } from "./identity.js";
+import { normalizeClaudeHookPayload } from "./payload-normalize.js";
 import { claudeHookPayloadSchema, type ClaudeUsage } from "./schema.js";
+import { extractClaudeAssistantText } from "./stop-content.js";
 import { inferToolKind } from "./tool-kind.js";
-import { normalizeClaudeUsage } from "./usage.js";
+import { extractClaudeUsage, normalizeClaudeUsage } from "./usage.js";
 
 /**
  * Claude Code hooks never report a model identifier on the events this
@@ -65,7 +67,8 @@ export const parseClaudeCode = (
   input: ProviderParseInput,
   context: ProviderContext,
 ): ProviderParseResult => {
-  const parsed = claudeHookPayloadSchema.safeParse(input.payload);
+  const normalizedPayload = normalizeClaudeHookPayload(input.payload);
+  const parsed = claudeHookPayloadSchema.safeParse(normalizedPayload);
   if (!parsed.success) {
     const rawEventName =
       typeof input.payload === "object" && input.payload !== null
@@ -84,6 +87,7 @@ export const parseClaudeCode = (
     };
   }
   const payload = parsed.data;
+  const extractedUsage = extractClaudeUsage(normalizedPayload);
 
   const factory = createEventFactory({
     identity: input.identity,
@@ -111,6 +115,7 @@ export const parseClaudeCode = (
       factory.build({
         type: "session.end",
         reason: mapSessionEndReason(payload.reason ?? payload.end_reason),
+        ...withUsage(extractedUsage),
       });
       break;
 
@@ -234,24 +239,26 @@ export const parseClaudeCode = (
         payload.session_id,
         payload.prompt_id ?? String(input.sequenceBase),
       ]);
+      const assistantText = extractClaudeAssistantText(normalizedPayload);
       factory.build({ type: "generation.start", generationId, model: UNKNOWN_MODEL });
       factory.build({
         type: "generation.end",
         generationId,
         model: UNKNOWN_MODEL,
         outcome: "ok",
-        ...(payload.last_assistant_message === undefined || payload.last_assistant_message === ""
-          ? {}
-          : {
-              outputContent: [
-                context.privacy.describeContent({
-                  kind: "response",
-                  role: "assistant",
-                  text: payload.last_assistant_message,
-                }),
-              ],
-            }),
-        ...withUsage(payload.usage),
+        // Always a response fact: a body when Claude sent text, otherwise a
+        // zero-length omitted fact so the log mapping can emit metadata_only
+        // instead of a generation.end with no content.kind.
+        outputContent: [
+          assistantText === undefined
+            ? context.privacy.describeUnavailableContent({ kind: "response", role: "assistant" })
+            : context.privacy.describeContent({
+                kind: "response",
+                role: "assistant",
+                text: assistantText,
+              }),
+        ],
+        ...withUsage(extractedUsage ?? payload.usage),
       });
       break;
     }
@@ -262,6 +269,7 @@ export const parseClaudeCode = (
         payload.session_id,
         payload.prompt_id ?? String(input.sequenceBase),
       ]);
+      const assistantText = extractClaudeAssistantText(normalizedPayload);
       factory.build({ type: "generation.start", generationId, model: UNKNOWN_MODEL });
       factory.build({
         type: "generation.end",
@@ -269,7 +277,18 @@ export const parseClaudeCode = (
         model: UNKNOWN_MODEL,
         outcome: mapStopFailureOutcome(payload.error_type),
         stopReason: payload.error_type,
-        ...withUsage(payload.usage),
+        ...(assistantText === undefined
+          ? {}
+          : {
+              outputContent: [
+                context.privacy.describeContent({
+                  kind: "response",
+                  role: "assistant",
+                  text: assistantText,
+                }),
+              ],
+            }),
+        ...withUsage(extractedUsage ?? payload.usage),
       });
       break;
     }

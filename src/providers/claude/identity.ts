@@ -3,6 +3,7 @@ import { invocationIdSchema, sessionIdSchema, type InvocationId } from "../../mo
 import { deriveWorkspaceIdentity } from "../../privacy/workspace.js";
 import type { ProviderContext, ProviderIdentityInput } from "../adapter.js";
 import { CLAUDE_CODE_PROVIDER_ID } from "./detect.js";
+import { normalizeClaudeHookPayload } from "./payload-normalize.js";
 import { claudeIdentityFieldsSchema } from "./schema.js";
 
 /**
@@ -34,7 +35,7 @@ export const identifyClaudeCode = (
   input: ProviderIdentityInput,
   context: ProviderContext,
 ): readonly IdentityClaim[] => {
-  const parsed = claudeIdentityFieldsSchema.safeParse(input.payload);
+  const parsed = claudeIdentityFieldsSchema.safeParse(normalizeClaudeHookPayload(input.payload));
   if (!parsed.success) {
     return [];
   }

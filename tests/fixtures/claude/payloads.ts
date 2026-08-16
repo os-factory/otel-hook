@@ -163,6 +163,82 @@ export const stop = {
   },
 };
 
+/**
+ * Print / `claude -p` Stop: assistant text under `result` instead of
+ * `last_assistant_message`, with Anthropic usage attached the way the CLI's
+ * JSON result object reports it.
+ *
+ * Provenance: invented. Field names follow Claude Code's published `-p`
+ * `--output-format json` result shape plus the Stop hook discriminant.
+ */
+export const stopPrintResult = {
+  hook_event_name: "Stop",
+  session_id: SESSION_A,
+  transcript_path: "/tmp/synthetic/transcript-a.jsonl",
+  cwd: CWD_A,
+  prompt_id: "prompt-0000-0000-0000-000000000003",
+  result: "Print-mode synthetic assistant reply for the widget loader.",
+  usage: {
+    input_tokens: 800,
+    output_tokens: 120,
+    cache_read_input_tokens: 2_400,
+    cache_creation_input_tokens: 150,
+  },
+};
+
+/**
+ * Print / `-p` Stop with no assistant text at all. Usage is still present so
+ * token totals can be emitted without inventing a response body.
+ */
+export const stopPrintNoAssistantText = {
+  hook_event_name: "Stop",
+  session_id: SESSION_A,
+  transcript_path: "/tmp/synthetic/transcript-a.jsonl",
+  cwd: CWD_A,
+  prompt_id: "prompt-0000-0000-0000-000000000004",
+  usage: {
+    input_tokens: 400,
+    output_tokens: 16,
+    cache_read_input_tokens: 0,
+    cache_creation_input_tokens: 0,
+  },
+};
+
+/**
+ * Agent SDK / `claude -p --output-format json` result message: no
+ * `hook_event_name`, `type: "result"`, assistant text on `result`.
+ */
+export const printResultMessage = {
+  type: "result",
+  subtype: "success",
+  is_error: false,
+  session_id: SESSION_A,
+  result: "Agent-SDK synthetic final answer for the widget loader.",
+  duration_ms: 1_800,
+  num_turns: 1,
+  usage: {
+    input_tokens: 640,
+    output_tokens: 96,
+    cache_read_input_tokens: 1_024,
+    cache_creation_input_tokens: 64,
+  },
+};
+
+/** Interactive Stop using the camelCase alias some wrappers emit. */
+export const stopCamelCaseAssistant = {
+  hook_event_name: "Stop",
+  session_id: SESSION_A,
+  transcript_path: "/tmp/synthetic/transcript-a.jsonl",
+  cwd: CWD_A,
+  lastAssistantMessage: "CamelCase synthetic assistant reply.",
+  usage: {
+    inputTokens: 220,
+    outputTokens: 40,
+    cacheReadInputTokens: 80,
+    cacheCreationInputTokens: 10,
+  },
+};
+
 export const stopNoUsage = {
   hook_event_name: "Stop",
   session_id: SESSION_B,

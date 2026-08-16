@@ -1,5 +1,5 @@
 import { normalizeUsage, type CanonicalUsage } from "../../model/index.js";
-import type { ClaudeUsage } from "./schema.js";
+import { claudeUsageSchema, type ClaudeUsage } from "./schema.js";
 
 export type ClaudeUsageNormalization = {
   readonly usage?: CanonicalUsage;
@@ -162,6 +162,121 @@ const forwardableNotes = (notes: readonly string[]): readonly string[] =>
  * compaction — never a running session total — so it is always reported as a
  * `delta` observation.
  */
+const asRecord = (value: unknown): Record<string, unknown> | undefined =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+
+const asNonNegativeInt = (value: unknown): number | undefined =>
+  typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : undefined;
+
+/**
+ * Coerce one usage-shaped object onto {@link claudeUsageSchema}.
+ *
+ * Accepts the Anthropic Messages API snake_case counters and the camelCase
+ * aliases a print/`-p` result or wrapping harness may use. Both `input_tokens`
+ * and `output_tokens` must be present — a lone counter is not a usage object,
+ * and inventing the missing side as zero would report tokens the provider
+ * never sent.
+ */
+export const coerceClaudeUsage = (value: unknown): ClaudeUsage | undefined => {
+  const record = asRecord(value);
+  if (record === undefined) {
+    return undefined;
+  }
+  const inputTokens = asNonNegativeInt(record.input_tokens ?? record.inputTokens);
+  const outputTokens = asNonNegativeInt(record.output_tokens ?? record.outputTokens);
+  if (inputTokens === undefined || outputTokens === undefined) {
+    return undefined;
+  }
+  const cacheCreation = asRecord(record.cache_creation ?? record.cacheCreation);
+  const parsed = claudeUsageSchema.safeParse({
+    input_tokens: inputTokens,
+    output_tokens: outputTokens,
+    ...(asNonNegativeInt(record.cache_creation_input_tokens ?? record.cacheCreationInputTokens) ===
+    undefined
+      ? {}
+      : {
+          cache_creation_input_tokens: asNonNegativeInt(
+            record.cache_creation_input_tokens ?? record.cacheCreationInputTokens,
+          ),
+        }),
+    ...(asNonNegativeInt(record.cache_read_input_tokens ?? record.cacheReadInputTokens) === undefined
+      ? {}
+      : {
+          cache_read_input_tokens: asNonNegativeInt(
+            record.cache_read_input_tokens ?? record.cacheReadInputTokens,
+          ),
+        }),
+    ...(cacheCreation === undefined
+      ? {}
+      : {
+          cache_creation: {
+            ...(asNonNegativeInt(
+              cacheCreation.ephemeral_5m_input_tokens ?? cacheCreation.ephemeral5mInputTokens,
+            ) === undefined
+              ? {}
+              : {
+                  ephemeral_5m_input_tokens: asNonNegativeInt(
+                    cacheCreation.ephemeral_5m_input_tokens ?? cacheCreation.ephemeral5mInputTokens,
+                  ),
+                }),
+            ...(asNonNegativeInt(
+              cacheCreation.ephemeral_1h_input_tokens ?? cacheCreation.ephemeral1hInputTokens,
+            ) === undefined
+              ? {}
+              : {
+                  ephemeral_1h_input_tokens: asNonNegativeInt(
+                    cacheCreation.ephemeral_1h_input_tokens ?? cacheCreation.ephemeral1hInputTokens,
+                  ),
+                }),
+          },
+        }),
+    ...(Array.isArray(record.iterations) ? { iterations: record.iterations } : {}),
+    ...(asNonNegativeInt(record.total_tokens ?? record.totalTokens) === undefined
+      ? {}
+      : { total_tokens: asNonNegativeInt(record.total_tokens ?? record.totalTokens) }),
+    ...(asNonNegativeInt(record.reasoning_output_tokens ?? record.reasoningOutputTokens) ===
+    undefined
+      ? {}
+      : {
+          reasoning_output_tokens: asNonNegativeInt(
+            record.reasoning_output_tokens ?? record.reasoningOutputTokens,
+          ),
+        }),
+  });
+  return parsed.success ? parsed.data : undefined;
+};
+
+/**
+ * Find a usage object on a Stop / print-result / SessionEnd payload.
+ *
+ * Looks at `usage`, `token_usage`, `message.usage`, and top-level token
+ * counters. The first object that coerces to {@link ClaudeUsage} wins. Absence
+ * is reported as `undefined` — never as a zeroed snapshot.
+ */
+export const extractClaudeUsage = (payload: unknown): ClaudeUsage | undefined => {
+  const record = asRecord(payload);
+  if (record === undefined) {
+    return undefined;
+  }
+  const message = asRecord(record.message);
+  const candidates: readonly unknown[] = [
+    record.usage,
+    record.token_usage,
+    record.tokenUsage,
+    message?.usage,
+    record,
+  ];
+  for (const candidate of candidates) {
+    const usage = coerceClaudeUsage(candidate);
+    if (usage !== undefined) {
+      return usage;
+    }
+  }
+  return undefined;
+};
+
 export const normalizeClaudeUsage = (raw: ClaudeUsage | undefined): ClaudeUsageNormalization => {
   if (raw === undefined) {
     return { warnings: [] };

@@ -1,0 +1,14 @@
+{
+  "hook_event_name": "Stop",
+  "session_id": "ses-a1b2c3d4-0000-0000-0000-000000000001",
+  "transcript_path": "/tmp/synthetic/transcript-print.jsonl",
+  "cwd": "/tmp/synthetic/workspace",
+  "prompt_id": "prompt-print-0001",
+  "result": "Synthetic print-mode assistant reply for the widget loader.",
+  "usage": {
+    "input_tokens": 800,
+    "output_tokens": 120,
+    "cache_read_input_tokens": 2400,
+    "cache_creation_input_tokens": 150
+  }
+}

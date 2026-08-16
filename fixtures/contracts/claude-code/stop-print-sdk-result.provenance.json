@@ -1,0 +1,11 @@
+{
+  "fixture": "stop-print-sdk-result.json",
+  "sourceContract": "Claude Code Agent SDK / `claude -p --output-format json` result message (`type: result`) carrying `result` text and Anthropic usage, with no hook_event_name",
+  "provider": "claude-code",
+  "capturedDate": "2026-08-16",
+  "author": "otel-hook claude adapter (agent)",
+  "sanitization": "result is an invented placeholder sentence; session id is fabricated; token counts and duration are arbitrary small integers, not measurements of any real model call.",
+  "licenseBasis": "Original synthetic authorship.",
+  "sha256": "f813b76439636e656337a0780953bdea07648def00c8c5f66c0ead285c4a7014",
+  "notes": "Supports os-factory/har#203 / os-factory/har#220: non-interactive result payloads must map through the same Stop → generation.end path as interactive last_assistant_message."
+}

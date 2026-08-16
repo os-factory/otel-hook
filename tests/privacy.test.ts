@@ -35,6 +35,18 @@ describe("content disclosure modes", () => {
     expect(contentFactSchema.safeParse(fact).success).toBe(true);
   });
 
+  it("describes unavailable content as omitted under every content mode", () => {
+    for (const contentMode of ["omit", "mask", "redact", "raw"] as const) {
+      const service = createPrivacyService(
+        policy({ contentMode, ...(contentMode === "raw" ? { allowRawContent: true } : {}) }),
+      );
+      const fact = service.describeUnavailableContent({ kind: "response", role: "assistant" });
+      expect(fact.disclosure).toBe("omitted");
+      expect(fact.text).toBeUndefined();
+      expect(fact.characterLength).toBe(0);
+    }
+  });
+
   it("masks non-whitespace characters while preserving shape", () => {
     const service = createPrivacyService(policy({ contentMode: "mask" }));
     const fact = service.describeContent({ kind: "prompt", text: "hello world" });

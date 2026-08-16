@@ -1,0 +1,11 @@
+{
+  "fixture": "stop-print-result.json",
+  "sourceContract": "Claude Code hook JSON protocol (Stop) as observed on print / `claude -p` sessions, where assistant text is on `result` rather than `last_assistant_message` and Anthropic `message.usage` counters may be attached",
+  "provider": "claude-code",
+  "capturedDate": "2026-08-16",
+  "author": "otel-hook claude adapter (agent)",
+  "sanitization": "result is an invented placeholder sentence; session, prompt, and path values are fabricated; token counts are arbitrary small integers, not measurements of any real model call.",
+  "licenseBasis": "Original synthetic authorship.",
+  "sha256": "34cd60373f8c09bee557eff8ebae2785c8fbc27c28ee2d81cddf8c79f2432911",
+  "notes": "Supports os-factory/har#203 / os-factory/har#220: print-session generation.end must carry a response body when the Stop payload has assistant text."
+}

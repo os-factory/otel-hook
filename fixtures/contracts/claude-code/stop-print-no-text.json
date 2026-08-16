@@ -1,0 +1,13 @@
+{
+  "hook_event_name": "Stop",
+  "session_id": "ses-a1b2c3d4-0000-0000-0000-000000000001",
+  "transcript_path": "/tmp/synthetic/transcript-print.jsonl",
+  "cwd": "/tmp/synthetic/workspace",
+  "prompt_id": "prompt-print-0002",
+  "usage": {
+    "input_tokens": 400,
+    "output_tokens": 16,
+    "cache_read_input_tokens": 0,
+    "cache_creation_input_tokens": 0
+  }
+}

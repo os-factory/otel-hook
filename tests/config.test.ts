@@ -191,6 +191,23 @@ describe("environment configuration", () => {
     expect(patch).toEqual({});
     expect(warnings).toEqual([]);
   });
+
+  it("copies HAR_SESSION_KEY onto har.session_key resource attributes, not identity", () => {
+    const { patch, warnings } = parseEnvironmentConfig({
+      HAR_SESSION_KEY: "har-from-env",
+    });
+    expect(warnings).toEqual([]);
+    expect(patch.exporter?.resourceAttributes).toEqual({ "har.session_key": "har-from-env" });
+    expect(Object.values(ENVIRONMENT_VARIABLES)).not.toContain("HAR_SESSION_KEY");
+  });
+
+  it("does not let HAR_SESSION_KEY replace har.session_key from OTEL_RESOURCE_ATTRIBUTES", () => {
+    const { patch } = parseEnvironmentConfig({
+      HAR_SESSION_KEY: "har-from-env",
+      OTEL_RESOURCE_ATTRIBUTES: "har.session_key=har-from-resource",
+    });
+    expect(patch.exporter?.resourceAttributes?.["har.session_key"]).toBe("har-from-resource");
+  });
 });
 
 describe("resolved configuration snapshots", () => {

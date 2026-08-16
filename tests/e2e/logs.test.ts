@@ -421,3 +421,113 @@ describe("otel-hook doctor: reports the logs signal", () => {
     expect(check?.detail).toContain("no endpoint");
   }, 60_000);
 });
+
+describe("otel-hook run: Claude print Stop trajectory for Mission Control", () => {
+  it("exports a response body, usage, HAR session key, and hex ids from a print Stop", async () => {
+    const collector = await withCollector();
+    const stateDir = await withStateDir();
+    const assistant = "Print-mode synthetic assistant reply for Mission Control.";
+    const payload = {
+      hook_event_name: "Stop",
+      session_id: "ses-claude-print-uuid",
+      transcript_path: "/tmp/synthetic/transcript-print.jsonl",
+      cwd: "/workspace/fixture-repo",
+      result: assistant,
+      usage: {
+        input_tokens: 80,
+        output_tokens: 20,
+        cache_read_input_tokens: 40,
+        cache_creation_input_tokens: 5,
+      },
+    };
+
+    const result = await runCliProcess(
+      [
+        "run",
+        "--provider",
+        "claude-code",
+        "--endpoint",
+        collector.url,
+        "--logs",
+        "--logs-content",
+        "--content-mode",
+        "redact",
+        "--state-dir",
+        stateDir,
+      ],
+      JSON.stringify(payload),
+      {
+        env: {
+          HAR_SESSION_KEY: "har-e2e-print-session",
+          OTEL_RESOURCE_ATTRIBUTES:
+            "har.session_key=har-e2e-print-session,har.agent_id=4,har.repo_path=%2Fworkspace%2Ffixture-repo",
+        },
+      },
+    );
+
+    expect(result.code).toBe(0);
+    const records = decodeAllExportedLogRecords(
+      collector.requests.filter((request) => request.path === "/v1/logs").map((request) => request.body),
+    );
+    const response = records.find(
+      (record) =>
+        record.attributes["otelhook.event.type"] === "generation.end" &&
+        record.attributes["otelhook.content.kind"] === "response",
+    );
+    expect(response?.body).toBe(assistant);
+    expect(response?.attributes["otelhook.content.disclosure"]).toBe("redacted");
+    expect(response?.attributes["gen_ai.usage.input_tokens"]).toBe(125);
+    expect(response?.attributes["gen_ai.usage.output_tokens"]).toBe(20);
+    expect(response?.attributes["gen_ai.usage.cache_read.input_tokens"]).toBe(40);
+    expect(response?.attributes["gen_ai.usage.cache_creation.input_tokens"]).toBe(5);
+    expect(response?.attributes["session.id"]).toBe("har-e2e-print-session");
+    expect(response?.attributes["otelhook.session.id"]).toBe("ses-claude-print-uuid");
+    expect(response?.attributes["gen_ai.conversation.id"]).toBe("ses-claude-print-uuid");
+    expect(response?.attributes["har.session_key"]).toBe("har-e2e-print-session");
+    expect(response?.attributes["har.agent_id"]).toBe("4");
+    expect(response?.attributes["otelhook.provider.id"]).toBe("claude-code");
+    expect(response?.attributes.trace_id).toMatch(/^[0-9a-f]{32}$/);
+    expect(response?.attributes.span_id).toMatch(/^[0-9a-f]{16}$/);
+    expect(response?.traceId).toMatch(/^[0-9a-f]{32}$/);
+    expect(response?.spanId).toMatch(/^[0-9a-f]{16}$/);
+  }, 60_000);
+
+  it("emits metadata_only when print Stop has no assistant text", async () => {
+    const collector = await withCollector();
+    const stateDir = await withStateDir();
+    const result = await runCliProcess(
+      [
+        "run",
+        "--provider",
+        "claude-code",
+        "--endpoint",
+        collector.url,
+        "--logs",
+        "--logs-content",
+        "--content-mode",
+        "redact",
+        "--state-dir",
+        stateDir,
+      ],
+      JSON.stringify({
+        hook_event_name: "Stop",
+        session_id: "ses-claude-print-empty",
+        transcript_path: "/tmp/synthetic/transcript-print.jsonl",
+        cwd: "/workspace/fixture-repo",
+      }),
+    );
+
+    expect(result.code).toBe(0);
+    const records = decodeAllExportedLogRecords(
+      collector.requests.filter((request) => request.path === "/v1/logs").map((request) => request.body),
+    );
+    const response = records.find(
+      (record) =>
+        record.attributes["otelhook.event.type"] === "generation.end" &&
+        record.attributes["otelhook.content.kind"] === "response",
+    );
+    expect(response?.body).toBeUndefined();
+    expect(response?.attributes["otelhook.content.disclosure"]).toBe("metadata_only");
+    expect(response?.attributes["otelhook.content.withheld"]).toBeUndefined();
+  }, 60_000);
+});

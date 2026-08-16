@@ -68,3 +68,15 @@ export const contentFactsSchema = z.array(contentFactSchema).max(64);
  */
 export const isContentFactConsistent = (fact: ContentFact): boolean =>
   fact.disclosure === "omitted" ? fact.text === undefined : fact.text !== undefined;
+
+/**
+ * A fact for a content kind the event can carry when the provider sent no text.
+ *
+ * Always `omitted` with zero length, regardless of the installation's content
+ * mode: there is nothing to mask, redact, or export.
+ */
+export const isUnavailableContentFact = (fact: ContentFact): boolean =>
+  fact.disclosure === "omitted" &&
+  fact.text === undefined &&
+  fact.characterLength === 0 &&
+  fact.byteLength === 0;
