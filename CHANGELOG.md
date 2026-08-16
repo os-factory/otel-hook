@@ -1,3 +1,10 @@
+# [0.3.0](https://github.com/os-factory/otel-hook/compare/v0.2.0...v0.3.0) (2026-08-16)
+
+
+### Features
+
+* improve Claude print-session trajectory fidelity ([#35](https://github.com/os-factory/otel-hook/issues/35)) ([07b7b0e](https://github.com/os-factory/otel-hook/commit/07b7b0eac4f169e7e5cebf2dd16a2d293f7cb3a6))
+
 # [0.2.0](https://github.com/os-factory/otel-hook/compare/v0.1.3...v0.2.0) (2026-08-14)
 
 
