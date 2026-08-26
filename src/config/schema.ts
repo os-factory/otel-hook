@@ -49,6 +49,49 @@ export const DEFAULT_LOGS_POLICY: LogsPolicy = Object.freeze({
 });
 
 /**
+ * Opt-in local JSONL file export, independent of OTLP.
+ *
+ * Off by default so an upgrade cannot start writing event files next to a
+ * process that never asked for them. The path is never copied into a resolved
+ * config snapshot: it may contain a home directory.
+ */
+export const jsonlExportPolicySchema = z.strictObject({
+  enabled: z.boolean(),
+  path: z.string().min(1).max(4096).optional(),
+  /** Rotate the file when it reaches this many bytes. */
+  maxBytes: z.number().int().min(1_024).max(1_073_741_824),
+  /** Number of rotated files to keep, including the active file. */
+  maxFiles: z.number().int().min(1).max(64),
+});
+export type JsonlExportPolicy = z.infer<typeof jsonlExportPolicySchema>;
+
+export const consoleExportPolicySchema = z.strictObject({
+  enabled: z.boolean(),
+});
+export type ConsoleExportPolicy = z.infer<typeof consoleExportPolicySchema>;
+
+export const localExportPolicySchema = z.strictObject({
+  jsonl: jsonlExportPolicySchema,
+  console: consoleExportPolicySchema,
+});
+export type LocalExportPolicy = z.infer<typeof localExportPolicySchema>;
+
+export const DEFAULT_JSONL_EXPORT_POLICY: JsonlExportPolicy = Object.freeze({
+  enabled: false,
+  maxBytes: 10 * 1024 * 1024,
+  maxFiles: 3,
+});
+
+export const DEFAULT_CONSOLE_EXPORT_POLICY: ConsoleExportPolicy = Object.freeze({
+  enabled: false,
+});
+
+export const DEFAULT_LOCAL_EXPORT_POLICY: LocalExportPolicy = Object.freeze({
+  jsonl: DEFAULT_JSONL_EXPORT_POLICY,
+  console: DEFAULT_CONSOLE_EXPORT_POLICY,
+});
+
+/**
  * Runtime exporter policy.
  *
  * This describes *where and how* telemetry goes. It deliberately contains no
@@ -107,6 +150,12 @@ export type DiagnosticsPolicy = z.infer<typeof diagnosticsPolicySchema>;
 
 export const otelHookConfigSchema = z.strictObject({
   exporter: exporterPolicySchema,
+  /**
+   * Local JSONL and console exporters. Independent of `exporter.enabled` so
+   * `--no-export` can still write a debug file, and so enabling a file cannot
+   * silently start a new OTLP signal.
+   */
+  localExport: localExportPolicySchema,
   privacy: privacyPolicySchema,
   detection: detectionPolicySchema,
   diagnostics: diagnosticsPolicySchema,
@@ -130,6 +179,14 @@ export const otelHookConfigPatchSchema = z.strictObject({
     .optional(),
   detection: detectionPolicySchema.partial().optional(),
   diagnostics: diagnosticsPolicySchema.partial().optional(),
+  localExport: localExportPolicySchema
+    .omit({ jsonl: true, console: true })
+    .partial()
+    .extend({
+      jsonl: jsonlExportPolicySchema.partial().optional(),
+      console: consoleExportPolicySchema.partial().optional(),
+    })
+    .optional(),
 });
 export type OtelHookConfigPatch = z.infer<typeof otelHookConfigPatchSchema>;
 
@@ -159,6 +216,7 @@ export const DEFAULT_DIAGNOSTICS_POLICY: DiagnosticsPolicy = Object.freeze({
 
 export const DEFAULT_CONFIG: OtelHookConfig = Object.freeze({
   exporter: DEFAULT_EXPORTER_POLICY,
+  localExport: DEFAULT_LOCAL_EXPORT_POLICY,
   privacy: DEFAULT_PRIVACY_POLICY,
   detection: DEFAULT_DETECTION_POLICY,
   diagnostics: DEFAULT_DIAGNOSTICS_POLICY,

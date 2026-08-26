@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import { createErrorInfo, type OtelHookErrorInfo } from "../errors/index.js";
 import type { Attributes } from "../model/primitives.js";
+import { isForbiddenJsonlPath } from "./jsonl-path.js";
 import { describeResourceAttributeNames } from "./resource-attributes.js";
 import {
   DEFAULT_CONFIG,
@@ -182,6 +183,15 @@ export const resolveConfig = (layers: readonly ConfigLayer[] = []): ConfigResolu
       "exporter.logs.includeContent is true but privacy.contentMode is omit, so no content is disclosed to describe",
     );
   }
+  if (parsed.data.localExport.jsonl.enabled && parsed.data.localExport.jsonl.path === undefined) {
+    notes.push("localExport.jsonl.enabled is true but no path is configured");
+  } else if (
+    parsed.data.localExport.jsonl.enabled &&
+    parsed.data.localExport.jsonl.path !== undefined &&
+    isForbiddenJsonlPath(parsed.data.localExport.jsonl.path)
+  ) {
+    notes.push("localExport.jsonl.path would write onto a process stream rather than a regular file");
+  }
 
   return { status: "ok", config: parsed.data, provenance, notes };
 };
@@ -236,5 +246,9 @@ export const describeResolvedConfig = (config: OtelHookConfig): Attributes => {
     "detection.allow_ambiguous_fallback": config.detection.allowAmbiguousFallback,
     "diagnostics.log_level": config.diagnostics.logLevel,
     "diagnostics.emit_error_events": config.diagnostics.emitErrorEvents,
+    // Booleans only. The JSONL path may contain a home directory and must never
+    // appear in a snapshot that is logged and exported.
+    "local_export.jsonl_enabled": config.localExport.jsonl.enabled,
+    "local_export.console_enabled": config.localExport.console.enabled,
   };
 };

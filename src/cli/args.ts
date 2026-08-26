@@ -63,6 +63,10 @@ export type CliPolicyFlags = {
    * whether the logs pipeline may carry it. Both are needed for a body to appear.
    */
   readonly logsIncludeContent?: boolean;
+  /** Local JSONL file path. Setting it enables the jsonl exporter. */
+  readonly jsonlPath?: string;
+  /** Write the same JSONL line to stderr. Off unless asked for. */
+  readonly consoleEnabled?: boolean;
 };
 
 /**
@@ -172,6 +176,7 @@ const VALUE_FLAGS = new Set([
   "--installation-id",
   "--flush-timeout-ms",
   "--logs-endpoint",
+  "--jsonl",
   "--max-input-bytes",
   "--scope",
   "--project-dir",
@@ -191,6 +196,8 @@ const BOOLEAN_FLAGS = new Set([
   "--logs",
   "--no-logs",
   "--logs-content",
+  "--console",
+  "--no-console",
   "--include-experimental",
   "--no-experimental",
   "--dry-run",
@@ -412,6 +419,16 @@ const parsePolicy = (tokens: Tokenized, errors: string[]): CliPolicyFlags => {
     errors.push("flags --logs and --no-logs cannot both be given");
   }
 
+  const jsonlPath = single(tokens, "--jsonl", errors);
+  const consoleEnabled = tokens.booleans.has("--console")
+    ? true
+    : tokens.booleans.has("--no-console")
+      ? false
+      : undefined;
+  if (tokens.booleans.has("--console") && tokens.booleans.has("--no-console")) {
+    errors.push("flags --console and --no-console cannot both be given");
+  }
+
   return {
     ...(configFile === undefined ? {} : { configFile }),
     ...(endpoint === undefined ? {} : { endpoint }),
@@ -432,6 +449,8 @@ const parsePolicy = (tokens: Tokenized, errors: string[]): CliPolicyFlags => {
     ...(logsEnabled === undefined ? {} : { logsEnabled }),
     ...(logsEndpoint === undefined ? {} : { logsEndpoint }),
     ...(tokens.booleans.has("--logs-content") ? { logsIncludeContent: true } : {}),
+    ...(jsonlPath === undefined ? {} : { jsonlPath }),
+    ...(consoleEnabled === undefined ? {} : { consoleEnabled }),
   };
 };
 
@@ -500,6 +519,9 @@ const RUN_FLAGS: ReadonlySet<string> = new Set([
   "--no-logs",
   "--logs-endpoint",
   "--logs-content",
+  "--jsonl",
+  "--console",
+  "--no-console",
   "--max-input-bytes",
   "--no-export",
   "--no-spool",
@@ -529,6 +551,9 @@ const DOCTOR_FLAGS: ReadonlySet<string> = new Set([
   "--no-logs",
   "--logs-endpoint",
   "--logs-content",
+  "--jsonl",
+  "--console",
+  "--no-console",
   "--include-experimental",
   "--no-experimental",
 ]);
@@ -814,6 +839,10 @@ Exporter and runtime policy (never identity):
   --logs-content             permit disclosed content text in a log body. Needs
                              --content-mode too: this decides whether the logs
                              pipeline may carry what that one discloses
+  --jsonl <path>             append canonical events as JSONL to this file
+                             (independent of --no-export; never stdout)
+  --console                  write the same JSONL line to stderr (never stdout)
+  --no-console               disable the console exporter
   --max-input-bytes <n>      stdin bound (default 1048576)
   --attr <key=value>         opaque consumer attribute for this invocation,
                              carried unchanged (not a resource attribute)

@@ -566,6 +566,38 @@ signal, because a collector with no logs receiver leaves traces perfectly health
 The full mapping table, attribute vocabulary, bounds, and durability matrix are in
 [docs/canonical-log-mapping.md](docs/canonical-log-mapping.md).
 
+## Local export
+
+OTLP is how a collector receives events. A laptop debugging a hook, or a CI job
+that must not stand up a collector, needs a file. `--jsonl` and `--console` are
+**opt-in local exporters** of the same canonical events the OTLP sinks already
+see — after privacy, never instead of it.
+
+**Off by default.** An upgrade must not start writing event files next to a
+process that never asked for them. They live in a top-level `localExport`
+section, not under `exporter`, so `--no-export` can still write a debug file and
+enabling a file cannot silently start a new OTLP signal.
+
+```bash
+otel-hook run --provider claude-code --no-export --jsonl ./events.jsonl
+# or: OTEL_HOOK_JSONL_PATH=./events.jsonl
+otel-hook run --provider claude-code --no-export --console
+# or: OTEL_HOOK_CONSOLE=1
+```
+
+Each line is a versioned envelope, `{ schema, schemaVersion, event }`, serialized
+with sorted keys so two replays of the same callback produce the same bytes.
+There is no wall-clock `exportedAt`. Console writes that same line to **stderr**
+and never to stdout (ADR 0004). JSONL refuses stdout/stderr/`-`/`/dev/fd/1` and
+creates the file mode `0600`, rotating at 10 MiB by default (3 files).
+
+A JSONL disk-full does not change OTLP durability: local exporters cannot turn a
+successful export into `partial` or suppress a delivery claim. `doctor` reports
+them the way it reports logs — off is a passing check.
+
+The snapshot `otel-hook doctor --json` prints (`local_export.jsonl_enabled`,
+`local_export.console_enabled`) never includes the file path.
+
 ## Privacy
 
 Content is omitted by default; only lengths and a stable salted hash are
@@ -684,6 +716,22 @@ an operator lands on by setting one switch and forgetting the other: logs enable
 with no endpoint and none derivable, and `includeContent` set while `contentMode` is
 `omit` (so there is nothing disclosed to carry — the symptom, every body withheld,
 otherwise looks like a bug).
+
+### Local JSONL and console exporters
+
+`localExport` is its own top-level object, merged per leaf, and independent of
+`exporter.enabled`:
+
+| Field | Default | Flag | Variable |
+| --- | --- | --- | --- |
+| `jsonl.enabled` | `false` | implied by `--jsonl` | implied by `OTEL_HOOK_JSONL_PATH` |
+| `jsonl.path` | — | `--jsonl <path>` | `OTEL_HOOK_JSONL_PATH` |
+| `jsonl.maxBytes` | `10485760` | — | — |
+| `jsonl.maxFiles` | `3` | — | — |
+| `console.enabled` | `false` | `--console` / `--no-console` | `OTEL_HOOK_CONSOLE` |
+
+Setting the path enables the file exporter. The path never enters a
+resolved-config snapshot. See [Local export](#local-export).
 
 ### Resource attributes
 
@@ -966,9 +1014,11 @@ fixing one means updating that test rather than discovering a silent change.
     for a replayed payload (`DIVERGENCE-010`).
     `tests/parity/codex-gemini.parity.test.ts` establishes our own semantics and
     pins both divergences instead of asserting agreement.
-10. **Only OTLP HTTP/protobuf is exported, for traces and logs.** `http/json` falls
-    back to a disabled sink with a warning, and there is no metrics pipeline. The
-    logs pipeline is off by default; see [Logs](#logs).
+10. **Only OTLP HTTP/protobuf is exported to a collector, for traces and logs.**
+    `http/json` falls back to a disabled sink with a warning, and there is no
+    metrics pipeline. The logs pipeline is off by default; see [Logs](#logs).
+    Local JSONL and console exporters are a separate opt-in, not a collector
+    protocol; see [Local export](#local-export).
 11. **Gemini CLI cache and reasoning tokens never reach a hook.** The CLI's hook
     translator rebuilds `usageMetadata` as exactly
     `{ promptTokenCount, candidatesTokenCount, totalTokenCount }`, so
