@@ -4,7 +4,12 @@ coverage/
 .env
 .env.*
 !.env.example
+.env.agent.*
 *.log
 .DS_Store
-.claude/
+.claude/*
+!.claude/skills/
+!.claude/skills/**
 .worktrees/
+.env.agent.*
+ecosystem.agent.*.config.cjs

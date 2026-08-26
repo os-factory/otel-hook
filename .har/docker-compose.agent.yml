@@ -1,0 +1,4 @@
+# No shared Docker services. @osfactory/otel-hook is a TypeScript library/CLI
+# with no database, object store, mail, or browser dependency.
+# setup-infra.sh is a no-op while HARNESS_INFRA_SERVICES is empty in harness.env.
+services: {}
