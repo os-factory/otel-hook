@@ -596,7 +596,7 @@ successful export into `partial` or suppress a delivery claim. `doctor` reports
 them the way it reports logs — off is a passing check.
 
 The snapshot `otel-hook doctor --json` prints (`local_export.jsonl_enabled`,
-`local_export.console_enabled`) never includes the file path.
+`local_export.console_enabled`) and never includes the file path.
 
 ## Privacy
 
