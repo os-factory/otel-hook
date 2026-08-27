@@ -7,6 +7,7 @@ import { createSystemClock } from "../runtime/clock.js";
 import { createFilesystemStateStore } from "../state/filesystem-store.js";
 import { createFileDurableLogSpool } from "../telemetry/durable-log-spool.js";
 import { createFileDurableSpool } from "../telemetry/durable-spool.js";
+import { describeJsonlDeliverability } from "../telemetry/local-export.js";
 import { describeLogsDeliverability } from "../telemetry/otlp-log-sink.js";
 import { createOtlpTraceSink } from "../telemetry/otlp-sink.js";
 import type { CliDoctorCommand } from "./args.js";
@@ -198,6 +199,27 @@ export const collectDoctorReport = async (
           : logs.reason === "no-endpoint"
             ? "logs are enabled but no endpoint is configured and none could be derived"
             : `logs are enabled but unroutable: ${logs.reason}`,
+  });
+
+  const jsonl = describeJsonlDeliverability(resolved.config.localExport.jsonl);
+  checks.push({
+    name: "jsonl-exporter",
+    ok: jsonl.status !== "unusable",
+    detail:
+      jsonl.status === "configured"
+        ? "local JSONL file export is configured"
+        : jsonl.status === "disabled"
+          ? "local JSONL file export is disabled"
+          : jsonl.reason === "no-path"
+            ? "JSONL export is enabled but no path is configured"
+            : "JSONL export path would write onto a process stream rather than a regular file",
+  });
+  checks.push({
+    name: "console-exporter",
+    ok: true,
+    detail: resolved.config.localExport.console.enabled
+      ? "console JSONL export writes to stderr"
+      : "console JSONL export is disabled",
   });
 
   const health = summarizeHealth([sink.health()]);

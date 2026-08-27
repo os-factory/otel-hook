@@ -98,6 +98,10 @@ const mergeConfig = (patch: OtelHookConfigPatch | undefined): OtelHookConfig => 
   }
   return otelHookConfigSchema.parse({
     exporter: { ...DEFAULT_CONFIG.exporter, ...patch.exporter },
+    localExport: {
+      jsonl: { ...DEFAULT_CONFIG.localExport.jsonl, ...patch.localExport?.jsonl },
+      console: { ...DEFAULT_CONFIG.localExport.console, ...patch.localExport?.console },
+    },
     privacy: {
       ...DEFAULT_CONFIG.privacy,
       ...patch.privacy,

@@ -45,6 +45,10 @@ import { createFileDurableSpool, type DurableSpool } from "../telemetry/durable-
 import { createOtlpLogSink, type OtlpLogTelemetrySink } from "../telemetry/otlp-log-sink.js";
 import { createOtlpTraceSink, type OtlpTelemetrySink } from "../telemetry/otlp-sink.js";
 import {
+  attachLocalExporters,
+  createLocalExportSinks,
+} from "../telemetry/local-export.js";
+import {
   createSignalFanout,
   shareCorrelationPerBatch,
 } from "../telemetry/signal-fanout.js";
@@ -306,6 +310,11 @@ export type HookRuntimeOptions = {
   readonly staleClaimMillis?: number;
   /** TTL for dedup records specifically. Defaults to `lifecycleMaxAgeMillis`. */
   readonly deliveryRetentionMillis?: number;
+  /**
+   * Destination for the console JSONL exporter. Defaults to `process.stderr.write`.
+   * Must never target stdout (ADR 0004).
+   */
+  readonly consoleWrite?: (line: string) => void;
 };
 
 const DEFAULT_FLUSH_TIMEOUT_MILLIS = 2_000;
@@ -543,7 +552,14 @@ export const createHookRuntime = (options: HookRuntimeOptions): HookRuntime => {
     correlate,
   });
 
-  const sink = createSignalFanout({ traces: traceSink, logs: logSink });
+  const otlpFanout = createSignalFanout({ traces: traceSink, logs: logSink });
+  const localSinks = createLocalExportSinks({
+    policy: options.config.localExport,
+    clock,
+    logger,
+    ...(options.consoleWrite === undefined ? {} : { consoleWrite: options.consoleWrite }),
+  });
+  const sink = attachLocalExporters(otlpFanout, localSinks);
 
   const hookDeps = {
     stateStore,
@@ -914,7 +930,7 @@ export const createHookRuntime = (options: HookRuntimeOptions): HookRuntime => {
     );
   };
 
-  const snapshots = (): readonly DeliveryHealthSnapshot[] => sink.health();
+  const snapshots = (): readonly DeliveryHealthSnapshot[] => otlpFanout.health();
 
   let shutdownReport: Promise<HookShutdownReport> | undefined;
   const shutdown = (): Promise<HookShutdownReport> => {
