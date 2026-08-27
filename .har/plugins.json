@@ -1,0 +1,9 @@
+{
+  "version": "1",
+  "profile": "cli",
+  "bundles": [
+    "shared-kernel",
+    "runtime-cli"
+  ],
+  "plugins": []
+}
