@@ -1,20 +1,26 @@
 {
   "version": "1",
+  "artifactsDir": "artifacts",
+  "logsDir": "logs",
   "agentSlots": {
     "min": 1,
     "max": 3
   },
-  "commitGate": {
-    "enabled": true,
-    "mode": "block",
-    "scope": "worktrees"
-  },
+  "verificationStages": [
+    "typecheck",
+    "build",
+    "fixtures-validate",
+    "lint",
+    "unit-tests",
+    "readiness"
+  ],
   "stages": [
     {
       "id": "setup-infra",
       "kind": "setup",
       "description": "No-op while HARNESS_INFRA_SERVICES is empty",
-      "command": "./.har/setup-infra.sh"
+      "command": "./.har/setup-infra.sh",
+      "artifacts": []
     },
     {
       "id": "launch",
@@ -34,15 +40,15 @@
       "kind": "verify",
       "description": "Verification pipeline: typecheck+build+fixtures (quick); lint+tests+CLI smoke (--full)",
       "command": "./.har/verify.sh {agentId}",
-      "acceptsArgs": [
-        "--full"
-      ],
       "artifacts": [
         {
           "path": ".har/artifacts",
           "kind": "directory",
           "description": "Optional verification outputs"
         }
+      ],
+      "acceptsArgs": [
+        "--full"
       ]
     },
     {
@@ -62,63 +68,81 @@
       "id": "teardown",
       "kind": "teardown",
       "description": "Remove worktree and env file for the slot",
-      "command": "./.har/teardown.sh {agentId}"
+      "command": "./.har/teardown.sh {agentId}",
+      "artifacts": []
     },
     {
       "id": "typecheck",
       "kind": "test",
-      "tier": "quick",
       "description": "TypeScript typecheck (tsc --noEmit)",
       "command": "${NPM_BIN:-npm} run typecheck",
-      "requiresAgentId": true
+      "artifacts": [],
+      "requiresAgentId": true,
+      "tier": "quick"
     },
     {
       "id": "build",
       "kind": "test",
-      "tier": "quick",
       "description": "Build the library and CLI (tsup → dist/)",
       "command": "${NPM_BIN:-npm} run build",
-      "requiresAgentId": true
+      "artifacts": [],
+      "requiresAgentId": true,
+      "tier": "quick"
     },
     {
       "id": "fixtures-validate",
       "kind": "test",
-      "tier": "quick",
       "description": "Validate fixture provenance sidecars",
       "command": "${NPM_BIN:-npm} run fixtures:validate",
-      "requiresAgentId": true
+      "artifacts": [],
+      "requiresAgentId": true,
+      "tier": "quick"
     },
     {
       "id": "lint",
       "kind": "test",
-      "tier": "full",
       "description": "ESLint",
       "command": "${NPM_BIN:-npm} run lint",
-      "requiresAgentId": true
+      "artifacts": [],
+      "requiresAgentId": true,
+      "tier": "full"
     },
     {
       "id": "unit-tests",
       "kind": "test",
-      "tier": "full",
       "description": "Full Vitest suite (unit, e2e, parity, packaging)",
       "command": "${NPM_BIN:-npm} test",
-      "requiresAgentId": true
+      "artifacts": [],
+      "requiresAgentId": true,
+      "tier": "full"
     },
     {
       "id": "readiness",
       "kind": "test",
-      "tier": "full",
       "description": "Built CLI smoke: --version and providers --json",
       "script": "stages/cli-smoke.sh",
-      "requiresAgentId": true
+      "artifacts": [],
+      "requiresAgentId": true,
+      "tier": "full"
+    },
+    {
+      "id": "agent-lab",
+      "kind": "test",
+      "description": "Live host-agent CLI against a mocked LLM API; assert otel-hook events and frozen token counters",
+      "script": "stages/agent-lab.sh",
+      "artifacts": [
+        {
+          "path": ".har/artifacts/agent-lab",
+          "kind": "directory",
+          "description": "Lab report, mock request log, and assertion output"
+        }
+      ],
+      "requiresAgentId": false
     }
   ],
-  "verificationStages": [
-    "typecheck",
-    "build",
-    "fixtures-validate",
-    "lint",
-    "unit-tests",
-    "readiness"
-  ]
+  "commitGate": {
+    "enabled": true,
+    "mode": "block",
+    "scope": "worktrees"
+  }
 }

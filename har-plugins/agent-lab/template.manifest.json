@@ -1,0 +1,40 @@
+{
+  "id": "agent-lab",
+  "verificationStages": ["agent-lab"],
+  "stages": [
+    {
+      "id": "agent-lab",
+      "kind": "test",
+      "description": "Live host-agent CLI against a mocked LLM API; assert otel-hook events and frozen token counters",
+      "script": "stages/agent-lab.sh",
+      "requiresAgentId": false,
+      "artifacts": [
+        {
+          "path": ".har/artifacts/agent-lab",
+          "kind": "directory",
+          "description": "Lab report, mock request log, and assertion output"
+        }
+      ]
+    }
+  ],
+  "files": [
+    {
+      "src": ".har/stages/agent-lab.sh",
+      "dest": ".har/stages/agent-lab.sh",
+      "executable": true
+    },
+    {
+      "src": ".har/stages/AGENT-LAB.md",
+      "dest": ".har/stages/AGENT-LAB.md"
+    }
+  ],
+  "optionalFiles": [],
+  "nextSteps": [
+    "Keep this plugin local: har env add-plugin ./har-plugins/agent-lab --skip-ci",
+    "Remove agent-lab from .har/stages.json verificationStages so it is not on har env verify; invoke the stage explicitly",
+    "Run: npm run lab:claude",
+    "Or, after add-plugin: ./.har/stages/agent-lab.sh",
+    "Read har-plugins/agent-lab/README.md and .har/stages/AGENT-LAB.md"
+  ],
+  "docsPath": ".har/stages/AGENT-LAB.md"
+}

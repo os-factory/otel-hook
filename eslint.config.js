@@ -12,6 +12,7 @@ export default tseslint.config(
       ".har/**",
       ".cursor/**",
       ".claude/**",
+      "har-plugins/**",
     ],
   },
   eslint.configs.recommended,

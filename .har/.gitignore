@@ -9,6 +9,7 @@ artifacts/
 state/
 maintain/
 ADAPT-PROMPT.md
+ADAPT-PROMPT-*.md
 AGENTS.md.proposed
 AGENTS.md.proposed.meta.json
 AGENT.md.proposed

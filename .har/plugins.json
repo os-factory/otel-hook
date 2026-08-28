@@ -5,5 +5,15 @@
     "shared-kernel",
     "runtime-cli"
   ],
-  "plugins": []
+  "plugins": [
+    {
+      "id": "agent-lab",
+      "source": "path",
+      "spec": "./har-plugins/agent-lab",
+      "stageIds": [
+        "agent-lab"
+      ],
+      "installedAt": "2026-08-27T20:37:47.420Z"
+    }
+  ]
 }
