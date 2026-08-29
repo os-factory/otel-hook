@@ -4,6 +4,11 @@
 # Not part of default `har env verify`. Invoke explicitly:
 #   ./.har/stages/agent-lab.sh
 #   npm run lab:claude
+#   npm run lab:codex
+#
+# Assumes the 1.0 stage surface when HAR invokes it: WORK_DIR, ENV_FILE,
+# AGENT_ID, and HAR_HARNESS_DIR are already exported. Also runs standalone
+# (`npm run lab:*`) without a slot.
 #
 # Skips (exit 0) when the selected host CLI is missing or AGENT_LAB=0.
 # Pass a provider as the first extra arg, or set AGENT_LAB_PROVIDER.
@@ -11,39 +16,29 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# After `har env add-plugin` this file lives in <repo>/.har/stages/.
-# The inner plugin copy lives in har-plugins/agent-lab/.har/stages/.
-if [[ -f "$SCRIPT_DIR/../harness.env" ]]; then
-  HARNESS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-  REPO_ROOT="$(cd "$HARNESS_DIR/.." && pwd)"
-  ARTIFACTS_DIR="${HARNESS_DIR}/artifacts/agent-lab"
-  EXTRA_ARGS=()
-  if [[ -f "$HARNESS_DIR/harness.env" && -f "$HARNESS_DIR/agent-slot.sh" && "${1:-}" != "" && "${1:-}" =~ ^[0-9]+$ ]]; then
-    # shellcheck source=/dev/null
-    source "$HARNESS_DIR/harness.env"
-    ORIG_SCRIPT_DIR="$SCRIPT_DIR"
-    SCRIPT_DIR="$HARNESS_DIR"
-    # shellcheck source=/dev/null
-    source "$HARNESS_DIR/agent-slot.sh"
-    SCRIPT_DIR="$ORIG_SCRIPT_DIR"
-    AGENT_ID="$1"
-    shift
-    if ENV_FILE="$(resolve_agent_env_file "$AGENT_ID" "$REPO_ROOT" 2>/dev/null)"; then
-      set -a
-      # shellcheck source=/dev/null
-      source "$ENV_FILE"
-      set +a
-      if WORK_DIR="$(resolve_agent_work_dir "$ENV_FILE" 2>/dev/null)"; then
-        REPO_ROOT="$WORK_DIR"
-      fi
-    fi
-  fi
-  EXTRA_ARGS=("$@")
+if [[ "${1:-}" =~ ^[0-9]+$ ]]; then
+  AGENT_ID="${1}"
+  shift
+fi
+
+if [[ -n "${WORK_DIR:-}" ]]; then
+  REPO_ROOT="$WORK_DIR"
+elif [[ -f "$SCRIPT_DIR/../harness.env" ]]; then
+  REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 else
   REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
-  ARTIFACTS_DIR="${REPO_ROOT}/.har/artifacts/agent-lab"
-  EXTRA_ARGS=("$@")
 fi
+
+if [[ -n "${ENV_FILE:-}" && -f "${ENV_FILE}" ]]; then
+  set -a
+  # shellcheck source=/dev/null
+  source "$ENV_FILE"
+  set +a
+fi
+
+HARNESS_DIR="${HAR_HARNESS_DIR:-${REPO_ROOT}/.har}"
+ARTIFACTS_DIR="${HARNESS_DIR}/artifacts/agent-lab"
+EXTRA_ARGS=("$@")
 
 mkdir -p "$ARTIFACTS_DIR"
 
