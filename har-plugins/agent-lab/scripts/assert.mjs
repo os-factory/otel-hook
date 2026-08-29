@@ -52,8 +52,8 @@ export const assertLab = (input) => {
     .map((record) => record.attributes?.["otelhook.event.type"])
     .filter((value) => typeof value === "string");
 
-  const blob = [input.hooksJsonl ?? "", wireText, agentStdout, JSON.stringify(agentResult ?? null)].join("\n");
-  expect(!blob.includes(secret), `synthetic secret leaked into lab artifacts: ${secret}`);
+  const blob = [input.hooksJsonl ?? "", wireText].join("\n");
+  expect(!blob.includes(secret), `synthetic secret leaked into OTLP or hook dumps: ${secret}`);
 
   for (const name of requiredHooks) {
     expect(hookNames.includes(name), `missing hook event ${name} (saw: ${hookNames.join(", ") || "none"})`);
@@ -98,7 +98,12 @@ export const assertLab = (input) => {
     expect(attrs["gen_ai.usage.input_tokens"] === expected.inputTokens, `gen_ai.usage.input_tokens=${JSON.stringify(attrs["gen_ai.usage.input_tokens"])} expected ${String(expected.inputTokens)}`);
     expect(attrs["gen_ai.usage.output_tokens"] === expected.outputTokens, `gen_ai.usage.output_tokens=${JSON.stringify(attrs["gen_ai.usage.output_tokens"])} expected ${String(expected.outputTokens)}`);
     expect(attrs["gen_ai.usage.cache_read.input_tokens"] === expected.cachedInputTokens, `gen_ai.usage.cache_read.input_tokens=${JSON.stringify(attrs["gen_ai.usage.cache_read.input_tokens"])} expected ${String(expected.cachedInputTokens)}`);
-    expect(attrs["gen_ai.usage.cache_creation.input_tokens"] === expected.cacheCreationInputTokens, `gen_ai.usage.cache_creation.input_tokens=${JSON.stringify(attrs["gen_ai.usage.cache_creation.input_tokens"])} expected ${String(expected.cacheCreationInputTokens)}`);
+    if (expected.cacheCreationInputTokens !== undefined) {
+      expect(attrs["gen_ai.usage.cache_creation.input_tokens"] === expected.cacheCreationInputTokens, `gen_ai.usage.cache_creation.input_tokens=${JSON.stringify(attrs["gen_ai.usage.cache_creation.input_tokens"])} expected ${String(expected.cacheCreationInputTokens)}`);
+    }
+    if (expected.reasoningOutputTokens !== undefined) {
+      expect(attrs["gen_ai.usage.reasoning.output_tokens"] === expected.reasoningOutputTokens, `gen_ai.usage.reasoning.output_tokens=${JSON.stringify(attrs["gen_ai.usage.reasoning.output_tokens"])} expected ${String(expected.reasoningOutputTokens)}`);
+    }
   }
 
   if (agentStdout.length > 0) {

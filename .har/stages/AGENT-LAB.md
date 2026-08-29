@@ -4,8 +4,8 @@ Inner HAR plugin (not published). It runs a **host agent CLI** against a
 **scripted LLM mock**, registers **otel-hook** hooks, and checks that lifecycle
 events and frozen token counters show up on the OTLP wire.
 
-Claude Code is the first wired provider. Codex and Gemini should get a driver
-under `har-plugins/agent-lab/scripts/providers/` and a scenario JSON — not a
+Claude Code and Codex are wired. Gemini should get a driver under
+`har-plugins/agent-lab/scripts/providers/` and a scenario JSON — not a
 second plugin.
 
 HAR's plugin manifest requires a non-empty `verificationStages` list, so
@@ -36,9 +36,11 @@ GitHub Actions.
 
 ```bash
 npm run lab:claude
+npm run lab:codex
 # or, after add-plugin:
 ./.har/stages/agent-lab.sh
 ./.har/stages/agent-lab.sh --provider claude-code
+./.har/stages/agent-lab.sh --provider codex
 ```
 
 Skip: `AGENT_LAB=0`. Keep the temp dir: `AGENT_LAB_KEEP=1`.
@@ -53,8 +55,26 @@ Skip: `AGENT_LAB=0`. Keep the temp dir: `AGENT_LAB_KEEP=1`.
 - Synthetic secret from `widget.txt` is absent from OTLP bytes and hook dumps
 - Default privacy: prompt.submitted log has no body
 
+## What the Codex scenario asserts
+
+- Hooks: SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, Stop
+  (Codex has no modelled SessionEnd)
+- OTLP logs: session.start, prompt.submitted, tool.start, tool.end, generation.end
+- Tool span `Bash` (Codex hook stdin names `exec_command` as `Bash`)
+- Frozen Stop usage on the generation span matches
+  `scripts/scenarios/codex-read-then-ready.json` (`canonicalStopUsage`)
+- Those numbers are the session-lifetime cumulative snapshot after both mock
+  turns (100+180 input, 24+8 output) and match Codex's own `turn.completed`
+  print totals. Live Codex 0.146 does not put counters on hook stdin; the
+  wrapper attaches the mock cumulative. Fixture replay covers two-Stop
+  session-lifetime deltas.
+- Synthetic secret from `widget.txt` is absent from OTLP bytes and hook dumps
+- Default privacy: prompt.submitted log has no body
+
 ## Isolation
 
 The runner points `HOME`, the host config dir, the mock base URL, and a dummy
 API key at a temp directory. For Claude it never uses `--bare` (that flag skips
-hooks). Do not copy personal transcripts or credentials into this plugin.
+hooks). Codex uses an isolated `CODEX_HOME`, `--dangerously-bypass-hook-trust`,
+and a custom `wire_api = "responses"` provider. Do not copy personal
+transcripts or credentials into this plugin.
