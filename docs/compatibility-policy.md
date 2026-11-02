@@ -52,10 +52,26 @@ versioned contract an adapter can let go stale.
 
 ## Public API surface
 
-The supported public surface is exactly what's re-exported from the entry
-points listed in `package.json`'s `"exports"` map (`.`, `./model`,
-`./providers`, `./privacy`, `./config`, `./errors`, `./runtime`, `./testing`)
-and documented in the [README](../README.md)'s entry-point table.
+The supported public surface is exactly the subpaths of `package.json`'s
+`"exports"` map, in the same set as the [README](../README.md#entry-points)
+entry-point table. `tests/docs/capability-manifest.test.ts` fails when those
+two lists diverge.
+
+- `@osfactory/otel-hook`
+- `@osfactory/otel-hook/model`
+- `@osfactory/otel-hook/providers`
+- `@osfactory/otel-hook/privacy`
+- `@osfactory/otel-hook/config`
+- `@osfactory/otel-hook/errors`
+- `@osfactory/otel-hook/runtime`
+- `@osfactory/otel-hook/lifecycle`
+- `@osfactory/otel-hook/state`
+- `@osfactory/otel-hook/telemetry`
+- `@osfactory/otel-hook/diagnostics`
+- `@osfactory/otel-hook/integration`
+- `@osfactory/otel-hook/install`
+- `@osfactory/otel-hook/testing`
+
 `tests/public-api.test.ts` pins the exported names from the top-level entry
 point; `tests/packaging/pack.test.ts` verifies every subpath actually resolves
 and exposes exports once installed from a packed tarball, not just from
@@ -82,6 +98,29 @@ source.
 - First public release is `0.1.0`. Subsequent versions are cut by
   semantic-release from Conventional Commits on `main` — see
   [docs/release-checklist.md](release-checklist.md).
+
+## Upstream divergences
+
+Intentional differences from `o11y-dev/opentelemetry-hooks` 0.14.0. Each id is
+a reviewed decision, not an open question: `tests/parity/divergence-manifest.ts`
+names it, and a `tests/parity/*.parity.test.ts` asserts it. The table below is
+that catalog. A test fails when an id is added, removed, or retitled without
+updating both.
+
+<!-- upstream-divergences:start -->
+| Id | Dimension | Title |
+| --- | --- | --- |
+| `DIVERGENCE-001` | usage | total_tokens is passed through verbatim, never computed |
+| `DIVERGENCE-002` | usage | No reasoning/thinking-token support |
+| `DIVERGENCE-003` | usage | No cache-aware validation or reconciliation |
+| `DIVERGENCE-004` | lifecycle | PreCompact/PostCompact carry no compaction-specific attributes |
+| `DIVERGENCE-005` | privacy | Structural paths (cwd/workspace) are copied verbatim into span attributes |
+| `DIVERGENCE-006` | aggregation | No session-cumulative usage tracking; unconditional session rollup span |
+| `DIVERGENCE-007` | lifecycle | A provider's own event vocabulary is rewritten into Claude Code's |
+| `DIVERGENCE-008` | lifecycle | Cursor's `duration` is read inconsistently: scaled 1000x on one event, dropped on another |
+| `DIVERGENCE-009` | usage | Cursor's cache-read tokens are dropped, leaving input tokens with no breakdown |
+| `DIVERGENCE-010` | lifecycle | Codex client version is read from a host binary on PATH, not from the payload |
+<!-- upstream-divergences:end -->
 
 ## Changelog
 
@@ -138,3 +177,12 @@ source.
   rather than event counts, and with logs off (the default) neither value changes.
   No canonical schema version bump: no event type or field changed. See
   [docs/canonical-log-mapping.md](canonical-log-mapping.md).
+- 2026-11-02 — **Public export list corrected.** `./lifecycle`, `./state`,
+  `./telemetry`, `./diagnostics`, `./integration`, and `./install` are part of
+  the supported surface. The README entry-point table already named them; this
+  section had stopped at `./testing`. The two lists are now checked against
+  `package.json` `"exports"`.
+- 2026-11-02 — **Provider capability manifest version 1.** `otel-hook providers`
+  text and `--json` render one manifest derived from adapter declarations.
+  The README provider matrix and `docs/provider-capability-manifest.json` are
+  the same document, and CI fails when they drift.

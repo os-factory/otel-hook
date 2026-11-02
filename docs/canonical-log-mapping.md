@@ -76,6 +76,7 @@ hand-maintained list, and that is the point: a capability declaration that has g
 stale is worse than none, because a consumer cannot tell "this provider reports no
 tool output" from "nobody updated the declaration".
 
+<!-- log-signal-capabilities:start -->
 | Declared lifecycle events | Signals declared |
 | --- | --- |
 | `session.start` / `session.end` | `session` |
@@ -86,14 +87,16 @@ tool output" from "nobody updated the declaration".
 | `subagent.start` / `subagent.end` | `delegation` |
 | `compaction.performed` | `compaction` |
 | `error.raised` | `error` |
+<!-- log-signal-capabilities:end -->
 
 The tool refinements are reported whenever an adapter emits tool events at all,
 because which of them a given callback produces depends on the payload rather than
 on the adapter. So this is a statement about what *may* appear, not what always
 will — the same distinction the usage capabilities draw.
 
-`otel-hook providers --json` prints each adapter's `lifecycleEvents`; the signals
-follow from the table above.
+`otel-hook providers --json` includes each adapter's `lifecycleEvents` and the
+`logSignals` derived from them by `logSignalsForLifecycleEvents`. The table
+above is that derivation, not a second list.
 
 ## Record shape
 
