@@ -6,6 +6,7 @@
  *
  * Usage:
  *   node har-plugins/agent-lab/scripts/run-lab.mjs --provider claude-code
+ *   node har-plugins/agent-lab/scripts/run-lab.mjs --provider codex
  *
  * Env:
  *   AGENT_LAB=0        skip (exit 0)
@@ -23,16 +24,21 @@ import { assertLab } from "./assert.mjs";
 import { startLabCollector } from "./collector.mjs";
 import { decodeAllExportedLogRecords, decodeAllExportedSpans } from "./otlp-decode.mjs";
 import { claudeCodeProvider } from "./providers/claude-code.mjs";
+import { codexProvider } from "./providers/codex.mjs";
 
 const PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const REPO_ROOT = path.resolve(PLUGIN_ROOT, "..", "..");
 const CLI_PATH = path.join(REPO_ROOT, "dist", "cli.js");
 const WRAPPER_PATH = path.join(PLUGIN_ROOT, "scripts", "otel-hook-wrapper.mjs");
 
-const PROVIDERS = Object.freeze({
-  [claudeCodeProvider.id]: claudeCodeProvider,
-  ...Object.fromEntries(claudeCodeProvider.aliases.map((alias) => [alias, claudeCodeProvider])),
-});
+const registerProvider = (provider) => [
+  [provider.id, provider],
+  ...provider.aliases.map((alias) => [alias, provider]),
+];
+
+const PROVIDERS = Object.freeze(
+  Object.fromEntries([...registerProvider(claudeCodeProvider), ...registerProvider(codexProvider)]),
+);
 
 const log = (message) => {
   process.stderr.write(`${message}\n`);
@@ -115,7 +121,7 @@ const main = async () => {
   const provider = PROVIDERS[requested];
   if (provider === undefined) {
     const known = [...new Set(Object.values(PROVIDERS).map((entry) => entry.id))].join(", ");
-    throw new Error(`unknown lab provider "${requested}" (have: ${known}; codex and gemini are not wired yet)`);
+    throw new Error(`unknown lab provider "${requested}" (have: ${known}; gemini is not wired yet)`);
   }
 
   const agentBin = process.env[provider.binEnv] ?? (await which(provider.bin));
@@ -152,6 +158,9 @@ const main = async () => {
   await mkdir(stateDir, { recursive: true });
   await mkdir(path.dirname(settingsFile), { recursive: true });
   await writeFile(widgetPath, scenario.widgetContents);
+  if (typeof provider.prepareWorkspace === "function") {
+    await provider.prepareWorkspace({ workspace, scenario, labRoot });
+  }
 
   const collector = await startLabCollector();
   const mock = await provider.startMock({ scenario, widgetPath, logPath: mockLog });
@@ -214,6 +223,10 @@ const main = async () => {
   if (setup.code !== 0) {
     throw new Error(`otel-hook setup failed:\n${setup.stderr || setup.stdout}`);
   }
+  if (provider.mirrorProjectHooksToConfigDir === true) {
+    const mirrored = path.join(configDir, "hooks.json");
+    await writeFile(mirrored, await readFile(settingsFile, "utf8"));
+  }
 
   const agentEnv = provider.isolateEnv({
     homeDir,
@@ -222,6 +235,9 @@ const main = async () => {
     mockUrl: mock.url,
     hooksJsonl,
   });
+  if (typeof provider.prepareHome === "function") {
+    await provider.prepareHome({ homeDir, configDir, mockUrl: mock.url, scenario, labRoot });
+  }
 
   log(`==> ${provider.bin} (print, hooks on, mocked API)`);
   const agent = await run(
@@ -249,7 +265,20 @@ const main = async () => {
   try {
     agentResult = JSON.parse(agent.stdout);
   } catch {
-    agentResult = undefined;
+    const completed = agent.stdout
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0)
+      .map((line) => {
+        try {
+          return JSON.parse(line);
+        } catch {
+          return undefined;
+        }
+      })
+      .filter((row) => row?.type === "turn.completed")
+      .at(-1);
+    agentResult = completed;
   }
 
   const spans = decodeAllExportedSpans(collector.bodiesFor("/v1/traces"));

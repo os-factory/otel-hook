@@ -1,0 +1,62 @@
+{
+  "id": "codex-read-then-ready",
+  "providerId": "codex",
+  "prompt": "Read the file widget.txt in this workspace using a tool. After you have read it, reply with only the word READY.",
+  "widgetFileName": "widget.txt",
+  "widgetContents": "synthetic lab fixture\nLAB_SECRET_NEVER_EXPORT_9f3a\n",
+  "secret": "LAB_SECRET_NEVER_EXPORT_9f3a",
+  "toolName": "Bash",
+  "finalText": "READY",
+  "model": "gpt-5-codex",
+  "usage": {
+    "toolTurn": {
+      "input_tokens": 100,
+      "cached_input_tokens": 0,
+      "output_tokens": 24,
+      "reasoning_output_tokens": 8,
+      "total_tokens": 124
+    },
+    "finalTurn": {
+      "input_tokens": 180,
+      "cached_input_tokens": 80,
+      "output_tokens": 8,
+      "reasoning_output_tokens": 0,
+      "total_tokens": 188
+    },
+    "cumulativeFinal": {
+      "input_tokens": 280,
+      "cached_input_tokens": 80,
+      "output_tokens": 32,
+      "reasoning_output_tokens": 8,
+      "total_tokens": 312
+    }
+  },
+  "agentPrintUsage": {
+    "input_tokens": 280,
+    "cached_input_tokens": 80,
+    "output_tokens": 32,
+    "reasoning_output_tokens": 8
+  },
+  "canonicalStopUsage": {
+    "temporality": "delta",
+    "inputTokens": 280,
+    "cachedInputTokens": 80,
+    "cacheCreationInputTokens": 0,
+    "outputTokens": 32,
+    "reasoningOutputTokens": 8
+  },
+  "requiredHookEvents": [
+    "SessionStart",
+    "UserPromptSubmit",
+    "PreToolUse",
+    "PostToolUse",
+    "Stop"
+  ],
+  "requiredCanonicalTypes": [
+    "session.start",
+    "prompt.submitted",
+    "tool.start",
+    "tool.end",
+    "generation.end"
+  ]
+}

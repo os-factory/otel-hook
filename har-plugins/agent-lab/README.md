@@ -4,7 +4,7 @@ Local-only plugin for this repository. Do not publish it. HAR's own rule is:
 custom check in one repo first; a published plugin when a second repo wants the
 same install.
 
-The plugin is **provider-agnostic**. Each host (Claude Code, later Codex,
+The plugin is **provider-agnostic**. Each host (Claude Code, Codex, later
 Gemini) is a driver + scenario, not a separate plugin.
 
 Install into a harnessed checkout:
@@ -17,7 +17,9 @@ Run:
 
 ```bash
 npm run lab:claude
+npm run lab:codex
 node har-plugins/agent-lab/scripts/run-lab.mjs --provider claude-code
+node har-plugins/agent-lab/scripts/run-lab.mjs --provider codex
 ```
 
 See `.har/stages/AGENT-LAB.md` (after add-plugin) or the copy under

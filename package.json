@@ -14,6 +14,7 @@
     "check": "npm run typecheck && npm run lint && npm run build && npm test && npm run fixtures:validate",
     "lab": "node har-plugins/agent-lab/scripts/run-lab.mjs",
     "lab:claude": "node har-plugins/agent-lab/scripts/run-lab.mjs --provider claude-code",
+    "lab:codex": "node har-plugins/agent-lab/scripts/run-lab.mjs --provider codex",
     "release": "semantic-release"
   },
   "keywords": [],
