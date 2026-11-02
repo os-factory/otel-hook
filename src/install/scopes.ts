@@ -10,11 +10,10 @@ import { GEMINI_PROVIDER_ID } from "../providers/gemini/adapter.js";
  * Where each provider keeps the configuration document this tool registers into.
  *
  * A path here is a claim about a third party's on-disk layout, so each one names
- * the source that established it. A provider with a verified *planner* but no
- * verified *location* (Antigravity) is deliberately absent: `setup` then requires
- * an explicit `--settings-file`, which is honest about what this repository knows
- * rather than writing a plausible-looking path into a developer's home
- * directory.
+ * the source that established it. A provider with a verified planner but no
+ * verified location is left out of this list: `setup` then requires an explicit
+ * `--settings-file`, which is honest about what this repository knows rather
+ * than writing a plausible-looking path into a developer's home directory.
  */
 
 export type RegistrationScope = "global" | "project";
@@ -45,6 +44,14 @@ const GEMINI_EVIDENCE =
  */
 const CURSOR_EVIDENCE =
   "cursor.com/docs/agent/hooks configuration-levels list (user and project), cross-checked against o11y-dev/opentelemetry-hooks v0.14.0 setup.sh";
+/**
+ * The same two paths for the Antigravity App, CLI, and IDE. The CLI note on
+ * that page says `~/.gemini/antigravity-cli/settings.json` is not loaded, so
+ * it is not offered here. antigravity-cli issue 49 reports the CLI writing a
+ * different file; the documented trigger path is the one setup writes.
+ */
+const ANTIGRAVITY_EVIDENCE =
+  "antigravity.google/docs/hooks (read 2026-11-02): workspace .agents/hooks.json and global ~/.gemini/config/hooks.json";
 
 export const PROVIDER_INSTALL_LOCATIONS: readonly InstallLocation[] = Object.freeze([
   Object.freeze({
@@ -95,17 +102,26 @@ export const PROVIDER_INSTALL_LOCATIONS: readonly InstallLocation[] = Object.fre
     segments: Object.freeze([".gemini", "settings.json"]),
     evidence: GEMINI_EVIDENCE,
   }),
+  Object.freeze({
+    providerId: ANTIGRAVITY_PROVIDER_ID,
+    scope: "global" as const,
+    segments: Object.freeze([".gemini", "config", "hooks.json"]),
+    evidence: ANTIGRAVITY_EVIDENCE,
+  }),
+  Object.freeze({
+    providerId: ANTIGRAVITY_PROVIDER_ID,
+    scope: "project" as const,
+    segments: Object.freeze([".agents", "hooks.json"]),
+    evidence: ANTIGRAVITY_EVIDENCE,
+  }),
 ]);
 
 /**
  * Providers whose planner is verified but whose install location is not, with
  * the blocker. `setup --provider <id> --settings-file <path>` still works.
+ * Empty while every shipped planner has a published path.
  */
-export const PROVIDERS_WITHOUT_VERIFIED_LOCATION: Readonly<Record<string, string>> = Object.freeze({
-  [ANTIGRAVITY_PROVIDER_ID]:
-    "no Antigravity hook-file path has been verified; o11y-dev/opentelemetry-hooks v0.14.0 lists Antigravity as " +
-    'a "manual hook command, runner-defined" integration and writes no file for it',
-});
+export const PROVIDERS_WITHOUT_VERIFIED_LOCATION: Readonly<Record<string, string>> = Object.freeze({});
 
 /**
  * Providers this tool can find on its own, in catalog order.

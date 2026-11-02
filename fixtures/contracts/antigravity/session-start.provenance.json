@@ -1,0 +1,11 @@
+{
+  "fixture": "session-start.json",
+  "sourceContract": "Antigravity SessionStart stdin, common fields only, per antigravity.google/docs/hooks (read 2026-11-02)",
+  "provider": "antigravity",
+  "capturedDate": "2026-11-02",
+  "author": "otel-hook antigravity provider owner (agent)",
+  "sanitization": "No captured payload. Ids, model name, paths, tool arguments, and error text are placeholders under /workspace/example-repo. Secret-shaped strings, where present, are fabricated.",
+  "licenseBasis": "Original synthetic authorship. Field names follow antigravity.google/docs/hooks (read 2026-11-02). Every value is invented; no transcript, path, or credential is copied.",
+  "sha256": "599b3eb7b01c532ac4ed4542ca0220b2d678e286a2a26c90a9ebe4b24f644d36",
+  "notes": "Synthetic. modelName is included because the reference lists it on every hook. No session-end field exists, and none is added."
+}

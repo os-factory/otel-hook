@@ -29,7 +29,9 @@ export const PROVIDER_REGISTRATION_SUPPORT: readonly ProviderRegistrationSupport
     providerId: ANTIGRAVITY_PROVIDER_ID,
     supported: true,
     reason:
-      "the five documented camelCase command hooks and the hook-file shape are recorded by the antigravity adapter",
+      "the named-hook hooks.json shape, the .agents/hooks.json and ~/.gemini/config/hooks.json locations, and the " +
+      "camelCase stdin contract are documented at antigravity.google/docs/hooks (read 2026-11-02). Stdin does not " +
+      "name the event, so the default registration is SessionStart and PostToolUse",
     helper: "mergeAntigravityHookRegistration",
   }),
   Object.freeze({

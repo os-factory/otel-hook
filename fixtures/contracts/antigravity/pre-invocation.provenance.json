@@ -1,0 +1,11 @@
+{
+  "fixture": "pre-invocation.json",
+  "sourceContract": "Antigravity PreInvocation or PostInvocation stdin. The reference gives both events invocationNum, initialNumSteps, and the common fields",
+  "provider": "antigravity",
+  "capturedDate": "2026-11-02",
+  "author": "otel-hook antigravity provider owner (agent)",
+  "sanitization": "No captured payload. Ids, model name, paths, tool arguments, and error text are placeholders under /workspace/example-repo. Secret-shaped strings, where present, are fabricated.",
+  "licenseBasis": "Original synthetic authorship. Field names follow antigravity.google/docs/hooks (read 2026-11-02). Every value is invented; no transcript, path, or credential is copied.",
+  "sha256": "772c48b37acdf597de9af9c3b7f5302ca549875559be34918e5e1b9448fe3052",
+  "notes": "invocationNum 0 is the first model call, not a session start. The same bytes are a valid PostInvocation, so no generation event is emitted."
+}

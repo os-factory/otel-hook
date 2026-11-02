@@ -1,0 +1,13 @@
+{
+  "conversationId": "conv_synthetic_0001",
+  "workspacePaths": [
+    "/workspace/example-repo"
+  ],
+  "transcriptPath": "/workspace/example-repo/transcript.jsonl",
+  "artifactDirectoryPath": "/workspace/example-repo/artifacts",
+  "modelName": "example-model",
+  "executionNum": 1,
+  "terminationReason": "model_stop",
+  "error": "",
+  "fullyIdle": true
+}

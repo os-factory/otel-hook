@@ -1,0 +1,11 @@
+{
+  "fixture": "stop-not-idle.json",
+  "sourceContract": "Antigravity Stop stdin with fullyIdle false, per antigravity.google/docs/hooks",
+  "provider": "antigravity",
+  "capturedDate": "2026-11-02",
+  "author": "otel-hook antigravity provider owner (agent)",
+  "sanitization": "No captured payload. Ids, model name, paths, tool arguments, and error text are placeholders under /workspace/example-repo. Secret-shaped strings, where present, are fabricated.",
+  "licenseBasis": "Original synthetic authorship. Field names follow antigravity.google/docs/hooks (read 2026-11-02). Every value is invented; no transcript, path, or credential is copied.",
+  "sha256": "b77c9bc9a069eff3626b4e6d0f42db1695bd6ec4a6b28a09ce6d1a07dbc6d580",
+  "notes": "fullyIdle false means background work is still running. It is a second Stop observation, not a session boundary."
+}

@@ -4,7 +4,6 @@ import { providerIdSchema, sessionIdSchema, type ProviderId } from "../../model/
 import { deriveWorkspaceIdentity } from "../../privacy/workspace.js";
 import {
   providerDetectionSchema,
-  SILENT_HOOK_RESPONSE,
   unknownDetection,
   type ProviderAdapter,
   type ProviderCapabilities,
@@ -12,6 +11,7 @@ import {
   type ProviderDetection,
   type ProviderDetectionInput,
   type ProviderHookResponse,
+  type ProviderHookResponseInput,
   type ProviderIdentityInput,
   type ProviderParseInput,
   type ProviderParseResult,
@@ -19,24 +19,23 @@ import {
 import { createEventFactory } from "../builder.js";
 import { ANTIGRAVITY_DELIVERY_GAPS, antigravityDeliveryIdentity } from "./delivery.js";
 import {
-  ANTIGRAVITY_SUBAGENT_TOOL_NAME,
-  antigravityHookPayloadSchema,
-  antigravityWeakShapeSchema,
+  classifyAntigravityPayload,
+  type AntigravityClassification,
 } from "./payload.js";
 
 export const ANTIGRAVITY_PROVIDER_ID = "antigravity" as const;
 
 /**
- * What this adapter can honestly observe from the five documented command
- * hooks. Only PreToolUse/PostToolUse carry a lifecycle fact the canonical
- * model can represent without inventing anything: PreInvocation,
- * PostInvocation, and Stop expose invocation/execution bookkeeping, not a
- * session or generation identity (no `modelId`, no genuine start/end
- * signal), so none of them produce an event — see `parse()` below and
- * `./maturity.ts` for what would need to change that.
+ * What stdin can actually support.
+ *
+ * `SessionStart` is the one documented session boundary, and it is disjoint
+ * from every other event. `tool.end` is emitted only for `PostToolUse` once
+ * `error` is present — the field `PreToolUse` does not have. Generation,
+ * session end, subagent lifecycle, and `tool.start` are absent on purpose;
+ * see `./maturity.ts`.
  */
 export const ANTIGRAVITY_CAPABILITIES: ProviderCapabilities = Object.freeze({
-  lifecycleEvents: Object.freeze(["tool.start", "tool.end"] as const),
+  lifecycleEvents: Object.freeze(["session.start", "tool.end"] as const),
   usageTemporality: "delta",
   reportsCachedInput: false,
   reportsCacheCreation: false,
@@ -46,9 +45,10 @@ export const ANTIGRAVITY_CAPABILITIES: ProviderCapabilities = Object.freeze({
   reportsCost: false,
   emitsSubagentEvents: false,
   emitsCompactionEvents: false,
-  requiresHookResponse: false,
-  // Only the tool pair carries a replay-stable id, and only from the two
-  // verified counters. See `./delivery.ts` for which and why.
+  // PreToolUse requires a decision, PostToolUse returns `{}`, and Stop
+  // requires a decision that is not `continue`. Silence would be a malformed
+  // response on a host that fail-closes.
+  requiresHookResponse: true,
   deliveryIdentifier: "partial",
 });
 
@@ -57,18 +57,27 @@ export type AntigravityAdapterOptions = {
   readonly version?: string;
 };
 
+const ALLOW_DECISION = '{"decision":"allow"}';
+const EMPTY_OBJECT = "{}";
+
+const protocolResponse = (stdout: string): ProviderHookResponse => ({
+  exitCode: 0,
+  contract: "provider-protocol",
+  stdout,
+});
+
+const sourceEventNameOf = (
+  classification: Extract<AntigravityClassification, { status: "exact" }>,
+): string | undefined =>
+  "sourceEventName" in classification ? classification.sourceEventName : undefined;
+
 /**
- * Experimental Google Antigravity adapter.
+ * Antigravity adapter, still experimental.
  *
- * Maps the five documented camelCase command hooks onto canonical events
- * conservatively: fields the hooks do not expose (model identifiers, usage,
- * a genuine session start/end signal) are never fabricated. PreInvocation,
- * PostInvocation, and Stop report invocation and execution-completion
- * bookkeeping only — none of it converts to a canonical event without
- * inventing a session or generation identity, so all three are ignored with
- * a diagnostic reason. See ADR 0003 for the adapter contract this implements
- * and `./maturity.ts` for what would need to be verified before this leaves
- * `experimental`.
+ * Maps the published camelCase hooks onto canonical events only where the
+ * stdin shape belongs to one event. `modelName` is copied onto `session.start`
+ * when the payload has it. Usage, a session end, a generation, and a subagent
+ * lifecycle are not inferred. See `./maturity.ts`.
  */
 export const createAntigravityAdapter = (
   options: AntigravityAdapterOptions = {},
@@ -77,44 +86,61 @@ export const createAntigravityAdapter = (
   const version = options.version ?? "0.1.0";
 
   const detect = (input: ProviderDetectionInput): ProviderDetection => {
-    const full = antigravityHookPayloadSchema.safeParse(input.payload);
-    if (full.success) {
-      return providerDetectionSchema.parse({
-        providerId: id,
-        confidence: "exact",
-        reasons: [`payload matches the documented antigravity ${full.data.hookEventName} hook shape`],
-        sourceEventName: full.data.hookEventName,
-      });
+    const classified = classifyAntigravityPayload(input.payload);
+    if (classified.status === "none") {
+      return unknownDetection(["payload does not match any documented antigravity hook shape"]);
     }
-    const weak = antigravityWeakShapeSchema.safeParse(input.payload);
-    if (weak.success) {
+    if (classified.status === "weak") {
       return providerDetectionSchema.parse({
         providerId: id,
         confidence: "weak",
         reasons: [
-          `payload.hookEventName=${weak.data.hookEventName} matches antigravity but required fields are missing or invalid`,
+          classified.family === "tool"
+            ? "payload has an antigravity conversationId but its tool fields are incomplete"
+            : "payload has an antigravity conversationId but does not match a documented hook input",
         ],
-        sourceEventName: weak.data.hookEventName,
       });
     }
-    return unknownDetection(["payload does not match any documented antigravity hook shape"]);
+    const sourceEventName = sourceEventNameOf(classified);
+    const unlabeledTool =
+      classified.kind === "tool-ambiguous" ||
+      (classified.kind === "tool-absent" && sourceEventName === undefined);
+    return providerDetectionSchema.parse({
+      providerId: id,
+      confidence: "exact",
+      reasons: [
+        unlabeledTool
+          ? "payload matches the antigravity tool envelope but stdin does not name PreToolUse or PostToolUse"
+          : classified.kind === "invocation-ambiguous"
+            ? "payload matches the antigravity invocation envelope but stdin does not name the edge"
+            : `payload matches the documented antigravity ${sourceEventName ?? "input"}`,
+      ],
+      ...(sourceEventName === undefined ? {} : { sourceEventName }),
+    });
   };
 
   const identify = (input: ProviderIdentityInput, context: ProviderContext): readonly IdentityClaim[] => {
-    const parsed = antigravityHookPayloadSchema.safeParse(input.payload);
-    if (!parsed.success) {
+    const classified = classifyAntigravityPayload(input.payload);
+    if (classified.status !== "exact") {
       return [];
     }
-    const payload = parsed.data;
+    const payload = classified.payload;
     const sessionId = sessionIdSchema.parse(payload.conversationId);
-    // occurredAt is pinned to a constant: the seed is a hash namespace, not a
-    // claimed timestamp, and invocationNum is what must stay stable across the
-    // separate Pre/Post hook processes that share one Antigravity invocation.
+    const discriminator =
+      classified.kind === "session-start"
+        ? "session"
+        : classified.kind === "invocation-ambiguous"
+          ? `invocation:${String(classified.payload.invocationNum)}`
+          : classified.kind === "stop"
+            ? `execution:${String(classified.payload.executionNum)}`
+            : `step:${String(classified.payload.stepIdx)}`;
+    // occurredAt is pinned: the seed is a hash namespace, not a claimed
+    // timestamp. Antigravity documents no timestamp field.
     const invocationId = context.ids.newInvocationId({
       providerId: id,
       sessionId,
       occurredAt: 0,
-      discriminator: String(payload.invocationNum),
+      discriminator,
     });
     const [firstWorkspacePath] = payload.workspacePaths;
     const workspace =
@@ -135,8 +161,8 @@ export const createAntigravityAdapter = (
   };
 
   const parse = (input: ProviderParseInput, context: ProviderContext): ProviderParseResult => {
-    const parsed = antigravityHookPayloadSchema.safeParse(input.payload);
-    if (!parsed.success) {
+    const classified = classifyAntigravityPayload(input.payload);
+    if (classified.status !== "exact") {
       return {
         status: "failed",
         error: createErrorInfo({
@@ -146,91 +172,85 @@ export const createAntigravityAdapter = (
         }),
       };
     }
-    const payload = parsed.data;
     const factory = createEventFactory({
       identity: input.identity,
       sequenceBase: input.sequenceBase,
       context,
     });
 
-    switch (payload.hookEventName) {
-      case "PreInvocation":
-        return {
-          status: "ignored",
-          reason:
-            "PreInvocation reports invocation bookkeeping only; it carries no modelId or usage, so it cannot " +
-            "become a generation fact, and it is not a genuine session-start signal Antigravity documents",
-        };
-      case "PostInvocation":
-        return {
-          status: "ignored",
-          reason:
-            "PostInvocation reports invocation bookkeeping only; it carries no modelId, usage, or outcome that " +
-            "the canonical model can represent without inventing a generation fact",
-        };
-      case "PreToolUse": {
-        const toolCallId = context.ids.newOpaqueId([
-          payload.conversationId,
-          "step",
-          String(payload.stepIdx),
-        ]);
-        const toolKind = payload.toolName === ANTIGRAVITY_SUBAGENT_TOOL_NAME ? "delegate" : "unknown";
+    switch (classified.kind) {
+      case "session-start": {
+        const modelName = classified.payload.modelName;
         factory.build({
-          type: "tool.start",
-          toolCallId,
-          toolName: payload.toolName,
-          toolKind,
-          ...(payload.toolInput === undefined
-            ? {}
-            : {
-                input: context.privacy.describeStructured({
-                  kind: "tool-input",
-                  value: payload.toolInput,
-                  label: payload.toolName,
-                }),
-              }),
+          type: "session.start",
+          sessionKind: "unknown",
+          ...(modelName === undefined ? {} : { model: { modelId: modelName } }),
         });
         break;
       }
-      case "PostToolUse": {
-        const toolCallId = context.ids.newOpaqueId([
-          payload.conversationId,
-          "step",
-          String(payload.stepIdx),
-        ]);
-        const outcome = payload.isError === true ? "error" : payload.isError === false ? "ok" : "unknown";
+      case "tool-after": {
+        const tool = classified.payload;
+        const outcome = tool.error === undefined || tool.error.length === 0 ? "ok" : "error";
         factory.build({
           type: "tool.end",
-          toolCallId,
-          toolName: payload.toolName,
+          toolCallId: context.ids.newOpaqueId([tool.conversationId, "step", String(tool.stepIdx)]),
+          toolName: tool.toolCall.name,
           outcome,
-          ...(payload.toolResponse === undefined
-            ? {}
-            : {
-                output: context.privacy.describeStructured({
-                  kind: "tool-output",
-                  value: payload.toolResponse,
-                  label: payload.toolName,
-                }),
-              }),
         });
         break;
       }
-      case "Stop":
+      case "tool-ambiguous":
         return {
           status: "ignored",
-          reason: payload.fullyIdle
-            ? "Stop signals execution/turn completion (fullyIdle=true) but exposes no session or generation " +
-              "identity, so it cannot become session.end or generation.end without inventing one"
-            : "Stop received while the agent is not fully idle; the conversation continues and the hook exposes " +
-              "no lifecycle fact the canonical model can represent",
+          reason:
+            "tool payload has toolCall and stepIdx but no error key, so it is equally PreToolUse or a PostToolUse " +
+            "that omitted error; tool.start and tool.end are not emitted, and hookEventName is not consulted",
+        };
+      case "tool-absent":
+        return {
+          status: "ignored",
+          reason:
+            "tool step reported toolCall null, so there is no tool name to record; a subagent or tool lifecycle is not invented",
+        };
+      case "invocation-ambiguous":
+        return {
+          status: "ignored",
+          reason:
+            "PreInvocation and PostInvocation share invocationNum, initialNumSteps, and modelName, and stdin does not " +
+            "say which edge arrived, so no generation.start or generation.end is emitted",
+        };
+      case "stop":
+        return {
+          status: "ignored",
+          reason: classified.payload.fullyIdle
+            ? "Stop reports execution-loop termination with fullyIdle true; that is not a documented session end or " +
+              "generation end, and neither event is invented"
+            : "Stop reports execution-loop termination while the agent is not fully idle; the conversation continues " +
+              "and the hook is not a session or generation boundary",
         };
     }
 
     return { status: "parsed", events: factory.events() };
   };
 
-  const hookResponse = (): ProviderHookResponse => SILENT_HOOK_RESPONSE;
+  // Antigravity fail-closes a PreToolUse that returns an unknown decision.
+  // `allow` delegates to the next hook. Stop treats anything but `continue`
+  // as permission to stop, so `allow` never forces another loop. A confirmed
+  // PostToolUse or SessionStart answers `{}`.
+  const hookResponse = (input: ProviderHookResponseInput): ProviderHookResponse => {
+    const event = input.detection?.sourceEventName;
+    if (event === "PostToolUse" || event === "SessionStart") {
+      return protocolResponse(EMPTY_OBJECT);
+    }
+    if (event === "Stop" || event === "PreToolUse") {
+      return protocolResponse(ALLOW_DECISION);
+    }
+    const unlabeledTool =
+      input.detection?.reasons.some(
+        (reason) => reason.includes("tool envelope") || reason.includes("tool fields"),
+      ) === true;
+    return protocolResponse(unlabeledTool ? ALLOW_DECISION : EMPTY_OBJECT);
+  };
 
   return {
     id,

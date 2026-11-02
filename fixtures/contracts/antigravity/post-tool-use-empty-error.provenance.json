@@ -1,0 +1,11 @@
+{
+  "fixture": "post-tool-use-empty-error.json",
+  "sourceContract": "Antigravity PostToolUse stdin with error set to the empty string the reference defines as success",
+  "provider": "antigravity",
+  "capturedDate": "2026-11-02",
+  "author": "otel-hook antigravity provider owner (agent)",
+  "sanitization": "No captured payload. Ids, model name, paths, tool arguments, and error text are placeholders under /workspace/example-repo. Secret-shaped strings, where present, are fabricated.",
+  "licenseBasis": "Original synthetic authorship. Field names follow antigravity.google/docs/hooks (read 2026-11-02). Every value is invented; no transcript, path, or credential is copied.",
+  "sha256": "0398e91af9e4eb4d50e37bbf66ebbadee65528866287b72460f646dc4d67a6d3",
+  "notes": "Presence of the key is what separates this from PreToolUse. The empty string is the documented success value."
+}

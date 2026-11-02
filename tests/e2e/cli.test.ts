@@ -72,8 +72,10 @@ describe("otel-hook CLI: non-hook commands", () => {
     expect(
       listing.filter((entry) => entry.id !== "antigravity").every((entry) => entry.maturity === "stable"),
     ).toBe(true);
-    // Cursor is the one provider whose protocol reads a response from stdout.
+    // Cursor and Antigravity both require a JSON stdout body. The other three
+    // are silent.
     expect(listing.filter((entry) => entry.requiresHookResponse).map((entry) => entry.id)).toEqual([
+      "antigravity",
       "cursor",
     ]);
     // Every registered provider now has a planner, Cursor included: its

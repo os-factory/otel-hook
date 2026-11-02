@@ -1,55 +1,44 @@
 import type { ProviderDeliveryClaim, ProviderIdentityInput } from "../adapter.js";
-import { antigravityHookPayloadSchema } from "./payload.js";
+import { classifyAntigravityPayload } from "./payload.js";
 
 /**
  * Which Antigravity callbacks carry an identifier that survives a redelivery.
  *
- * Everything here is built from `invocationNum` and `stepIdx` — the two counters
- * on the *verified* field list (see `./payload.ts`) — scoped by the equally
- * verified `conversationId`:
+ * Stdin does not name the event, so a field that is shared by two events is
+ * not an identifier: keying `PreInvocation` and `PostInvocation` on
+ * `invocationNum` would suppress one of them. The two shapes that belong to
+ * one event are identified:
  *
- * - The tool pair takes both counters. Together they name one step of one
- *   invocation, and the event name separates its before-edge from its after-edge.
- * - The invocation pair takes `invocationNum` alone. A counter named for the
- *   invocation it numbers is what makes `PreInvocation` fire once per value of
- *   it: a redelivery repeats the number, while a genuine second invocation
- *   advances it. That is the same argument the tool pair rests on, applied to the
- *   field that is present on *every* Antigravity payload rather than only the
- *   tool ones.
- *
- * `Stop` remains excluded. It can fire more than once per invocation (idle, then
- * fully idle), and the only field that would separate those two firings —
- * `fullyIdle` — is a reconstruction this adapter has not confirmed against a real
- * capture, so it is not something to build an at-most-once guarantee on. Keying
- * `Stop` on `invocationNum` alone would be worse than not identifying it: it
- * would suppress the second, *real* firing.
+ * - `PostToolUse`, only once `error` is present (the field `PreToolUse` does
+ *   not have). `stepIdx` is the documented index of that completed step.
+ * - `Stop`. `executionNum` numbers the execution attempt and `fullyIdle`
+ *   separates a not-yet-idle stop from the idle one. Both are required by the
+ *   reference, so together they name one observation without collapsing the
+ *   other. `invocationNum` is not on `Stop` and is not used.
  */
-const INVOCATION_SCOPED_EVENTS: readonly string[] = ["PreInvocation", "PostInvocation"];
-
 export const antigravityDeliveryIdentity = (
   input: ProviderIdentityInput,
 ): ProviderDeliveryClaim | undefined => {
-  const parsed = antigravityHookPayloadSchema.safeParse(input.payload);
-  if (!parsed.success) {
+  const classified = classifyAntigravityPayload(input.payload);
+  if (classified.status !== "exact") {
     return undefined;
   }
-  const payload = parsed.data;
 
-  if (payload.hookEventName === "PreToolUse" || payload.hookEventName === "PostToolUse") {
+  if (classified.kind === "tool-after") {
     return {
-      sessionId: payload.conversationId,
-      sourceEventName: payload.hookEventName,
-      components: [String(payload.invocationNum), String(payload.stepIdx)],
-      evidence: ["payload.invocationNum with payload.stepIdx names one step of one invocation"],
+      sessionId: classified.payload.conversationId,
+      sourceEventName: "PostToolUse",
+      components: [String(classified.payload.stepIdx)],
+      evidence: ["payload.stepIdx names the completed step once payload.error shows this is PostToolUse"],
     };
   }
 
-  if (INVOCATION_SCOPED_EVENTS.includes(payload.hookEventName)) {
+  if (classified.kind === "stop") {
     return {
-      sessionId: payload.conversationId,
-      sourceEventName: payload.hookEventName,
-      components: [String(payload.invocationNum)],
-      evidence: ["payload.invocationNum names one invocation, whose edges fire once each"],
+      sessionId: classified.payload.conversationId,
+      sourceEventName: "Stop",
+      components: [String(classified.payload.executionNum), classified.payload.fullyIdle ? "true" : "false"],
+      evidence: ["payload.executionNum and payload.fullyIdle together name one Stop observation"],
     };
   }
 
@@ -57,13 +46,21 @@ export const antigravityDeliveryIdentity = (
 };
 
 /**
- * Why the remaining Antigravity callback carries no delivery identity.
+ * Why the remaining callbacks carry no replay-stable identity.
  *
- * Exhaustive over {@link ANTIGRAVITY_HOOK_EVENT_NAMES}: every other event is
- * identified above, so `Stop` is the whole of this adapter's coverage gap and the
- * reason names the field whose confirmation would close it.
+ * `Stop` is identified above. Every other documented event is here, including
+ * `PostToolUse`: the claim above is conditional on `error`, and a payload that
+ * omits it is not identified.
  */
 export const ANTIGRAVITY_DELIVERY_GAPS: Readonly<Record<string, string>> = Object.freeze({
-  Stop:
-    "Stop can fire twice per invocation (idle, then fully idle) and payload `fullyIdle` — the only field separating them — is an unconfirmed reconstruction, so invocationNum alone would suppress the second real firing",
+  SessionStart:
+    "SessionStart has no callback discriminator besides conversationId, which is already the session scope, so a second start cannot be separated from a redelivery",
+  PreToolUse:
+    "stdin does not name the event, and PreToolUse shares toolCall plus stepIdx with a PostToolUse that omits error, so claiming either id would suppress the other edge",
+  PostToolUse:
+    "PostToolUse is identified from stepIdx only when error is present; without that field it is indistinguishable from PreToolUse and no id is claimed",
+  PreInvocation:
+    "PreInvocation and PostInvocation share invocationNum and initialNumSteps, and stdin does not say which edge arrived, so invocationNum would collapse the pair",
+  PostInvocation:
+    "PreInvocation and PostInvocation share invocationNum and initialNumSteps, and stdin does not say which edge arrived, so invocationNum would collapse the pair",
 });
