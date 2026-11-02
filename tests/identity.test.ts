@@ -227,6 +227,28 @@ describe("workspace identity", () => {
     expect(withCredentials.workspaceId).toBe(https.workspaceId);
   });
 
+  it("strips query, fragment, and userinfo before the remote is hashed", () => {
+    expect(
+      canonicalizeGitRemote(
+        "https://user:token@github.com/os-factory/otel-hook.git?access_token=secret#frag",
+      ),
+    ).toBe("github.com/os-factory/otel-hook");
+    expect(canonicalizeGitRemote("https://user:secret@")).toBe("");
+    expect(canonicalizeGitRemote("http://[::1")).toBe("");
+
+    const clean = deriveWorkspaceIdentity(privacy, {
+      kind: "git-remote",
+      remoteUrl: "https://github.com/os-factory/otel-hook.git",
+    });
+    const decorated = deriveWorkspaceIdentity(privacy, {
+      kind: "git-remote",
+      remoteUrl: "https://user:token@github.com/os-factory/otel-hook.git?access_token=secret#frag",
+    });
+    expect(decorated.workspaceId).toBe(clean.workspaceId);
+    expect(JSON.stringify(decorated)).not.toContain("secret");
+    expect(JSON.stringify(decorated)).not.toContain("token");
+  });
+
   it("hashes the revision id and never stores it verbatim", () => {
     const workspace = deriveWorkspaceIdentity(
       privacy,
