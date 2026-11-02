@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { DEFAULT_MAX_INPUT_BYTES, parseCliArgs } from "../../src/cli/args.js";
+import { CLI_USAGE, DEFAULT_MAX_INPUT_BYTES, parseCliArgs } from "../../src/cli/args.js";
 
 const expectRun = (argv: readonly string[]) => {
   const parsed = parseCliArgs(argv);
@@ -125,10 +125,19 @@ describe("CLI argument parsing", () => {
   });
 
   it("validates enumerated flags", () => {
-    expect(expectErrors(["run", "--protocol", "grpc"])[0]).toContain("expects http/protobuf");
+    expect(expectErrors(["run", "--protocol", "json"])[0]).toContain("expects http/protobuf");
+    expect(expectErrors(["run", "--protocol", "json"])[0]).toContain("grpc");
     expect(expectErrors(["run", "--transport", "carrier-pigeon"])[0]).toContain(
       "expects hook-stdin",
     );
+  });
+
+  it("accepts grpc and records the base-URL endpoint semantics in help", () => {
+    expect(expectRun(["run", "--protocol", "grpc"]).policy.protocol).toBe("grpc");
+    expect(expectRun(["run", "--protocol", "http/protobuf"]).policy.protocol).toBe("http/protobuf");
+    expect(CLI_USAGE).toContain("http/protobuf | grpc | http/json | none");
+    expect(CLI_USAGE).toContain("http://host:4317");
+    expect(CLI_USAGE).toContain("no JSON exporter");
   });
 
   it("rejects flags a command does not accept", () => {

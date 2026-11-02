@@ -123,6 +123,16 @@ source.
   explicitly labelled fallback under a discriminated span id, so a start that
   nothing recorded is never dropped silently.
   No canonical schema version bump: no event type or field changed.
+- **OTLP/gRPC was added for traces.** `exporter.protocol` now accepts `grpc`
+  alongside `http/protobuf`, `http/json`, and `none`. That widens the accepted
+  input; existing `http/protobuf` configurations are unchanged. `grpc` endpoints
+  are base URLs (`http://` plaintext, `https://` TLS, path ignored, conventional
+  port 4317). `http/json` is still not an exporter: naming it disables export.
+  Logs remain HTTP/protobuf only, so a `grpc` protocol leaves the logs signal
+  disabled. A terminal export status (HTTP 4xx other than 429, or a non-retryable
+  gRPC status) is no longer written to the durable spool; retryable failures
+  still are, and a batch spooled on one trace protocol replays on the other.
+  No canonical schema version bump.
 - **An OTLP logs pipeline was added, off by default** (log mapping version 1).
   `ExporterPolicy` gained a required `logs` sub-object (`LogsPolicy`); a caller
   hand-building an `ExporterPolicy` without running it through the schema must

@@ -64,6 +64,27 @@ describe("createOtlpTraceSink: degraded configurations never throw", () => {
     expect(logger.records().some((record) => record.message.includes("no endpoint"))).toBe(true);
   });
 
+  it("fails open when a gRPC header cannot be encoded as metadata", async () => {
+    const logger = createRecordingLogger();
+    const sink = createOtlpTraceSink({
+      exporter: {
+        ...DEFAULT_EXPORTER_POLICY,
+        protocol: "grpc",
+        endpoint: "http://127.0.0.1:4317",
+      },
+      headers: { "bad key": "value" },
+      providerId: "acme",
+      installationId: "install-1",
+      clock: createFixedClock(),
+      logger,
+    });
+    expect((await sink.emit(events)).accepted).toBe(1);
+    expect(logger.records().some((record) => record.message.includes("could not be constructed"))).toBe(
+      true,
+    );
+    await sink.shutdown();
+  });
+
   it("falls back to a no-op sink for a protocol without a wired exporter", async () => {
     const logger = createRecordingLogger();
     const sink = createOtlpTraceSink({

@@ -280,6 +280,8 @@ export const describeLogsDeliverability = (exporter: ExporterPolicy): LogsDelive
   if (exporter.protocol === "none") {
     return { status: "disabled", reason: "protocol-none" };
   }
+  // Logs stay on HTTP/protobuf. `grpc` exports traces and leaves this signal
+  // disabled rather than pretending a gRPC log exporter exists.
   if (exporter.protocol !== "http/protobuf") {
     return { status: "disabled", reason: "protocol-unsupported" };
   }
@@ -296,7 +298,7 @@ const DISABLED_DETAIL: Readonly<Record<Extract<LogsDeliverability, { status: "di
     "exporter-disabled": "otlp log sink disabled: the exporter is disabled",
     "protocol-none": "otlp log sink disabled: protocol is none",
     "protocol-unsupported":
-      "otlp log sink disabled: protocol not supported by this build, falling back to disabled",
+      "otlp log sink disabled: logs are HTTP/protobuf only in this build, falling back to disabled",
     "no-endpoint": "otlp log sink disabled: no logs endpoint configured and none could be derived",
   });
 

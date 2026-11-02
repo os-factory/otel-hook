@@ -679,6 +679,21 @@ Everything else — protocol, headers, timeout, service identity, resource
 attributes — is shared with the traces signal, which is why `logs` is nested under
 `exporter` rather than being a second top-level section that could drift.
 
+### Trace protocol
+
+`exporter.protocol` is `http/protobuf` (the default), `grpc`, `http/json`, or `none`.
+
+| Protocol | Endpoint | What leaves the process |
+| --- | --- | --- |
+| `http/protobuf` | Full traces URL, path included. Conventionally `http://host:4318/v1/traces`. | Traces, and logs when `exporter.logs.enabled` is set. |
+| `grpc` | Base URL. `http://` is plaintext and `https://` is TLS. Conventionally `http://host:4317`. A path is ignored. | Traces only. Logs stay disabled: this build has no gRPC log exporter. |
+| `http/json` | Ignored. | Nothing. The value is accepted so a file can name it, then the sink disables itself. There is no JSON exporter. |
+| `none` | Ignored. | Nothing. |
+
+An unrecognized value fails that configuration layer. The CLI reports it as a usage error, a file layer is rejected and the CLI falls back to defaults, and an environment variable is skipped with a warning. A failed export, including a TLS handshake error or a timeout, is reported and does not throw: the hook stays fail-open.
+
+The durable spool stores the span, not the transport frame. A batch a gRPC collector refused is replayed unchanged over HTTP/protobuf, and the other way around. Only retryable failures are spooled (gRPC `UNAVAILABLE` and `DEADLINE_EXCEEDED`, HTTP 429/502/503/504, and a connection error with no status). A terminal status such as HTTP 400 or gRPC `INVALID_ARGUMENT` is reported and dropped.
+
 Two combinations are reported as notes rather than errors, because both are things
 an operator lands on by setting one switch and forgetting the other: logs enabled
 with no endpoint and none derivable, and `includeContent` set while `contentMode` is
@@ -966,9 +981,11 @@ fixing one means updating that test rather than discovering a silent change.
     for a replayed payload (`DIVERGENCE-010`).
     `tests/parity/codex-gemini.parity.test.ts` establishes our own semantics and
     pins both divergences instead of asserting agreement.
-10. **Only OTLP HTTP/protobuf is exported, for traces and logs.** `http/json` falls
-    back to a disabled sink with a warning, and there is no metrics pipeline. The
-    logs pipeline is off by default; see [Logs](#logs).
+10. **Traces are OTLP HTTP/protobuf or gRPC. Logs are HTTP/protobuf only.**
+    `grpc` is a base URL (`http://host:4317` plaintext, `https://host:4317` TLS);
+    the path is ignored. `http/json` is accepted and disables export — there is
+    no JSON exporter. Selecting `grpc` does not start a logs exporter. There is
+    no metrics pipeline. The logs pipeline is off by default; see [Logs](#logs).
 11. **Gemini CLI cache and reasoning tokens never reach a hook.** The CLI's hook
     translator rebuilds `usageMetadata` as exactly
     `{ promptTokenCount, candidatesTokenCount, totalTokenCount }`, so

@@ -76,6 +76,34 @@ describe("OTLP HTTP/protobuf delivery against a real local collector", () => {
     await sink.shutdown();
   });
 
+  it("does not spool a terminal HTTP rejection", async () => {
+    const rootDir = await mkdtemp(path.join(tmpdir(), "otel-hook-spool-terminal-"));
+    closers.push(() => rm(rootDir, { recursive: true, force: true }));
+    const collector = await startCapturingCollector(() => ({ status: 400 }));
+    closers.push(() => collector.close());
+    const spool = createFileDurableSpool({
+      rootDir,
+      providerId: "acme-cli",
+      installationId: "install-1",
+      clock: createFixedClock(),
+    });
+    const sink = createOtlpTraceSink({
+      exporter: { ...DEFAULT_EXPORTER_POLICY, endpoint: collector.url, timeoutMillis: 2_000, maxRetryAttempts: 0 },
+      providerId: "acme-cli",
+      installationId: "install-1",
+      clock: createFixedClock(),
+      spool,
+    });
+
+    const rejected = await sink.emit([nextEvent()]);
+    expect(rejected.accepted).toBe(0);
+    expect(rejected.rejected).toBe(1);
+    expect(rejected.errors[0]?.details?.["export.retryable"]).toBe(false);
+    expect(rejected.errors[0]?.posture).toBe("fail-open");
+    expect(await spool.size()).toBe(0);
+    await sink.shutdown();
+  });
+
   it("spools a batch the collector rejects, then delivers it on a later drain", async () => {
     const rootDir = await mkdtemp(path.join(tmpdir(), "otel-hook-spool-"));
     closers.push(() => rm(rootDir, { recursive: true, force: true }));

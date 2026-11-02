@@ -169,6 +169,58 @@ describe("environment configuration", () => {
     expect(patch.exporter?.endpoint).toBe("https://specific.example");
   });
 
+  it("accepts grpc and rejects a protocol this build does not name", () => {
+    const { patch, warnings } = parseEnvironmentConfig({
+      OTEL_HOOK_EXPORTER_PROTOCOL: "grpc",
+      OTEL_HOOK_EXPORTER_ENDPOINT: "http://127.0.0.1:4317",
+    });
+    expect(warnings).toEqual([]);
+    expect(patch.exporter?.protocol).toBe("grpc");
+    expect(patch.exporter?.endpoint).toBe("http://127.0.0.1:4317");
+
+    const rejected = parseEnvironmentConfig({ OTEL_HOOK_EXPORTER_PROTOCOL: "json" });
+    expect(rejected.patch).toEqual({});
+    expect(rejected.warnings[0]?.message).toContain("grpc");
+    expect(otelHookConfigPatchSchema.safeParse({ exporter: { protocol: "grpc" } }).success).toBe(true);
+    expect(otelHookConfigPatchSchema.safeParse({ exporter: { protocol: "json" } }).success).toBe(false);
+    expect(otelHookConfigPatchSchema.safeParse({ exporter: { endpoint: "127.0.0.1:4317" } }).success).toBe(
+      false,
+    );
+  });
+
+  it("notes that a gRPC endpoint path is ignored and that logs stay on HTTP", () => {
+    const withPath = resolveConfig([
+      {
+        source: "inline-override",
+        patch: {
+          exporter: {
+            protocol: "grpc",
+            endpoint: "https://collector.example:4317/v1/traces",
+            logs: { enabled: true },
+          },
+        },
+      },
+    ]);
+    expect(withPath.status).toBe("ok");
+    if (withPath.status !== "ok") {
+      return;
+    }
+    expect(withPath.config.exporter.protocol).toBe("grpc");
+    expect(withPath.notes.some((note) => note.includes("path is ignored"))).toBe(true);
+    expect(withPath.notes.some((note) => note.includes("logs are HTTP/protobuf only"))).toBe(true);
+
+    const base = resolveConfig([
+      {
+        source: "inline-override",
+        patch: { exporter: { protocol: "grpc", endpoint: "http://127.0.0.1:4317" } },
+      },
+    ]);
+    expect(base.status).toBe("ok");
+    if (base.status === "ok") {
+      expect(base.notes.some((note) => note.includes("path is ignored"))).toBe(false);
+    }
+  });
+
   it("warns and skips unusable values rather than failing resolution", () => {
     const { patch, warnings } = parseEnvironmentConfig({
       OTEL_HOOK_ENABLED: "perhaps",
