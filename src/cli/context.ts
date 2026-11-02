@@ -85,6 +85,16 @@ export const policyFlagsToPatch = (policy: CliPolicyFlags): OtelHookConfigPatch 
       ? {}
       : { includeContent: policy.logsIncludeContent }),
   };
+  const jsonl = {
+    ...(policy.jsonlPath === undefined ? {} : { enabled: true, path: policy.jsonlPath }),
+  };
+  const consoleExport = {
+    ...(policy.consoleEnabled === undefined ? {} : { enabled: policy.consoleEnabled }),
+  };
+  const localExport = {
+    ...(Object.keys(jsonl).length === 0 ? {} : { jsonl }),
+    ...(Object.keys(consoleExport).length === 0 ? {} : { console: consoleExport }),
+  };
   const exporter = {
     ...(policy.exportDisabled === true ? { enabled: false } : {}),
     ...(policy.endpoint === undefined ? {} : { endpoint: policy.endpoint }),
@@ -110,6 +120,7 @@ export const policyFlagsToPatch = (policy: CliPolicyFlags): OtelHookConfigPatch 
     ...(Object.keys(exporter).length === 0 ? {} : { exporter }),
     ...(Object.keys(privacy).length === 0 ? {} : { privacy }),
     ...(Object.keys(diagnostics).length === 0 ? {} : { diagnostics }),
+    ...(Object.keys(localExport).length === 0 ? {} : { localExport }),
   } as OtelHookConfigPatch;
 };
 

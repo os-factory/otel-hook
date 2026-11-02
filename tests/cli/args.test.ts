@@ -171,6 +171,30 @@ describe("CLI argument parsing", () => {
     expect(expectRun(["run", "--provider", "claude-code", "--no-logs"]).policy.logsEnabled).toBe(false);
   });
 
+  it("parses local-export flags independently of --no-export", () => {
+    const policy = expectRun([
+      "run",
+      "--provider",
+      "claude-code",
+      "--no-export",
+      "--jsonl",
+      "/tmp/otel-hook-events.jsonl",
+      "--console",
+    ]).policy;
+    expect(policy.exportDisabled).toBe(true);
+    expect(policy.jsonlPath).toBe("/tmp/otel-hook-events.jsonl");
+    expect(policy.consoleEnabled).toBe(true);
+    expect(expectRun(["run", "--provider", "claude-code", "--no-console"]).policy.consoleEnabled).toBe(
+      false,
+    );
+  });
+
+  it("treats contradictory console flags as an error", () => {
+    expect(expectErrors(["run", "--provider", "claude-code", "--console", "--no-console"])).toContain(
+      "flags --console and --no-console cannot both be given",
+    );
+  });
+
   it("treats contradictory logs flags as an error", () => {
     expect(expectErrors(["run", "--provider", "claude-code", "--logs", "--no-logs"])).toContain(
       "flags --logs and --no-logs cannot both be given",
@@ -181,8 +205,12 @@ describe("CLI argument parsing", () => {
     // `run` exports and `doctor` reports, so both need them; a registration command
     // writes a hook document and has no exporter to configure.
     expect(parseCliArgs(["doctor", "--logs", "--json"]).status).toBe("command");
+    expect(parseCliArgs(["doctor", "--jsonl", "events.jsonl", "--json"]).status).toBe("command");
     expect(expectErrors(["setup", "--provider", "claude-code", "--logs"])).toEqual([
       'flag --logs is not accepted by "setup"',
+    ]);
+    expect(expectErrors(["setup", "--provider", "claude-code", "--jsonl", "events.jsonl"])).toEqual([
+      'flag --jsonl is not accepted by "setup"',
     ]);
   });
 

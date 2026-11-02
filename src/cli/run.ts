@@ -260,6 +260,9 @@ export const runHookCommand = async (command: CliRunCommand, io: CliIo): Promise
     ...(command.policy.spoolDisabled === true ? { enableSpool: false } : {}),
     ...(command.requireCallbackId === true ? { requireCallbackId: true } : {}),
     ...(command.noDeriveCallbackId === true ? { deriveDeliveryIdentity: false } : {}),
+    consoleWrite: (line: string): void => {
+      io.stderr.write(line);
+    },
   });
 
   let outcome: HookProcessOutcome | undefined;

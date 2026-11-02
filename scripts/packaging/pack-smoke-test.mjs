@@ -8,8 +8,8 @@
 // Usage:
 //   node scripts/packaging/pack-smoke-test.mjs [--json] [--skip-build]
 
-import { execFile } from "node:child_process";
-import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { execFile, spawn } from "node:child_process";
+import { access, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -39,6 +39,217 @@ const readPackageJson = async () =>
 /** Every export condition declared in package.json's "exports" map, e.g. "@osfactory/otel-hook/model". */
 const exportSpecifiers = (pkg) =>
   Object.keys(pkg.exports).map((key) => (key === "." ? pkg.name : `${pkg.name}${key.slice(1)}`));
+
+const withoutHookEnv = () => {
+  const env = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (!key.startsWith("OTEL_HOOK_") && value !== undefined) {
+      env[key] = value;
+    }
+  }
+  return env;
+};
+
+/**
+ * Both local exporters, from the installed tarball: the CLI (privacy, stdout,
+ * file mode) and the library entry points (envelope, forbidden paths).
+ *
+ * Unix mode bits are asserted only where the OS implements them. Windows still
+ * runs the write, the stdout check, and the reserved-device refusal.
+ */
+/**
+ * `execFile`'s `input` option does not end stdin for this Node, so `run` — which
+ * reads stdin until EOF — would wait forever. Spawn and close stdin explicitly,
+ * the same way the end-to-end harness drives the CLI.
+ */
+const runWithStdin = (executable, args, { cwd, env, input }) =>
+  new Promise((resolve, reject) => {
+    const child = spawn(executable, args, { cwd, env });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString("utf8");
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString("utf8");
+    });
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code === 0) {
+        resolve({ stdout, stderr });
+        return;
+      }
+      const error = new Error(`command exited ${String(code)}`);
+      error.stdout = stdout;
+      error.stderr = stderr;
+      error.code = code;
+      reject(error);
+    });
+    child.stdin.write(input);
+    child.stdin.end();
+  });
+
+const exercisePackedLocalExporters = async ({ consumerDir, binExecutable, steps }) => {
+  const secret = "packaging-secret-do-not-export";
+  const stateDir = path.join(consumerDir, "local-export-state");
+  const jsonlPath = path.join(consumerDir, "events.jsonl");
+  const env = withoutHookEnv();
+  const payload = JSON.stringify({
+    hook_event_name: "UserPromptSubmit",
+    session_id: "ses-pack-local",
+    cwd: "/workspace/fixture-repo",
+    prompt: secret,
+  });
+  const run = (args) =>
+    runWithStdin(process.execPath, [binExecutable, ...args], {
+      cwd: consumerDir,
+      env,
+      input: payload,
+    });
+
+  let result;
+  try {
+    result = await run([
+      "run",
+      "--provider",
+      "claude-code",
+      "--no-export",
+      "--jsonl",
+      jsonlPath,
+      "--console",
+      "--log-level",
+      "silent",
+      "--state-dir",
+      stateDir,
+    ]);
+  } catch (error) {
+    const detail =
+      typeof error === "object" && error !== null && "stderr" in error
+        ? String(error.stderr)
+        : error instanceof Error
+          ? error.message
+          : String(error);
+    throw new Error(`packed CLI local export exited non-zero: ${detail}`, { cause: error });
+  }
+  const { stdout, stderr } = result;
+  if (stdout !== "") {
+    throw new Error("packed CLI local export wrote to stdout");
+  }
+  if (!stderr.includes('"schema":"otelhook.local-export"') || !stderr.includes('"schemaVersion":1')) {
+    throw new Error("packed CLI console exporter did not write the versioned envelope to stderr");
+  }
+  if (stderr.includes(secret) || stderr.includes("/workspace/fixture-repo")) {
+    throw new Error("packed CLI console exporter received data before privacy filtering");
+  }
+  const body = await readFile(jsonlPath, "utf8");
+  if (!body.includes('"schema":"otelhook.local-export"') || !body.includes('"schemaVersion":1')) {
+    throw new Error("packed CLI JSONL exporter did not write a versioned envelope");
+  }
+  if (body.includes(secret) || body.includes("/workspace/fixture-repo")) {
+    throw new Error("packed CLI JSONL exporter received data before privacy filtering");
+  }
+  if (process.platform !== "win32") {
+    const mode = (await stat(jsonlPath)).mode & 0o777;
+    if (mode !== 0o600) {
+      throw new Error(`packed CLI JSONL file mode was ${mode.toString(8)}, expected 600`);
+    }
+  }
+  steps.push("local export CLI: jsonl + stderr console, empty stdout, privacy held");
+
+  for (const forbidden of ["/dev/stdout", "/dev/fd/1", "CON.jsonl", String.raw`\\.\CON`]) {
+    const refused = await run([
+      "run",
+      "--provider",
+      "claude-code",
+      "--no-export",
+      "--jsonl",
+      forbidden,
+      "--log-level",
+      "silent",
+      "--state-dir",
+      stateDir,
+    ]);
+    if (refused.stdout !== "" || refused.stdout.includes("otelhook.local-export")) {
+      throw new Error(`packed CLI wrote stdout for forbidden JSONL path ${forbidden}`);
+    }
+  }
+  if (await pathExists(path.join(consumerDir, "CON.jsonl"))) {
+    throw new Error("packed CLI created CON.jsonl");
+  }
+  steps.push("local export CLI: refused stdout and Windows reserved-device paths");
+
+  const scriptPath = path.join(consumerDir, "exercise-local-export.mjs");
+  const libraryJsonl = path.join(consumerDir, "library-events.jsonl");
+  await writeFile(
+    scriptPath,
+    [
+      'import { createConsoleSink, createFixedClock, createJsonlSink, isForbiddenJsonlPath, parseCanonicalEvent, CANONICAL_SCHEMA_VERSION, LOCAL_EXPORT_SCHEMA } from "@osfactory/otel-hook";',
+      'import { createTestIdentity } from "@osfactory/otel-hook/testing";',
+      "const forbidden = ['/dev/stdout', '/dev/stderr', '/dev/fd/1', '/dev/fd/2', '/proc/self/fd/1', '/proc/self/fd/2', '-', 'stdout', 'CON', 'CON.jsonl', 'NUL.txt', 'COM1', 'LPT1', String.raw`\\\\.\\CON`];",
+      "for (const candidate of forbidden) {",
+      "  if (!isForbiddenJsonlPath(candidate)) {",
+      "    process.stderr.write(`allowed forbidden path ${candidate}\\n`);",
+      "    process.exit(1);",
+      "  }",
+      "}",
+      "if (isForbiddenJsonlPath('events.jsonl') || isForbiddenJsonlPath('C:/logs/events.jsonl')) {",
+      "  process.stderr.write('rejected a regular jsonl path\\n');",
+      "  process.exit(1);",
+      "}",
+      "const identity = createTestIdentity();",
+      "const event = parseCanonicalEvent({",
+      "  schemaVersion: CANONICAL_SCHEMA_VERSION,",
+      "  invocationId: identity.invocationId,",
+      "  sessionId: identity.sessionId,",
+      "  provenance: identity.provenance,",
+      "  workspace: identity.workspace,",
+      "  extensions: {},",
+      "  eventId: 'evt_0000000000000001',",
+      "  sequence: 1,",
+      "  occurredAt: 1700000000000,",
+      "  type: 'session.start',",
+      "  sessionKind: 'interactive',",
+      "});",
+      "const clock = createFixedClock({ tickMillis: 0 });",
+      "const lines = [];",
+      "const consoleSink = createConsoleSink({ write: (line) => lines.push(line) });",
+      "const jsonlSink = createJsonlSink({ path: process.argv[2], maxBytes: 1048576, maxFiles: 2, clock });",
+      "const consoleResult = await consoleSink.emit([event]);",
+      "const jsonlResult = await jsonlSink.emit([event]);",
+      "if (consoleResult.accepted !== 1 || jsonlResult.accepted !== 1) {",
+      "  process.stderr.write('local sinks rejected the event\\n');",
+      "  process.exit(1);",
+      "}",
+      "if (!lines[0]?.includes(LOCAL_EXPORT_SCHEMA)) {",
+      "  process.stderr.write('console sink omitted the envelope\\n');",
+      "  process.exit(1);",
+      "}",
+      "process.stderr.write(lines[0] ?? '');",
+    ].join("\n"),
+  );
+  const library = await runWithStdin(process.execPath, [scriptPath, libraryJsonl], {
+    cwd: consumerDir,
+    env: process.env,
+    input: "",
+  });
+  if (library.stdout !== "") {
+    throw new Error("packed library console sink wrote to stdout");
+  }
+  if (!library.stderr.includes('"schema":"otelhook.local-export"')) {
+    throw new Error("packed library console sink did not emit the envelope");
+  }
+  const libraryBody = await readFile(libraryJsonl, "utf8");
+  if (!libraryBody.includes('"schema":"otelhook.local-export"') || !libraryBody.includes('"schemaVersion":1')) {
+    throw new Error("packed library JSONL sink did not write a versioned envelope");
+  }
+  if (process.platform !== "win32") {
+    const mode = (await stat(libraryJsonl)).mode & 0o777;
+    if (mode !== 0o600) {
+      throw new Error(`packed library JSONL file mode was ${mode.toString(8)}, expected 600`);
+    }
+  }
+  steps.push("local export library: jsonl + console from the installed package");
+};
 
 const runSmokeTest = async ({ skipBuild = false } = {}) => {
   const steps = [];
@@ -210,6 +421,10 @@ const runSmokeTest = async ({ skipBuild = false } = {}) => {
         }
         steps.push(`bin ${binName} setup --provider antigravity: unsupported, exit 1`);
       }
+      const [binName, binPath] = Object.entries(pkg.bin)[0];
+      const binExecutable = path.join(consumerDir, "node_modules", pkg.name, binPath);
+      await exercisePackedLocalExporters({ consumerDir, binExecutable, steps });
+      steps.push(`local export exercised via bin ${binName}`);
     }
 
     return { ok: true, steps };

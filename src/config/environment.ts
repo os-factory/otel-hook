@@ -53,6 +53,8 @@ export const ENVIRONMENT_VARIABLES = Object.freeze({
   maxEventsPerInvocation: "OTEL_HOOK_MAX_EVENTS_PER_INVOCATION",
   minimumConfidence: "OTEL_HOOK_MIN_DETECTION_CONFIDENCE",
   logLevel: "OTEL_HOOK_LOG_LEVEL",
+  jsonlPath: "OTEL_HOOK_JSONL_PATH",
+  consoleEnabled: "OTEL_HOOK_CONSOLE",
 });
 
 const BOOLEAN_TRUE = new Set(["1", "true", "yes", "on"]);
@@ -280,11 +282,25 @@ export const parseEnvironmentConfig = (env: EnvironmentRecord): EnvironmentConfi
 
   const diagnostics = logLevel === undefined ? {} : { logLevel };
 
+  const jsonlPath = readString(ENVIRONMENT_VARIABLES.jsonlPath);
+  const consoleEnabled = readBoolean(ENVIRONMENT_VARIABLES.consoleEnabled);
+  const jsonl = {
+    ...(jsonlPath === undefined ? {} : { enabled: true, path: jsonlPath }),
+  };
+  const consoleExport = {
+    ...(consoleEnabled === undefined ? {} : { enabled: consoleEnabled }),
+  };
+  const localExport = {
+    ...(Object.keys(jsonl).length === 0 ? {} : { jsonl }),
+    ...(Object.keys(consoleExport).length === 0 ? {} : { console: consoleExport }),
+  };
+
   const patch: OtelHookConfigPatch = {
     ...(Object.keys(exporter).length === 0 ? {} : { exporter }),
     ...(Object.keys(privacy).length === 0 ? {} : { privacy }),
     ...(Object.keys(detection).length === 0 ? {} : { detection }),
     ...(Object.keys(diagnostics).length === 0 ? {} : { diagnostics }),
+    ...(Object.keys(localExport).length === 0 ? {} : { localExport }),
   };
 
   return { patch, warnings };

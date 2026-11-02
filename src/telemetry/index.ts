@@ -7,3 +7,4 @@ export * from "./log-records.js";
 export * from "./otlp-sink.js";
 export * from "./otlp-log-sink.js";
 export * from "./signal-fanout.js";
+export * from "./local-export.js";
