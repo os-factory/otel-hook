@@ -39,15 +39,20 @@ still releases unless the scope is `ci`).
 
 ## Maintainer secrets
 
-Create a GitHub Environment named **`npm-publish`** on
-`os-factory/otel-hook` with:
+No npm token. `publish-npm` uses npm **Trusted Publishing**: with
+`id-token: write`, npm (>= 11.5.1, hence Node 24 in that job) exchanges the
+job's GitHub OIDC identity for a short-lived publish credential, and signs
+provenance. Nothing is stored that can expire.
 
-| Secret | Purpose |
-| ------ | ------- |
-| `NPM_TOKEN` | npm **Automation** token with publish access to `@osfactory/otel-hook` (or the `@osfactory` org) |
+Set up once:
+
+1. A GitHub Environment named **`npm-publish`** on `os-factory/otel-hook`
+   (both release jobs run in it).
+2. On npmjs.com, `@osfactory/otel-hook` → **Settings → Trusted Publisher →
+   GitHub Actions**: organization `os-factory`, repository `otel-hook`,
+   workflow `release.yml`, environment `npm-publish`.
 
 `GITHUB_TOKEN` is provided by Actions (contents write for tags/releases).
-`id-token: write` is required for npm provenance.
 
 ## Dry-run
 
@@ -55,7 +60,7 @@ From the Actions tab: **Release → Run workflow → Dry run**, or locally:
 
 ```bash
 npm ci
-GITHUB_TOKEN=… NPM_TOKEN=… npx semantic-release --dry-run
+GITHUB_TOKEN=… npx semantic-release --dry-run
 ```
 
 ## Manual emergency publish
