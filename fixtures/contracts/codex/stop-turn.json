@@ -1,0 +1,18 @@
+{
+  "session_id": "01a1d1ad-0000-7000-8000-00000000c0de",
+  "turn_id": "01a1d1ad-0000-7000-8000-0000000000t1",
+  "transcript_path": "/workspace/.codex/sessions/rollout-synthetic.jsonl",
+  "cwd": "/workspace/contract-repo",
+  "hook_event_name": "Stop",
+  "model": "gpt-5-codex",
+  "permission_mode": "bypassPermissions",
+  "stop_hook_active": false,
+  "last_assistant_message": "Synthetic placeholder reply.",
+  "usage": {
+    "input_tokens": 280,
+    "cached_input_tokens": 80,
+    "output_tokens": 32,
+    "reasoning_output_tokens": 8,
+    "total_tokens": 312
+  }
+}

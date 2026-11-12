@@ -52,7 +52,19 @@ import { createSystemClock } from "./clock.js";
 import { resolveDeliveryIdentity, type DeliveryResolution } from "./delivery.js";
 import { createDeterministicIdGenerator } from "./ids.js";
 import { createNullLogger } from "./logger.js";
-import type { Clock, IdGenerator, Logger, StateStore, TelemetrySink } from "./ports.js";
+import type {
+  Clock,
+  IdGenerator,
+  Logger,
+  StateStore,
+  TelemetrySink,
+  WorktreeLocator,
+} from "./ports.js";
+import type { TargetHint } from "../model/target.js";
+import {
+  DEFAULT_TARGET_RESOLUTION_BUDGET_MILLIS,
+  resolveEventTargets,
+} from "./target-resolution.js";
 import { isStateLockContention, withOptionalSessionLock } from "../state/store.js";
 
 export const usageScopeSchema = z.enum(["session", "generation", "subagent"]);
@@ -242,6 +254,14 @@ export type OtelHookDependencies = {
    * workspace is derived from it. Defaults to `"default"`.
    */
   readonly installationId?: string;
+  /**
+   * Resolves tool events' target hints to the git worktree they touched
+   * (ADR 0008). Absent means no resolution: events carry no `target`. The
+   * filesystem implementation is `createFilesystemWorktreeLocator`.
+   */
+  readonly worktreeLocator?: WorktreeLocator;
+  /** Ceiling on target resolution per callback. Default 50ms. */
+  readonly targetResolutionBudgetMillis?: number;
 };
 
 const MAX_ERROR_EVENTS = 8;
@@ -796,6 +816,7 @@ export const createOtelHook = (deps: OtelHookDependencies): OtelHook => {
             readonly kind: "ready";
             readonly batch: readonly CanonicalEvent[];
             readonly dropped: number;
+            readonly targetHints?: ReadonlyMap<EventId, TargetHint>;
           };
 
       /**
@@ -952,7 +973,12 @@ export const createOtelHook = (deps: OtelHookDependencies): OtelHook => {
         }
       }
 
-        return { kind: "ready", batch, dropped: screened.dropped };
+        return {
+          kind: "ready",
+          batch,
+          dropped: screened.dropped,
+          ...(parsed.targetHints === undefined ? {} : { targetHints: parsed.targetHints }),
+        };
       };
 
       let prepared: Prepared;
@@ -1015,7 +1041,32 @@ export const createOtelHook = (deps: OtelHookDependencies): OtelHook => {
       if (prepared.kind === "early") {
         return prepared.outcome;
       }
-      const { batch, dropped } = prepared;
+      const { dropped } = prepared;
+      let batch = prepared.batch;
+
+      // Outside the session lock on purpose: this is filesystem I/O, bounded by
+      // its own budget, and must not lengthen the critical section peers wait on.
+      if (
+        !suppress &&
+        deps.worktreeLocator !== undefined &&
+        prepared.targetHints !== undefined &&
+        prepared.targetHints.size > 0
+      ) {
+        const targeted = await resolveEventTargets({
+          events: batch,
+          hints: prepared.targetHints,
+          locator: deps.worktreeLocator,
+          privacy,
+          budgetMillis: deps.targetResolutionBudgetMillis ?? DEFAULT_TARGET_RESOLUTION_BUDGET_MILLIS,
+        });
+        batch = targeted.events;
+        if (targeted.timedOut) {
+          logger.debug("worktree target resolution exceeded its budget", {
+            "provider.id": detection.providerId,
+            "target.resolved": targeted.resolved,
+          });
+        }
+      }
 
       let emitted = 0;
       let exportRejected = 0;

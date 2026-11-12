@@ -105,6 +105,39 @@ Identity, identical to the span mapping and derived from the same fields:
 | `otelhook.invocation.id` | one hook invocation |
 | `otelhook.provider.id`, `otelhook.provider.version` | attributed provider |
 | `otelhook.workspace.id` | opaque `<scheme>:<token>` handle; never a path |
+| `otelhook.subagent.id` | the provider's own subagent id (Claude Code `agent_id`), on every record of an event emitted inside a subagent; absent otherwise |
+
+### Worktree target (tool events)
+
+[ADR 0008](adr/0008-per-event-worktree-target.md). On `tool.start` and `tool.end`
+records — and on the tool span, chosen once from the strongest edge — when the
+core resolved which git worktree the call touched. All three appear together or
+not at all, except the branch, which is absent on a detached `HEAD`.
+
+| Attribute | Meaning |
+| --- | --- |
+| `otelhook.target.workspace.id` | salted handle of the worktree root, derived exactly like a `git-root` workspace id; never a path |
+| `vcs.ref.head.name` | branch checked out in that worktree |
+| `otelhook.target.source` | `tool-path` (a file the call named) \| `shell-cwd` (the directory the provider says a command ran in) \| `session-cwd` (only the session's directory was known) |
+
+Per provider, from its hook payload:
+
+| Provider | `tool-path` | `shell-cwd` | `session-cwd` |
+| --- | --- | --- | --- |
+| Claude Code | `tool_input.file_path` (Read, Write, Edit, MultiEdit), `notebook_path` (NotebookEdit), `path` (Glob, Grep) | — (no hook reports `Bash`'s directory) | hook `cwd`, for any other tool call |
+| Codex | `apply_patch` headers, from the `apply_patch` tool or a shell command invoking it | `tool_input.workdir` when present (0.163.0 does not forward it) | hook `cwd` |
+| Cursor | `afterFileEdit.file_path`, `beforeReadFile.file_path` | `beforeShellExecution.cwd` (non-empty) | the workspace root, when `workspace_roots` has exactly one |
+
+No target is exported when the paths of one call land in different worktrees,
+when a path is outside any repository, or when resolution exceeds its budget.
+
+### Usage keys
+
+Records and spans that carry `gen_ai.usage.*` also carry
+`otelhook.usage.temporality` (`delta` | `cumulative`): the counters are what the
+provider reported, and a `cumulative` value is a running total that must never be
+summed. Generation spans carry `otelhook.generation.id`, the provider's own id for
+the unit (see [usage semantics](usage-semantics.md#usage-keys-per-provider)).
 
 Event framing:
 

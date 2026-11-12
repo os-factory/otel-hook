@@ -75,7 +75,7 @@ export const CURSOR_UNREGISTERED_HOOK_EVENTS: Readonly<Record<string, string>> =
   afterMCPExecution:
     "the same MCP call also fires postToolUse, which duplicates this tool end and, unlike this callback, reports a success/failure signal",
   beforeReadFile:
-    "no completion callback exists for it, so a tool.start emitted here would never close",
+    "an agent read also fires preToolUse/postToolUse, so registering it by default would report one read twice; opt in with --event for its file_path target evidence",
   subagentStart:
     "subagentStop carries no subagent id to pair with, so no closable delegation lifecycle can be produced",
   subagentStop:

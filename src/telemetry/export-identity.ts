@@ -3,6 +3,7 @@ import type { Resource } from "@opentelemetry/resources";
 import { ATTR_SESSION_ID } from "@opentelemetry/semantic-conventions/incubating";
 
 import type { CanonicalEvent } from "../model/events.js";
+import type { CanonicalUsage } from "../model/usage.js";
 
 /**
  * W3C hex identity attributes on every log and span.
@@ -31,6 +32,42 @@ const ATTR_OTELHOOK_PROVIDER_VERSION = "otelhook.provider.version";
 const ATTR_OTELHOOK_WORKSPACE_ID = "otelhook.workspace.id";
 
 const HAR_SESSION_KEY = "har.session_key";
+
+/**
+ * The provider's own subagent id (Claude Code `agent_id`), on every record of an
+ * event emitted inside a subagent. Same class as `session.id`: a provider-minted
+ * opaque identifier, exported verbatim so a consumer can join it to the
+ * provider's own per-subagent records.
+ */
+export const ATTR_OTELHOOK_SUBAGENT_ID = "otelhook.subagent.id";
+
+/**
+ * Worktree a tool event targeted (ADR 0008). Branch under the OTel VCS
+ * attribute; the worktree root only as a salted `git-root` handle.
+ */
+export const ATTR_VCS_REF_HEAD_NAME = "vcs.ref.head.name";
+export const ATTR_OTELHOOK_TARGET_WORKSPACE_ID = "otelhook.target.workspace.id";
+export const ATTR_OTELHOOK_TARGET_SOURCE = "otelhook.target.source";
+
+/** Whether `gen_ai.usage.*` on this record is a delta or a running total. */
+export const ATTR_OTELHOOK_USAGE_TEMPORALITY = "otelhook.usage.temporality";
+
+/** Target attributes for a tool event; empty when the core resolved none. */
+export const targetAttributes = (event: CanonicalEvent): Attributes => {
+  if ((event.type !== "tool.start" && event.type !== "tool.end") || event.target === undefined) {
+    return {};
+  }
+  const { target } = event;
+  return {
+    [ATTR_OTELHOOK_TARGET_WORKSPACE_ID]: target.workspaceId,
+    [ATTR_OTELHOOK_TARGET_SOURCE]: target.source,
+    ...(target.vcsBranchName === undefined ? {} : { [ATTR_VCS_REF_HEAD_NAME]: target.vcsBranchName }),
+  };
+};
+
+/** Temporality of reported usage, so a consumer never sums running totals. */
+export const usageTemporalityAttributes = (usage: CanonicalUsage | undefined): Attributes =>
+  usage === undefined ? {} : { [ATTR_OTELHOOK_USAGE_TEMPORALITY]: usage.temporality };
 
 const isPrimitiveAttribute = (value: unknown): value is string | number | boolean =>
   typeof value === "string" || typeof value === "number" || typeof value === "boolean";
@@ -113,6 +150,7 @@ export const exportIdentityAttributes = (
       ? {}
       : { [ATTR_OTELHOOK_PROVIDER_VERSION]: event.provenance.providerVersion }),
     [ATTR_OTELHOOK_WORKSPACE_ID]: event.workspace.workspaceId,
+    ...(event.subagentId === undefined ? {} : { [ATTR_OTELHOOK_SUBAGENT_ID]: event.subagentId }),
     ...passthroughHarAttributes(resource),
     ...hexTraceAttributes(ids),
   };

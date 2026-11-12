@@ -1,0 +1,12 @@
+{
+  "fixture": "before-shell-execution-cwd.json",
+  "sourceContract": "Cursor agent hook beforeShellExecution (command, cwd, sandbox), cursor.com/docs/agent/hooks",
+  "provider": "cursor",
+  "providerVersionObserved": "3.12.17",
+  "capturedDate": "2026-11-12",
+  "author": "otel-hook worktree-target owner (agent)",
+  "sanitization": "Shape only. Every value is invented: ids are fabricated, file contents and commands are placeholders, and paths live under a fictional /workspace tree (contract-repo = the main checkout, contract-repo-slot-7 = a linked worktree) that tests rebase onto a temporary directory.",
+  "licenseBasis": "Original synthetic authorship: field names reproduce a third-party tool's hook contract, all values are this repository's own.",
+  "sha256": "65b3a0f0bfbccd398387ced0d4e443ead5170e0be577c0dd81c289a1923678aa",
+  "notes": "The reference lists cwd on beforeShellExecution only; it is the shell-cwd evidence. Exercised by tests/providers/worktree-target.test.ts."
+}

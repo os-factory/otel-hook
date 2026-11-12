@@ -4,4 +4,5 @@ export * from "./extensions.js";
 export * from "./content.js";
 export * from "./usage.js";
 export * from "./identity.js";
+export * from "./target.js";
 export * from "./events.js";

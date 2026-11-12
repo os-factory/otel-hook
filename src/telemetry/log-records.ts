@@ -20,7 +20,11 @@ import {
 import type { ContentFact } from "../model/content.js";
 import type { CanonicalEvent, CanonicalEventType } from "../model/events.js";
 import type { CanonicalUsage } from "../model/usage.js";
-import { exportIdentityAttributes } from "./export-identity.js";
+import {
+  exportIdentityAttributes,
+  targetAttributes,
+  usageTemporalityAttributes,
+} from "./export-identity.js";
 import {
   canonicalEventTraceIdentities,
   DEFAULT_INSTRUMENTATION_SCOPE,
@@ -437,6 +441,7 @@ const eventAttributes = (event: CanonicalEvent): LogAttributes => {
         ...(event.generationId === undefined
           ? {}
           : { [ATTR_OTELHOOK_GENERATION_ID]: event.generationId }),
+        ...targetAttributes(event),
       };
     case "tool.end":
       return {
@@ -446,6 +451,7 @@ const eventAttributes = (event: CanonicalEvent): LogAttributes => {
         ...(event.permissionDecision === undefined
           ? {}
           : { [ATTR_OTELHOOK_TOOL_PERMISSION]: event.permissionDecision }),
+        ...targetAttributes(event),
       };
     case "subagent.start":
       return {
@@ -492,6 +498,7 @@ const usageAttributes = (usage: CanonicalUsage | undefined): LogAttributes =>
         [ATTR_GEN_AI_USAGE_OUTPUT_TOKENS]: usage.outputTokens,
         [ATTR_GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS]: usage.cachedInputTokens,
         [ATTR_GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS]: usage.cacheCreationInputTokens,
+        ...usageTemporalityAttributes(usage),
       };
 
 /** Content facts an event carries, paired with the field they came from. */

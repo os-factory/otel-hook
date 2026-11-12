@@ -112,7 +112,7 @@ fires and emits nothing is a process spawn per occurrence for no data.
 | `gemini-cli`  | `Notification`      | observability-only in this protocol; no canonical event type corresponds                 |
 | `cursor`      | `afterAgentResponse` | `stop` reports the same generation *and* the same token snapshot; both would double-count |
 | `cursor`      | `beforeShellExecution`, `afterShellExecution`, `beforeMCPExecution`, `afterMCPExecution` | one call fires the generic pair *and* the dedicated pair — see below                     |
-| `cursor`      | `beforeReadFile`    | no completion callback exists, so a `tool.start` here would never close                  |
+| `cursor`      | `beforeReadFile`    | a read also fires the generic tool pair; opt in with `--event` for its `file_path` target evidence (ADR 0008) |
 | `cursor`      | `subagentStart`, `subagentStop` | `subagentStop` carries no subagent id, so the pair cannot be correlated       |
 | `cursor`      | `afterAgentThought` | a reasoning notification with no canonical event type; its text is never exported         |
 | `cursor`      | `beforeTabFileRead`, `afterTabFileEdit`, `workspaceOpen` | not agent-session hooks; `workspaceOpen` carries no `conversation_id` at all |

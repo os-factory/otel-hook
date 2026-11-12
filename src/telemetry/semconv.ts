@@ -23,7 +23,14 @@ import {
 import type { CanonicalEvent, CanonicalEventType } from "../model/events.js";
 import type { CanonicalUsage } from "../model/usage.js";
 import { VERSION } from "../version.js";
-import { exportIdentityAttributes } from "./export-identity.js";
+import {
+  ATTR_OTELHOOK_TARGET_SOURCE,
+  ATTR_OTELHOOK_TARGET_WORKSPACE_ID,
+  ATTR_VCS_REF_HEAD_NAME,
+  exportIdentityAttributes,
+  targetAttributes,
+  usageTemporalityAttributes,
+} from "./export-identity.js";
 
 const SCOPE_NAME = "@osfactory/otel-hook";
 
@@ -42,6 +49,7 @@ const ATTR_OTELHOOK_DELEGATION_DEPTH = "otelhook.delegation_depth";
 const ATTR_OTELHOOK_COMPACTION_TRIGGER = "otelhook.compaction.trigger";
 const ATTR_OTELHOOK_AGENT_NAME = "otelhook.agent.name";
 const ATTR_OTELHOOK_AGENT_VERSION = "otelhook.agent.version";
+const ATTR_OTELHOOK_GENERATION_ID = "otelhook.generation.id";
 
 /**
  * Pure, stateless canonical-event-to-span mapping.
@@ -281,8 +289,10 @@ export const startOnlySpanAttributes = (event: CanonicalEvent): Attributes => {
       };
     // `toolName` and `toolCallId` are on both tool edges, so they are not
     // start-only and persisting them would just pad every record.
+    // The target is carried forward too: an end-only process may see a payload
+    // with less to go on (no tool input), and the start's evidence still holds.
     case "tool.start":
-      return { [ATTR_OTELHOOK_TOOL_KIND]: event.toolKind };
+      return { [ATTR_OTELHOOK_TOOL_KIND]: event.toolKind, ...targetAttributes(event) };
     case "subagent.start":
       return { [ATTR_OTELHOOK_DELEGATION_DEPTH]: event.delegationDepth };
     default:
@@ -332,8 +342,66 @@ const usageAttributes = (usage: CanonicalUsage | undefined, resetDetected: boole
     [ATTR_GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS]: usage.cachedInputTokens,
     [ATTR_GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS]: usage.cacheCreationInputTokens,
     [ATTR_GEN_AI_USAGE_REASONING_OUTPUT_TOKENS]: usage.reasoningOutputTokens,
+    ...usageTemporalityAttributes(usage),
     ...(resetDetected ? { [ATTR_OTELHOOK_RESET_DETECTED]: true } : {}),
   };
+};
+
+/** Evidence strength of a target source; see `targetSourceSchema`. */
+const TARGET_SOURCE_RANK: Readonly<Record<string, number>> = Object.freeze({
+  "tool-path": 3,
+  "shell-cwd": 2,
+  "session-cwd": 1,
+});
+
+const TARGET_KEYS = [
+  ATTR_OTELHOOK_TARGET_WORKSPACE_ID,
+  ATTR_OTELHOOK_TARGET_SOURCE,
+  ATTR_VCS_REF_HEAD_NAME,
+] as const;
+
+const pickTarget = (attributes: Attributes): Attributes => {
+  const picked: Attributes = {};
+  for (const key of TARGET_KEYS) {
+    if (attributes[key] !== undefined) {
+      picked[key] = attributes[key];
+    }
+  }
+  return picked;
+};
+
+const withoutTarget = (attributes: Attributes): Attributes => {
+  const rest: Attributes = { ...attributes };
+  for (const key of TARGET_KEYS) {
+    delete rest[key];
+  }
+  return rest;
+};
+
+const rankOf = (candidate: Attributes): number => {
+  const source = candidate[ATTR_OTELHOOK_TARGET_SOURCE];
+  return typeof source === "string" && Object.hasOwn(TARGET_SOURCE_RANK, source)
+    ? (TARGET_SOURCE_RANK[source] ?? 0)
+    : 0;
+};
+
+/**
+ * One tool span, one target: the strongest evidence among the recovered start,
+ * the live start, and the live end — later wins a tie. A Cursor shell call's
+ * start knows its `cwd` and its end does not; the span must keep the former,
+ * not be downgraded to the workspace root by whichever edge exported last.
+ */
+const strongestTarget = (candidates: readonly Attributes[]): Attributes => {
+  let best: Attributes = {};
+  let bestRank = 0;
+  for (const candidate of candidates) {
+    const rank = rankOf(candidate);
+    if (rank > 0 && rank >= bestRank) {
+      best = candidate;
+      bestRank = rank;
+    }
+  }
+  return best;
 };
 
 type SpanGroup = {
@@ -502,6 +570,9 @@ const buildLifecycleSpan = (
         ...(model?.vendor === undefined ? {} : { [ATTR_GEN_AI_SYSTEM]: model.vendor }),
         ...(start?.model?.modelId === undefined ? {} : { [ATTR_GEN_AI_REQUEST_MODEL]: start.model.modelId }),
         ...(end?.model?.modelId === undefined ? {} : { [ATTR_GEN_AI_RESPONSE_MODEL]: end.model.modelId }),
+        // The provider's own id for this unit of work (Cursor generation,
+        // Codex turn): the key a consumer stores a usage observation under.
+        [ATTR_OTELHOOK_GENERATION_ID]: group.ref.scopeKey,
         ...(end?.outcome === undefined ? {} : { [ATTR_OTELHOOK_OUTCOME]: end.outcome }),
         ...usageAttributes(end?.usage, false),
       };
@@ -515,11 +586,17 @@ const buildLifecycleSpan = (
       name = `tool ${toolName}`;
       kind = SpanKind.CLIENT;
       attributes = {
-        ...attributes,
+        // Target keys are re-chosen below as one unit, never mixed across edges.
+        ...withoutTarget(attributes),
         [ATTR_GEN_AI_TOOL_NAME]: toolName,
         [ATTR_GEN_AI_TOOL_CALL_ID]: start?.toolCallId ?? end?.toolCallId ?? group.ref.scopeKey,
         ...(start?.toolKind === undefined ? {} : { [ATTR_OTELHOOK_TOOL_KIND]: start.toolKind }),
         ...(end?.outcome === undefined ? {} : { [ATTR_OTELHOOK_OUTCOME]: end.outcome }),
+        ...strongestTarget([
+          pickTarget(resolved.recovered),
+          start === undefined ? {} : targetAttributes(start),
+          end === undefined ? {} : targetAttributes(end),
+        ]),
       };
       status = outcomeStatus(end?.outcome);
       break;

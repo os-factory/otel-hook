@@ -5,3 +5,5 @@ export * from "./logger.js";
 export * from "./memory.js";
 export * from "./delivery.js";
 export * from "./hook.js";
+export * from "./git-worktree.js";
+export * from "./target-resolution.js";

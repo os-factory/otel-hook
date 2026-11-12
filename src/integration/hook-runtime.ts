@@ -34,7 +34,8 @@ import {
 } from "../runtime/delivery.js";
 import { createDeterministicIdGenerator } from "../runtime/ids.js";
 import { createNullLogger } from "../runtime/logger.js";
-import type { Clock, IdGenerator, Logger } from "../runtime/ports.js";
+import { createFilesystemWorktreeLocator } from "../runtime/git-worktree.js";
+import type { Clock, IdGenerator, Logger, WorktreeLocator } from "../runtime/ports.js";
 import { createAsyncLock } from "../state/async-lock.js";
 import { createFilesystemStateStore, type FilesystemStateStore } from "../state/filesystem-store.js";
 import {
@@ -306,6 +307,12 @@ export type HookRuntimeOptions = {
   readonly staleClaimMillis?: number;
   /** TTL for dedup records specifically. Defaults to `lifecycleMaxAgeMillis`. */
   readonly deliveryRetentionMillis?: number;
+  /**
+   * Resolve the git worktree each tool event targeted (ADR 0008). Defaults to a
+   * filesystem locator that reads `.git` and `HEAD` without spawning git; pass
+   * `null` to disable resolution entirely.
+   */
+  readonly worktreeLocator?: WorktreeLocator | null;
 };
 
 const DEFAULT_FLUSH_TIMEOUT_MILLIS = 2_000;
@@ -554,6 +561,13 @@ export const createHookRuntime = (options: HookRuntimeOptions): HookRuntime => {
     privacy,
     logger,
     installationId: options.installationId,
+    ...(options.worktreeLocator === null
+      ? {}
+      : {
+          worktreeLocator:
+            options.worktreeLocator ??
+            createFilesystemWorktreeLocator({ monotonicMillis: () => clock.monotonicMillis() }),
+        }),
   };
   const hook = createOtelHook({ ...hookDeps, sink });
 

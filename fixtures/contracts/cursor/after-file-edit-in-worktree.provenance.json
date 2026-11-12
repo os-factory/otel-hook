@@ -1,0 +1,12 @@
+{
+  "fixture": "after-file-edit-in-worktree.json",
+  "sourceContract": "Cursor agent hook afterFileEdit (file_path, edits) on the documented envelope, cursor.com/docs/agent/hooks",
+  "provider": "cursor",
+  "providerVersionObserved": "3.12.17",
+  "capturedDate": "2026-11-12",
+  "author": "otel-hook worktree-target owner (agent)",
+  "sanitization": "Shape only. Every value is invented: ids are fabricated, file contents and commands are placeholders, and paths live under a fictional /workspace tree (contract-repo = the main checkout, contract-repo-slot-7 = a linked worktree) that tests rebase onto a temporary directory.",
+  "licenseBasis": "Original synthetic authorship: field names reproduce a third-party tool's hook contract, all values are this repository's own.",
+  "sha256": "094f9e8465a102964c42cafdd8dff87899b81bcc448c3af7880e9966628dd6be",
+  "notes": "file_path in a linked worktree while workspace_roots names the main checkout: target is tool-path. Exercised by tests/providers/worktree-target.test.ts."
+}

@@ -15,6 +15,8 @@ import {
   type ToolStartEvent,
 } from "../model/events.js";
 import type { InvocationIdentity } from "../model/identity.js";
+import type { EventId } from "../model/primitives.js";
+import { subagentIdSchema, targetHintSchema, type TargetHint } from "../model/target.js";
 import { CANONICAL_SCHEMA_VERSION } from "../model/version.js";
 import type { ProviderContext } from "./adapter.js";
 
@@ -28,6 +30,8 @@ type ManagedFields =
   | "provenance"
   | "workspace"
   | "extensions"
+  | "subagentId"
+  | "target"
   | "occurredAt";
 
 type Draft<TEvent extends CanonicalEvent> = Omit<TEvent, ManagedFields> & {
@@ -37,6 +41,12 @@ type Draft<TEvent extends CanonicalEvent> = Omit<TEvent, ManagedFields> & {
   readonly extensions?: Readonly<Record<string, unknown>>;
   /** Mixed into the derived event id when one event type repeats. */
   readonly idDiscriminator?: string;
+  /**
+   * Where a tool event pointed, for the core to resolve into a `target`
+   * (ADR 0008). Accepted on `tool.start`/`tool.end` drafts only; never placed
+   * on the event itself.
+   */
+  readonly targetHint?: TargetHint;
 };
 
 export type CanonicalEventDraft =
@@ -68,23 +78,45 @@ export interface EventFactory {
   nextSequence(): number;
   /** Extension keys rejected during building, for diagnostics. */
   droppedExtensionKeys(): readonly string[];
+  /**
+   * Target hints attached to built tool events, keyed by event id. In-process
+   * only: hand this to the core through `ProviderParseResult.targetHints`.
+   */
+  targetHints(): ReadonlyMap<EventId, TargetHint>;
 }
 
 export type EventFactoryInput = {
   readonly identity: InvocationIdentity;
   readonly sequenceBase: number;
   readonly context: ProviderContext;
+  /**
+   * The provider's own id for the subagent this invocation runs inside, stamped
+   * on every event built. A value that is not identifier-shaped is dropped rather
+   * than failing the event: the event is still true without it.
+   */
+  readonly subagentId?: string;
 };
 
 export const createEventFactory = (input: EventFactoryInput): EventFactory => {
   const { identity, context } = input;
   const built: CanonicalEvent[] = [];
   const dropped: string[] = [];
+  const hints = new Map<EventId, TargetHint>();
   let sequence = input.sequenceBase;
+  const subagentId =
+    input.subagentId !== undefined && subagentIdSchema.safeParse(input.subagentId).success
+      ? input.subagentId
+      : undefined;
 
   return {
     build: (draft: CanonicalEventDraft): CanonicalEvent => {
-      const { occurredAt, extensions, idDiscriminator, ...rest } = draft;
+      const { occurredAt, extensions, idDiscriminator, targetHint, ...drafted } = draft;
+      // Managed fields are stripped even if an untyped caller supplied them: a
+      // target is only ever the core's resolution, never an adapter's claim.
+      const rest: Omit<typeof drafted, "target" | "subagentId"> = { ...drafted };
+      delete (rest as { target?: unknown }).target;
+      delete (rest as { subagentId?: unknown }).subagentId;
+
       const sanitized =
         extensions === undefined
           ? { extensions: {}, droppedKeys: [] as readonly string[] }
@@ -109,6 +141,7 @@ export const createEventFactory = (input: EventFactoryInput): EventFactory => {
         occurredAt: occurredAt ?? context.clock.now(),
         provenance: identity.provenance,
         workspace: identity.workspace,
+        ...(subagentId === undefined ? {} : { subagentId }),
         extensions: sanitized.extensions,
       };
 
@@ -124,10 +157,20 @@ export const createEventFactory = (input: EventFactoryInput): EventFactory => {
         });
       }
       built.push(parsed.data);
+      if (
+        targetHint !== undefined &&
+        (parsed.data.type === "tool.start" || parsed.data.type === "tool.end")
+      ) {
+        const hint = targetHintSchema.safeParse(targetHint);
+        if (hint.success) {
+          hints.set(parsed.data.eventId, hint.data);
+        }
+      }
       return parsed.data;
     },
     events: (): readonly CanonicalEvent[] => [...built],
     nextSequence: (): number => sequence,
     droppedExtensionKeys: (): readonly string[] => [...dropped],
+    targetHints: (): ReadonlyMap<EventId, TargetHint> => new Map(hints),
   };
 };

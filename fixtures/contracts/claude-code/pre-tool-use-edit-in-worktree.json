@@ -1,0 +1,15 @@
+{
+  "hook_event_name": "PreToolUse",
+  "session_id": "ses-contract-claude-0002",
+  "transcript_path": "/workspace/contract-repo/.transcripts/session.jsonl",
+  "cwd": "/workspace/contract-repo",
+  "permission_mode": "acceptEdits",
+  "prompt_id": "prompt-contract-0002",
+  "tool_name": "Edit",
+  "tool_use_id": "toolu_contract_edit_0001",
+  "tool_input": {
+    "file_path": "/workspace/contract-repo-slot-7/src/billing.ts",
+    "old_string": "export const rate = 0.2;",
+    "new_string": "export const rate = 0.25;"
+  }
+}

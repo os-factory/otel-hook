@@ -1,0 +1,21 @@
+{
+  "conversation_id": "conv-contract-cursor-0001",
+  "generation_id": "gen-contract-cursor-0001",
+  "session_id": "conv-contract-cursor-0001",
+  "model": "composer-2.5-fast",
+  "model_id": "composer-2.5",
+  "cursor_version": "3.12.17",
+  "workspace_roots": [
+    "/workspace/contract-repo"
+  ],
+  "user_email": "synthetic@example.invalid",
+  "transcript_path": "/workspace/.cursor/transcripts/synthetic.jsonl",
+  "hook_event_name": "stop",
+  "cwd": "",
+  "status": "completed",
+  "loop_count": 0,
+  "input_tokens": 43859,
+  "output_tokens": 1076,
+  "cache_read_tokens": 28384,
+  "cache_write_tokens": 0
+}

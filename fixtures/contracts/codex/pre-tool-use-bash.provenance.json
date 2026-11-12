@@ -1,0 +1,12 @@
+{
+  "fixture": "pre-tool-use-bash.json",
+  "sourceContract": "Codex CLI hook stdin (PreToolUse for a shell call), key set observed from Codex CLI 0.163.0 driven by the agent lab's mock Responses server",
+  "provider": "codex",
+  "providerVersionObserved": "0.163.0",
+  "capturedDate": "2026-11-12",
+  "author": "otel-hook worktree-target owner (agent)",
+  "sanitization": "Shape only. Every value is invented: ids are fabricated, file contents and commands are placeholders, and paths live under a fictional /workspace tree (contract-repo = the main checkout, contract-repo-slot-7 = a linked worktree) that tests rebase onto a temporary directory.",
+  "licenseBasis": "Original synthetic authorship: field names reproduce a third-party tool's hook contract, all values are this repository's own.",
+  "sha256": "d18caab39666094ff61c2eba5e0b80e0872402986c382f22147a78729e8f3cd1",
+  "notes": "Pins what the live capture showed: tool_name Bash, tool_input.command as one string, tool_use_id (not tool_call_id), and no workdir even when the model asked for one, so the target is session-cwd. Exercised by tests/providers/worktree-target.test.ts."
+}

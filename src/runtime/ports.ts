@@ -167,3 +167,23 @@ export interface Logger {
   info(message: string, fields?: Attributes): void;
   debug(message: string, fields?: Attributes): void;
 }
+
+/** A git worktree found on the local filesystem. Holds a path: never exported. */
+export type LocatedWorktree = {
+  /** Absolute path of the worktree's top-level directory (the one holding `.git`). */
+  readonly root: string;
+  /** Branch checked out there, from `HEAD`; absent when HEAD is detached. */
+  readonly branch?: string;
+};
+
+/**
+ * Finds the git worktree containing a local path (ADR 0008).
+ *
+ * The only port that reads the filesystem on behalf of event content, which is
+ * why it is a port: the core decides *when* to ask and what of the answer may be
+ * exported, the implementation only answers. Implementations must never throw or
+ * reject — any failure is `undefined` — and must not spawn processes.
+ */
+export interface WorktreeLocator {
+  locate(absolutePath: string): Promise<LocatedWorktree | undefined>;
+}

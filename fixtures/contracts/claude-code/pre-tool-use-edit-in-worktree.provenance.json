@@ -1,0 +1,12 @@
+{
+  "fixture": "pre-tool-use-edit-in-worktree.json",
+  "sourceContract": "Claude Code hook JSON protocol (PreToolUse for the built-in Edit tool: tool_input.file_path), per code.claude.com/docs/en/hooks",
+  "provider": "claude-code",
+  "providerVersionObserved": "2.1.220",
+  "capturedDate": "2026-11-12",
+  "author": "otel-hook worktree-target owner (agent)",
+  "sanitization": "Shape only. Every value is invented: ids are fabricated, file contents and commands are placeholders, and paths live under a fictional /workspace tree (contract-repo = the main checkout, contract-repo-slot-7 = a linked worktree) that tests rebase onto a temporary directory.",
+  "licenseBasis": "Original synthetic authorship: field names reproduce a third-party tool's hook contract, all values are this repository's own.",
+  "sha256": "6633a48ecb8e97e9cfe63cd47fd31f717200019db36154fbc5a00f99d3e84859",
+  "notes": "Session cwd is the main checkout while the edited file lives in a linked worktree: the case ADR 0008 exists for. The target must come from tool_input.file_path (tool-path), never from cwd. Exercised by tests/providers/worktree-target.test.ts."
+}

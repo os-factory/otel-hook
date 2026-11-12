@@ -1,0 +1,12 @@
+{
+  "fixture": "stop-generation-usage.json",
+  "sourceContract": "Cursor agent hook stop with the token counters observed in the IDE captures (see src/providers/cursor/payload.ts)",
+  "provider": "cursor",
+  "providerVersionObserved": "3.12.17",
+  "capturedDate": "2026-11-12",
+  "author": "otel-hook worktree-target owner (agent)",
+  "sanitization": "Shape only. Every value is invented: ids are fabricated, file contents and commands are placeholders, and paths live under a fictional /workspace tree (contract-repo = the main checkout, contract-repo-slot-7 = a linked worktree) that tests rebase onto a temporary directory.",
+  "licenseBasis": "Original synthetic authorship: field names reproduce a third-party tool's hook contract, all values are this repository's own.",
+  "sha256": "eeed5d5fe6e960661539dc174db58ac0d23a8e1e7729640af9bc9d03e4634041",
+  "notes": "generation_id is the per-generation usage key; the counters are a delta. Exercised by tests/providers/worktree-target.test.ts."
+}

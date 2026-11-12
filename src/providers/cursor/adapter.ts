@@ -27,6 +27,7 @@ import {
   recognizeCursorPayload,
   type CursorPayload,
 } from "./payload.js";
+import { cursorTargetHint } from "./target.js";
 import { normalizeCursorUsage } from "./usage.js";
 
 /**
@@ -359,15 +360,6 @@ export const createCursorAdapter = (options: CursorAdapterOptions = {}): Provide
       };
     }
 
-    if (payload.hook_event_name === "beforeReadFile") {
-      return {
-        status: "ignored",
-        reason:
-          "beforeReadFile has no completion callback in the cursor hook protocol, so emitting tool.start " +
-          "here would leave a tool lifecycle that never closes",
-      };
-    }
-
     if (payload.hook_event_name === "subagentStart" || payload.hook_event_name === "subagentStop") {
       return {
         status: "ignored",
@@ -386,6 +378,8 @@ export const createCursorAdapter = (options: CursorAdapterOptions = {}): Provide
     const warnings: string[] = [];
     const sessionId = input.identity.sessionId;
     const model = toModelDescriptor(payload);
+    const targetHint = cursorTargetHint(payload);
+    const targetHintField = targetHint === undefined ? {} : { targetHint };
 
     switch (payload.hook_event_name) {
       case "sessionStart":
@@ -461,6 +455,7 @@ export const createCursorAdapter = (options: CursorAdapterOptions = {}): Provide
       case "preToolUse":
         factory.build({
           type: "tool.start",
+          ...targetHintField,
           toolCallId:
             payload.tool_use_id ??
             derivedToolCallId(context, sessionId, [
@@ -491,6 +486,7 @@ export const createCursorAdapter = (options: CursorAdapterOptions = {}): Provide
       case "postToolUse":
         factory.build({
           type: "tool.end",
+          ...targetHintField,
           toolCallId:
             payload.tool_use_id ??
             derivedToolCallId(context, sessionId, [
@@ -518,6 +514,7 @@ export const createCursorAdapter = (options: CursorAdapterOptions = {}): Provide
       case "postToolUseFailure":
         factory.build({
           type: "tool.end",
+          ...targetHintField,
           toolCallId:
             payload.tool_use_id ??
             derivedToolCallId(context, sessionId, [
@@ -552,6 +549,7 @@ export const createCursorAdapter = (options: CursorAdapterOptions = {}): Provide
       case "beforeShellExecution":
         factory.build({
           type: "tool.start",
+          ...targetHintField,
           toolCallId: derivedToolCallId(context, sessionId, [
             "shell",
             payload.generation_id ?? "",
@@ -574,6 +572,7 @@ export const createCursorAdapter = (options: CursorAdapterOptions = {}): Provide
       case "afterShellExecution":
         factory.build({
           type: "tool.end",
+          ...targetHintField,
           toolCallId: derivedToolCallId(context, sessionId, [
             "shell",
             payload.generation_id ?? "",
@@ -601,6 +600,7 @@ export const createCursorAdapter = (options: CursorAdapterOptions = {}): Provide
       case "beforeMCPExecution":
         factory.build({
           type: "tool.start",
+          ...targetHintField,
           toolCallId: derivedToolCallId(context, sessionId, [
             "mcp",
             payload.generation_id ?? "",
@@ -626,6 +626,7 @@ export const createCursorAdapter = (options: CursorAdapterOptions = {}): Provide
       case "afterMCPExecution":
         factory.build({
           type: "tool.end",
+          ...targetHintField,
           toolCallId: derivedToolCallId(context, sessionId, [
             "mcp",
             payload.generation_id ?? "",
@@ -658,6 +659,7 @@ export const createCursorAdapter = (options: CursorAdapterOptions = {}): Provide
         // this one firing: an edit that reached this hook has completed.
         factory.build({
           type: "tool.start",
+          ...targetHintField,
           toolCallId,
           toolName: "edit_file",
           toolKind: "write",
@@ -672,6 +674,7 @@ export const createCursorAdapter = (options: CursorAdapterOptions = {}): Provide
         });
         factory.build({
           type: "tool.end",
+          ...targetHintField,
           toolCallId,
           toolName: "edit_file",
           outcome: "ok",
@@ -680,6 +683,42 @@ export const createCursorAdapter = (options: CursorAdapterOptions = {}): Provide
           ...(payload.edits === undefined
             ? {}
             : { extensions: { "cursor.edit_count": payload.edits.length } }),
+        });
+        break;
+      }
+
+      case "beforeReadFile": {
+        // The protocol has no "after read" callback, so — as with afterFileEdit —
+        // the pair is emitted from this one firing. Unlike an edit, a read that
+        // reached this hook has not happened yet and may still be refused by
+        // another hook, so its outcome is `unknown`, not `ok`. `content` is the
+        // file's text and is never read.
+        const toolCallId = derivedToolCallId(context, sessionId, [
+          "read-file",
+          payload.generation_id ?? "",
+          payload.file_path,
+        ]);
+        factory.build({
+          type: "tool.start",
+          ...targetHintField,
+          toolCallId,
+          toolName: "read_file",
+          toolKind: "read",
+          ...(payload.generation_id === undefined || payload.generation_id.length === 0
+            ? {}
+            : { generationId: payload.generation_id }),
+          input: context.privacy.describeContent({
+            kind: "tool-input",
+            text: payload.file_path,
+            label: "read_file",
+          }),
+        });
+        factory.build({
+          type: "tool.end",
+          ...targetHintField,
+          toolCallId,
+          toolName: "read_file",
+          outcome: "unknown",
         });
         break;
       }
@@ -741,10 +780,12 @@ export const createCursorAdapter = (options: CursorAdapterOptions = {}): Provide
       // Every remaining event name returned early above.
     }
 
+    const targetHints = factory.targetHints();
     return {
       status: "parsed",
       events: factory.events(),
       ...(warnings.length === 0 ? {} : { warnings }),
+      ...(targetHints.size === 0 ? {} : { targetHints }),
     };
   };
 
