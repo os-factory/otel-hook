@@ -78,8 +78,9 @@ export const parseHeadBranch = (head: string): string | undefined => {
 /** `gitdir: <path>` → the path, resolved against the worktree root. */
 export const parseGitDirFile = (content: string, worktreeRoot: string): string | undefined => {
   const line = content.split(/\r?\n/, 1)[0]?.trim() ?? "";
-  const match = /^gitdir:\s*(.+)$/.exec(line);
-  const target = match?.[1]?.trim();
+  // A prefix check, not a regex: `gitdir:` followed by long runs of spaces made
+  // the former `/^gitdir:\s*(.+)$/` backtrack polynomially (CodeQL).
+  const target = line.startsWith("gitdir:") ? line.slice("gitdir:".length).trim() : undefined;
   if (target === undefined || target.length === 0 || target.includes("\u0000")) {
     return undefined;
   }

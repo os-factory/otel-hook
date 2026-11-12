@@ -52,7 +52,9 @@ afterAll(async () => {
 
 const loadFixture = async (provider: string, name: string): Promise<unknown> => {
   const raw = await readFile(path.join(CONTRACTS_DIR, provider, name), "utf8");
-  return JSON.parse(raw.replaceAll("/workspace/", `${root}/`)) as unknown;
+  // JSON-escape the temp root: on Windows it carries backslashes.
+  const escapedRoot = JSON.stringify(`${root}${path.sep}`).slice(1, -1);
+  return JSON.parse(raw.replaceAll("/workspace/", escapedRoot)) as unknown;
 };
 
 const harnessFor = (adapter: ProviderAdapter): TestHarness =>

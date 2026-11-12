@@ -41,10 +41,13 @@ describe("git file parsing", () => {
   });
 
   it("resolves a gitdir file against the worktree root", () => {
-    expect(parseGitDirFile("gitdir: /repo/.git/worktrees/a\n", "/wt")).toBe("/repo/.git/worktrees/a");
-    expect(parseGitDirFile("gitdir: ../repo/.git/worktrees/a\n", "/x/wt")).toBe(
-      "/x/repo/.git/worktrees/a",
+    expect(parseGitDirFile("gitdir: /repo/.git/worktrees/a\n", "/wt")).toBe(
+      path.resolve("/repo/.git/worktrees/a"),
     );
+    expect(parseGitDirFile("gitdir: ../repo/.git/worktrees/a\n", "/x/wt")).toBe(
+      path.resolve("/x/wt", "../repo/.git/worktrees/a"),
+    );
+    expect(parseGitDirFile("gitdir:" + " ".repeat(50_000) + "\n", "/wt")).toBeUndefined();
     expect(parseGitDirFile("not a gitdir\n", "/wt")).toBeUndefined();
   });
 });
@@ -190,15 +193,21 @@ describe("resolveEventTargets", () => {
     return { events: factory.events(), hints: factory.targetHints() };
   };
 
-  const fakeLocator = (table: Record<string, LocatedWorktree>, delayMillis = 0): WorktreeLocator => ({
-    locate: async (absolutePath) => {
-      if (delayMillis > 0) {
-        await new Promise((resolve) => setTimeout(resolve, delayMillis));
-      }
-      const prefix = Object.keys(table).find((candidate) => absolutePath.startsWith(candidate));
-      return prefix === undefined ? undefined : table[prefix];
-    },
-  });
+  // Table keys and roots are POSIX-style for readability; the core resolves
+  // hint paths with the platform's `path`, so the fake does the same.
+  const fakeLocator = (table: Record<string, LocatedWorktree>, delayMillis = 0): WorktreeLocator => {
+    const native = Object.entries(table).map(
+      ([prefix, worktree]) => [path.resolve(prefix), { ...worktree, root: path.resolve(worktree.root) }] as const,
+    );
+    return {
+      locate: async (absolutePath) => {
+        if (delayMillis > 0) {
+          await new Promise((resolve) => setTimeout(resolve, delayMillis));
+        }
+        return native.find(([prefix]) => absolutePath.startsWith(prefix))?.[1];
+      },
+    };
+  };
 
   const resolve = (
     hint: TargetHint | undefined,
@@ -220,7 +229,7 @@ describe("resolveEventTargets", () => {
       fakeLocator({ "/w/slot": { root: "/w/slot", branch: "har-slot" } }),
     );
     expect(targetOf(events)).toEqual({
-      workspaceId: deriveWorkspaceIdentity(privacy, { kind: "git-root", absolutePath: "/w/slot" })
+      workspaceId: deriveWorkspaceIdentity(privacy, { kind: "git-root", absolutePath: path.resolve("/w/slot") })
         .workspaceId,
       vcsBranchName: "har-slot",
       source: "tool-path",
