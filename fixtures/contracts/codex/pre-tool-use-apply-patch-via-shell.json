@@ -1,0 +1,14 @@
+{
+  "session_id": "01a1d1ad-0000-7000-8000-00000000c0de",
+  "turn_id": "01a1d1ad-0000-7000-8000-0000000000t1",
+  "transcript_path": "/workspace/.codex/sessions/rollout-synthetic.jsonl",
+  "cwd": "/workspace/contract-repo-slot-7",
+  "hook_event_name": "PreToolUse",
+  "model": "gpt-5-codex",
+  "permission_mode": "bypassPermissions",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "apply_patch <<'EOF'\n*** Begin Patch\n*** Add File: src/added.ts\n+export const added = true;\n*** Update File: src/billing.ts\n@@\n-export const rate = 0.2;\n+export const rate = 0.25;\n*** End Patch\nEOF"
+  },
+  "tool_use_id": "call_contract_patch_01"
+}

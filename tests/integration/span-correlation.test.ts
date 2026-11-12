@@ -192,6 +192,59 @@ describe("cross-process span correlation", () => {
     expect(closed?.parentSpanId).toBeDefined();
   });
 
+  it("carries the start's worktree target across processes and keeps the stronger evidence", async () => {
+    const collector = await withCollector();
+    const rootDir = await withStateRoot();
+    const shellTarget = {
+      workspaceId: "gitroot:00000000000000aa",
+      vcsBranchName: "har-slot-7",
+      source: "shell-cwd",
+    };
+    const sessionTarget = {
+      workspaceId: "gitroot:00000000000000bb",
+      vcsBranchName: "main",
+      source: "session-cwd",
+    };
+
+    // A Cursor shell call: the start knows the shell's cwd, the end only the
+    // workspace root. The span must not be downgraded by the later, weaker edge.
+    await startProcess(rootDir, collector.url).emit([
+      toolStartEvent("inv_start", { target: shellTarget }),
+    ]);
+    await startProcess(rootDir, collector.url).emit([
+      toolEndEvent("inv_end", { target: sessionTarget }),
+    ]);
+
+    const [closed] = toolSpans(collector);
+    expect(closed?.attributes["otelhook.span.pairing"]).toBe("cross-process");
+    expect(closed?.attributes["otelhook.target.source"]).toBe("shell-cwd");
+    expect(closed?.attributes["otelhook.target.workspace.id"]).toBe("gitroot:00000000000000aa");
+    expect(closed?.attributes["vcs.ref.head.name"]).toBe("har-slot-7");
+  });
+
+  it("lets an end edge with stronger evidence replace the start's target as one unit", async () => {
+    const collector = await withCollector();
+    const rootDir = await withStateRoot();
+
+    await startProcess(rootDir, collector.url).emit([
+      toolStartEvent("inv_start", {
+        target: { workspaceId: "gitroot:00000000000000bb", vcsBranchName: "main", source: "session-cwd" },
+      }),
+    ]);
+    // Detached HEAD on the end's worktree: no branch. The start's branch must not
+    // survive next to the end's workspace id.
+    await startProcess(rootDir, collector.url).emit([
+      toolEndEvent("inv_end", {
+        target: { workspaceId: "gitroot:00000000000000cc", source: "tool-path" },
+      }),
+    ]);
+
+    const [closed] = toolSpans(collector);
+    expect(closed?.attributes["otelhook.target.source"]).toBe("tool-path");
+    expect(closed?.attributes["otelhook.target.workspace.id"]).toBe("gitroot:00000000000000cc");
+    expect(closed?.attributes["vcs.ref.head.name"]).toBeUndefined();
+  });
+
   it("reports an error status and outcome from the end process alone", async () => {
     const collector = await withCollector();
     const rootDir = await withStateRoot();

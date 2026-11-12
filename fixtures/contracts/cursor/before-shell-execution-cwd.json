@@ -1,0 +1,17 @@
+{
+  "conversation_id": "conv-contract-cursor-0001",
+  "generation_id": "gen-contract-cursor-0001",
+  "session_id": "conv-contract-cursor-0001",
+  "model": "composer-2.5-fast",
+  "model_id": "composer-2.5",
+  "cursor_version": "3.12.17",
+  "workspace_roots": [
+    "/workspace/contract-repo"
+  ],
+  "user_email": "synthetic@example.invalid",
+  "transcript_path": "/workspace/.cursor/transcripts/synthetic.jsonl",
+  "hook_event_name": "beforeShellExecution",
+  "command": "npm test",
+  "cwd": "/workspace/contract-repo-slot-7",
+  "sandbox": false
+}

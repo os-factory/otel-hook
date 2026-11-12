@@ -25,7 +25,7 @@ import {
   type RecordingLogger,
   type RecordingTelemetrySink,
 } from "../runtime/memory.js";
-import type { IdGenerator } from "../runtime/ports.js";
+import type { IdGenerator, WorktreeLocator } from "../runtime/ports.js";
 
 export * from "./fixture-adapter.js";
 export * from "./assertions.js";
@@ -78,6 +78,12 @@ export type TestHarnessOptions = {
   readonly ids?: IdGenerator;
   readonly startMillis?: number;
   readonly tickMillis?: number;
+  /**
+   * Worktree resolution for tool targets (ADR 0008). Absent by default, so the
+   * harness stays filesystem-free; pass a fake, or the filesystem locator over a
+   * temporary directory.
+   */
+  readonly worktreeLocator?: WorktreeLocator;
 };
 
 export type TestHarness = {
@@ -138,6 +144,7 @@ export const createTestHook = (options: TestHarnessOptions = {}): TestHarness =>
     ids,
     privacy,
     logger,
+    ...(options.worktreeLocator === undefined ? {} : { worktreeLocator: options.worktreeLocator }),
   });
 
   return { hook, sink, stateStore, clock, ids, privacy, logger, registry, config };

@@ -3,11 +3,13 @@ import { z } from "zod";
 import type { AttributionOutcome, AttributionReason, OtelHookErrorInfo } from "../errors/index.js";
 import { canonicalEventTypeSchema, type CanonicalEvent, type CanonicalEventType } from "../model/events.js";
 import type { IdentityClaim, InvocationIdentity } from "../model/identity.js";
+import type { TargetHint } from "../model/target.js";
 import {
   detectionConfidenceSchema,
   nonEmptyStringSchema,
   providerIdSchema,
   resolvedProviderIdSchema,
+  type EventId,
   type ProviderId,
   type ResolvedProviderId,
   type SourceTransport,
@@ -233,6 +235,12 @@ export type ProviderParseResult =
       readonly status: "parsed";
       readonly events: readonly CanonicalEvent[];
       readonly warnings?: readonly string[];
+      /**
+       * Where tool events pointed, keyed by event id (ADR 0008). The one
+       * canonical value that carries local paths: the core resolves each into
+       * the event's `target` and discards it. Use `EventFactory.targetHints()`.
+       */
+      readonly targetHints?: ReadonlyMap<EventId, TargetHint>;
     }
   /** The input was recognized but carries no telemetry. Not an error. */
   | { readonly status: "ignored"; readonly reason: string }

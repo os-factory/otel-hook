@@ -31,6 +31,7 @@ import {
   type CodexUsage,
 } from "./payload.js";
 import { CODEX_DELIVERY_GAPS, codexDeliveryIdentity } from "./delivery.js";
+import { codexTargetHint } from "./target.js";
 import { classifyCodexToolKind } from "./tool-kind.js";
 import { codexUsageToReport } from "./usage.js";
 import { CODEX_ADAPTER_VERSION, CODEX_PROVIDER_ID } from "./version.js";
@@ -274,6 +275,10 @@ const parse = (input: ProviderParseInput, context: ProviderContext): ProviderPar
     context,
   });
   const warnings: string[] = [];
+  const targetHintFor = (toolName: string, toolInput: unknown) => {
+    const hint = codexTargetHint(toolName, toolInput, payload.cwd);
+    return hint === undefined ? {} : { targetHint: hint };
+  };
 
   const buildUsage = (usage: CodexUsage | undefined): CanonicalUsage | undefined => {
     if (usage === undefined) {
@@ -328,6 +333,7 @@ const parse = (input: ProviderParseInput, context: ProviderContext): ProviderPar
         toolName: payload.tool_name,
         toolKind: classifyCodexToolKind(payload.tool_name),
         occurredAt,
+        ...targetHintFor(payload.tool_name, payload.tool_input),
         ...(payload.tool_input === undefined
           ? {}
           : {
@@ -365,6 +371,7 @@ const parse = (input: ProviderParseInput, context: ProviderContext): ProviderPar
         outcome,
         permissionDecision,
         occurredAt,
+        ...targetHintFor(payload.tool_name, payload.tool_input),
         ...(payload.duration_ms === undefined ? {} : { durationMillis: payload.duration_ms }),
         ...(payload.tool_response === undefined
           ? {}
@@ -462,10 +469,12 @@ const parse = (input: ProviderParseInput, context: ProviderContext): ProviderPar
     }
   }
 
+  const targetHints = factory.targetHints();
   return {
     status: "parsed",
     events: factory.events(),
     ...(warnings.length === 0 ? {} : { warnings }),
+    ...(targetHints.size === 0 ? {} : { targetHints }),
   };
 };
 

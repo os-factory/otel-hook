@@ -6,6 +6,7 @@ import { subagentInvocationIdFor } from "./identity.js";
 import { normalizeClaudeHookPayload } from "./payload-normalize.js";
 import { claudeHookPayloadSchema, type ClaudeUsage } from "./schema.js";
 import { extractClaudeAssistantText } from "./stop-content.js";
+import { claudeTargetHint } from "./target.js";
 import { inferToolKind } from "./tool-kind.js";
 import { extractClaudeUsage, normalizeClaudeUsage } from "./usage.js";
 
@@ -93,8 +94,15 @@ export const parseClaudeCode = (
     identity: input.identity,
     sequenceBase: input.sequenceBase,
     context,
+    // Present exactly when the hook fired inside a subagent (or describes one,
+    // on SubagentStart/SubagentStop).
+    ...(payload.agent_id === undefined ? {} : { subagentId: payload.agent_id }),
   });
   const warnings: string[] = [];
+  const targetHintFor = (toolName: string, toolInput: unknown) => {
+    const hint = claudeTargetHint(toolName, toolInput, payload.cwd);
+    return hint === undefined ? {} : { targetHint: hint };
+  };
   const withUsage = (usage: ClaudeUsage | undefined) => {
     const normalized = normalizeClaudeUsage(usage);
     warnings.push(...normalized.warnings);
@@ -133,6 +141,7 @@ export const parseClaudeCode = (
         toolCallId: payload.tool_use_id,
         toolName: payload.tool_name,
         toolKind: inferToolKind(payload.tool_name),
+        ...targetHintFor(payload.tool_name, payload.tool_input),
         ...(payload.tool_input === undefined
           ? {}
           : {
@@ -151,6 +160,7 @@ export const parseClaudeCode = (
         toolCallId: payload.tool_use_id,
         toolName: payload.tool_name,
         outcome: "ok",
+        ...targetHintFor(payload.tool_name, payload.tool_input),
         output: context.privacy.describeStructured({
           kind: "tool-output",
           value: payload.tool_response,
@@ -165,6 +175,7 @@ export const parseClaudeCode = (
         toolCallId: payload.tool_use_id,
         toolName: payload.tool_name,
         outcome: "error",
+        ...targetHintFor(payload.tool_name, payload.tool_input),
         output: context.privacy.describeStructured({
           kind: "tool-output",
           value: payload.tool_error,
@@ -294,9 +305,11 @@ export const parseClaudeCode = (
     }
   }
 
+  const targetHints = factory.targetHints();
   return {
     status: "parsed",
     events: factory.events(),
     ...(warnings.length === 0 ? {} : { warnings }),
+    ...(targetHints.size === 0 ? {} : { targetHints }),
   };
 };

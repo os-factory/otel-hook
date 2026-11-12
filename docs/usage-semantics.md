@@ -136,3 +136,22 @@ the counter regress, which surfaces as a single `resetDetected` observation
 restating the snapshot. That is indistinguishable from a genuine restart — Codex
 reuses a session id after a `/clear` — so the contract is to flag it rather than
 to guess which one happened.
+
+## Usage keys per provider
+
+A consumer that stores each usage report as an idempotent observation needs a
+stable key per billable unit and a timestamp. The generation span (and the
+`generation.end` log record) carries both: `otelhook.generation.id` and the span
+end time, which is the provider's own `occurred_at` where it sends one and the
+hook's clock reading otherwise.
+
+| Provider | Usage-bearing callback | Key (`otelhook.generation.id`) | Granularity | Temporality |
+| --- | --- | --- | --- | --- |
+| Codex | `Stop` | `turn_id` (observed on 0.163.0) | turn | `cumulative`: the session-wide running total; diff successive turns, never sum them |
+| Cursor | `stop` | `generation_id` (one per user message; `stop` fires once per generation) | generation | `delta` |
+| Claude Code | none upstream — hooks carry no tokens ([contract](claude-code-usage-contract.md)) | a harness-attached `Stop` usage is keyed by a hash of `session_id` and `prompt_id` | prompt | `delta` |
+
+Cursor's `afterAgentResponse` reports the same snapshot as `stop` and is
+deliberately not mapped, so one generation yields exactly one usage report.
+The derived per-turn delta for Codex is computed after export, for accounting
+(`UsageObservation`); spans carry the reported running total, labelled as such.

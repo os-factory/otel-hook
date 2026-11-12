@@ -1,0 +1,21 @@
+{
+  "hook_event_name": "PostToolUse",
+  "session_id": "ses-contract-claude-0002",
+  "transcript_path": "/workspace/contract-repo/.transcripts/session.jsonl",
+  "cwd": "/workspace/contract-repo",
+  "permission_mode": "acceptEdits",
+  "prompt_id": "prompt-contract-0002",
+  "agent_id": "a1b2c3d4e5f60718",
+  "agent_type": "general-purpose",
+  "tool_name": "Bash",
+  "tool_use_id": "toolu_contract_bash_0001",
+  "tool_input": {
+    "command": "npm test",
+    "description": "Run the synthetic test suite"
+  },
+  "tool_response": {
+    "stdout": "synthetic test output",
+    "stderr": "",
+    "interrupted": false
+  }
+}

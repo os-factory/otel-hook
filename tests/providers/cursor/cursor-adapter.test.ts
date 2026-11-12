@@ -531,7 +531,6 @@ describe("cursor adapter: generation.end comes from stop", () => {
 describe("cursor adapter: events recognized but deliberately not mapped", () => {
   const ignoredCases = [
     { name: "afterAgentThought", payload: afterAgentThoughtPayload() },
-    { name: "beforeReadFile", payload: beforeReadFilePayload() },
     { name: "subagentStart", payload: subagentStartPayload() },
     { name: "subagentStop", payload: subagentStopPayload() },
   ];
@@ -547,6 +546,19 @@ describe("cursor adapter: events recognized but deliberately not mapped", () => 
       expect(outcome.hookResponse.exitCode).toBe(0);
     });
   }
+
+  it("maps beforeReadFile to a closed read_file pair whose outcome is unknown", async () => {
+    const harness = harnessWithCursor();
+    const outcome = await ingest(harness, beforeReadFilePayload());
+    expect(outcome.attribution).toBe("attributed");
+    const start = eventOfType(harness.sink.events(), "tool.start");
+    const end = eventOfType(harness.sink.events(), "tool.end");
+    expect(start.toolName).toBe("read_file");
+    expect(start.toolKind).toBe("read");
+    expect(end.toolCallId).toBe(start.toolCallId);
+    // The read has not happened yet when this hook fires; another hook may refuse it.
+    expect(end.outcome).toBe("unknown");
+  });
 
   it("never exports the thought text or the file content it declined to map", async () => {
     const harness = harnessWithCursor();

@@ -8,6 +8,7 @@ import {
 import { contentFactSchema, contentFactsSchema } from "./content.js";
 import { extensionsSchema, emptyExtensions } from "./extensions.js";
 import { sourceProvenanceSchema, workspaceIdentitySchema } from "./identity.js";
+import { subagentIdSchema, workspaceTargetSchema } from "./target.js";
 import {
   durationMillisSchema,
   epochMillisSchema,
@@ -74,6 +75,12 @@ const baseEventFields = {
   occurredAt: epochMillisSchema,
   provenance: sourceProvenanceSchema,
   workspace: workspaceIdentitySchema,
+  /**
+   * The provider's own id for the subagent this event was emitted inside (e.g.
+   * Claude Code's `agent_id`). Absent for the top-level agent. Set by the event
+   * factory, never by hand.
+   */
+  subagentId: subagentIdSchema.optional(),
   extensions: extensionsSchema.default(emptyExtensions),
 } as const;
 
@@ -143,6 +150,8 @@ export const toolStartEventSchema = event({
   toolKind: toolKindSchema,
   generationId: nonEmptyStringSchema.optional(),
   input: contentFactSchema.optional(),
+  /** The git worktree this call targeted, resolved by the core (ADR 0008). */
+  target: workspaceTargetSchema.optional(),
 });
 
 export const toolEndEventSchema = event({
@@ -154,6 +163,8 @@ export const toolEndEventSchema = event({
   /** Present when the host asked for or recorded a permission decision. */
   permissionDecision: z.enum(["allowed", "denied", "deferred", "not-required"]).optional(),
   output: contentFactSchema.optional(),
+  /** The git worktree this call targeted, resolved by the core (ADR 0008). */
+  target: workspaceTargetSchema.optional(),
 });
 
 export const subagentStartEventSchema = event({
