@@ -1,3 +1,10 @@
+## [0.4.1](https://github.com/os-factory/otel-hook/compare/v0.4.0...v0.4.1) (2026-11-13)
+
+
+### Bug Fixes
+
+* **release:** publish to npm with Trusted Publishing ([#41](https://github.com/os-factory/otel-hook/issues/41)) ([cb0536f](https://github.com/os-factory/otel-hook/commit/cb0536f6bea31c89cc17b736d7f1edd86916f6d8))
+
 # [0.4.0](https://github.com/os-factory/otel-hook/compare/v0.3.0...v0.4.0) (2026-11-12)
 
 
