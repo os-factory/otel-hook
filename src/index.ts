@@ -8,6 +8,7 @@ export * from "./public/lifecycle.js";
 export * from "./public/state.js";
 export * from "./public/telemetry.js";
 export * from "./public/diagnostics.js";
+export * from "./public/semconv.js";
 export * from "./integration/index.js";
 export * from "./install/index.js";
 

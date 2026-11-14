@@ -18,6 +18,7 @@ export default defineConfig([
       state: "src/public/state.ts",
       telemetry: "src/public/telemetry.ts",
       diagnostics: "src/public/diagnostics.ts",
+      semconv: "src/public/semconv.ts",
       integration: "src/integration/index.ts",
       install: "src/install/index.ts",
     },
@@ -30,6 +31,9 @@ export default defineConfig([
   {
     entry: { cli: "src/cli.ts" },
     format: ["esm"],
+    // The OpenTelemetry SDK is an optional peer of the library entries, so the
+    // binary carries its own copy: `npx` and global installs need nothing else.
+    noExternal: [/^@opentelemetry\//],
     // src/cli.ts already starts with its own "#!/usr/bin/env node"; a banner
     // here would duplicate it, producing a second shebang line that isn't
     // valid JS and breaks the built binary (caught by tests/packaging).

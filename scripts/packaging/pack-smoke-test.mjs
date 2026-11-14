@@ -40,6 +40,24 @@ const readPackageJson = async () =>
 const exportSpecifiers = (pkg) =>
   Object.keys(pkg.exports).map((key) => (key === "." ? pkg.name : `${pkg.name}${key.slice(1)}`));
 
+/** Subpaths that load the OpenTelemetry SDK, an optional peer; every other one must load without it. */
+const PEER_SUBPATHS = new Set([".", "./lifecycle", "./telemetry", "./integration"]);
+const needsPeers = (pkg, specifier) =>
+  PEER_SUBPATHS.has(specifier === pkg.name ? "." : `.${specifier.slice(pkg.name.length)}`);
+
+const importAndCount = async (specifier, cwd) => {
+  const { stdout } = await execFileAsync(
+    process.execPath,
+    ["--input-type=module", "-e", `import * as mod from ${JSON.stringify(specifier)}; console.log(Object.keys(mod).length);`],
+    { cwd },
+  );
+  const exportCount = Number(stdout.trim());
+  if (!(exportCount > 0)) {
+    throw new Error(`import("${specifier}") resolved but exposed no exports`);
+  }
+  return `import ${specifier}: ok (${String(exportCount)} exports)`;
+};
+
 const runSmokeTest = async ({ skipBuild = false } = {}) => {
   const steps = [];
   const pkg = await readPackageJson();
@@ -86,17 +104,15 @@ const runSmokeTest = async ({ skipBuild = false } = {}) => {
     });
     steps.push("install: ok (installed from packed tarball, not the workspace source)");
 
-    for (const specifier of exportSpecifiers(pkg)) {
-      const { stdout } = await execFileAsync(
-        process.execPath,
-        ["--input-type=module", "-e", `import * as mod from ${JSON.stringify(specifier)}; console.log(Object.keys(mod).length);`],
-        { cwd: consumerDir },
-      );
-      const exportCount = Number(stdout.trim());
-      if (!(exportCount > 0)) {
-        throw new Error(`import("${specifier}") resolved but exposed no exports`);
-      }
-      steps.push(`import ${specifier}: ok (${String(exportCount)} exports)`);
+    // The optional OpenTelemetry peers must not be installed with the package:
+    // the light subpaths and the binary below run without them.
+    if (await pathExists(path.join(consumerDir, "node_modules", "@opentelemetry"))) {
+      throw new Error("installing the tarball pulled in @opentelemetry packages");
+    }
+    steps.push("install: no @opentelemetry packages");
+
+    for (const specifier of exportSpecifiers(pkg).filter((specifier) => !needsPeers(pkg, specifier))) {
+      steps.push(await importAndCount(specifier, consumerDir));
     }
 
     if (pkg.bin) {
@@ -210,6 +226,21 @@ const runSmokeTest = async ({ skipBuild = false } = {}) => {
         }
         steps.push(`bin ${binName} setup --provider antigravity: unsupported, exit 1`);
       }
+    }
+
+    // A library host installs the peers itself; then every subpath loads.
+    await runNpm(
+      [
+        "install",
+        "--no-audit",
+        "--no-fund",
+        ...Object.entries(pkg.peerDependencies ?? {}).map(([name, range]) => `${name}@${range}`),
+      ],
+      { cwd: consumerDir },
+    );
+    steps.push("install peers: ok");
+    for (const specifier of exportSpecifiers(pkg).filter((specifier) => needsPeers(pkg, specifier))) {
+      steps.push(await importAndCount(specifier, consumerDir));
     }
 
     return { ok: true, steps };

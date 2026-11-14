@@ -125,6 +125,10 @@ appear together or not at all; the others only alongside them, when known.
 | `otelhook.target.worktree.kind` | `main` (the repository's main checkout) \| `linked` (a `git worktree add` checkout) |
 | `otelhook.target.repository.id` | salted handle of the repository's main worktree root, derived exactly like a `git-root` workspace id: equal to `otelhook.target.workspace.id` on a main worktree, and shared by every linked worktree of that repository. Absent when there is no main worktree to name (a bare repository, a main checkout that is gone); never a path |
 
+A `linked` target without `otelhook.target.repository.id` can still belong to the same
+repository as some main checkout (a `--separate-git-dir` main checkout, or one that was
+deleted), so a missing repository id never means "a different repository".
+
 Per provider, from its hook payload:
 
 | Provider | `tool-path` | `shell-cwd` | `session-cwd` |

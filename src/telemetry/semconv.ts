@@ -29,6 +29,8 @@ import {
   ATTR_OTELHOOK_TARGET_WORKSPACE_ID,
   ATTR_OTELHOOK_TARGET_WORKTREE_KIND,
   ATTR_VCS_REF_HEAD_NAME,
+} from "./attribute-names.js";
+import {
   exportIdentityAttributes,
   targetAttributes,
   usageTemporalityAttributes,

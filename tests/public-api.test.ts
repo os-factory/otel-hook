@@ -7,6 +7,7 @@ import * as providers from "../src/providers/index.js";
 import * as testing from "../src/testing/index.js";
 import * as diagnostics from "../src/public/diagnostics.js";
 import * as lifecycle from "../src/public/lifecycle.js";
+import * as semconv from "../src/public/semconv.js";
 import * as state from "../src/public/state.js";
 import * as telemetry from "../src/public/telemetry.js";
 import * as install from "../src/install/index.js";
@@ -125,6 +126,16 @@ describe("public surface", () => {
     expect(typeof diagnostics.summarizeHealth).toBe("function");
     expect(typeof integration.createHookRuntime).toBe("function");
     expect(typeof install.planProviderRegistration).toBe("function");
+  });
+
+  it("publishes the record attribute names on a dependency-free subpath", () => {
+    expect(semconv.ATTR_OTELHOOK_WORKSPACE_ID).toBe("otelhook.workspace.id");
+    expect(semconv.ATTR_OTELHOOK_TARGET_WORKSPACE_ID).toBe("otelhook.target.workspace.id");
+    expect(semconv.ATTR_OTELHOOK_TARGET_SOURCE).toBe("otelhook.target.source");
+    expect(semconv.ATTR_OTELHOOK_TARGET_REPOSITORY_ID).toBe("otelhook.target.repository.id");
+    expect(semconv.ATTR_OTELHOOK_TARGET_WORKTREE_KIND).toBe("otelhook.target.worktree.kind");
+    expect(semconv.ATTR_VCS_REF_HEAD_NAME).toBe("vcs.ref.head.name");
+    expect(library.ATTR_OTELHOOK_TARGET_REPOSITORY_ID).toBe(semconv.ATTR_OTELHOOK_TARGET_REPOSITORY_ID);
   });
 
   it("versions the canonical log mapping and freezes its signal vocabulary", () => {
