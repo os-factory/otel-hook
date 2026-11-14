@@ -199,6 +199,8 @@ describe("cross-process span correlation", () => {
       workspaceId: "gitroot:00000000000000aa",
       vcsBranchName: "har-slot-7",
       source: "shell-cwd",
+      repositoryId: "gitroot:00000000000000a0",
+      worktreeKind: "linked",
     };
     const sessionTarget = {
       workspaceId: "gitroot:00000000000000bb",
@@ -220,6 +222,8 @@ describe("cross-process span correlation", () => {
     expect(closed?.attributes["otelhook.target.source"]).toBe("shell-cwd");
     expect(closed?.attributes["otelhook.target.workspace.id"]).toBe("gitroot:00000000000000aa");
     expect(closed?.attributes["vcs.ref.head.name"]).toBe("har-slot-7");
+    expect(closed?.attributes["otelhook.target.repository.id"]).toBe("gitroot:00000000000000a0");
+    expect(closed?.attributes["otelhook.target.worktree.kind"]).toBe("linked");
   });
 
   it("lets an end edge with stronger evidence replace the start's target as one unit", async () => {
@@ -228,11 +232,18 @@ describe("cross-process span correlation", () => {
 
     await startProcess(rootDir, collector.url).emit([
       toolStartEvent("inv_start", {
-        target: { workspaceId: "gitroot:00000000000000bb", vcsBranchName: "main", source: "session-cwd" },
+        target: {
+          workspaceId: "gitroot:00000000000000bb",
+          vcsBranchName: "main",
+          source: "session-cwd",
+          repositoryId: "gitroot:00000000000000bb",
+          worktreeKind: "main",
+        },
       }),
     ]);
-    // Detached HEAD on the end's worktree: no branch. The start's branch must not
-    // survive next to the end's workspace id.
+    // Detached HEAD on the end's worktree, whose locator told nothing about its
+    // repository. The start's branch, repository, and kind must not survive next
+    // to the end's workspace id.
     await startProcess(rootDir, collector.url).emit([
       toolEndEvent("inv_end", {
         target: { workspaceId: "gitroot:00000000000000cc", source: "tool-path" },
@@ -243,6 +254,8 @@ describe("cross-process span correlation", () => {
     expect(closed?.attributes["otelhook.target.source"]).toBe("tool-path");
     expect(closed?.attributes["otelhook.target.workspace.id"]).toBe("gitroot:00000000000000cc");
     expect(closed?.attributes["vcs.ref.head.name"]).toBeUndefined();
+    expect(closed?.attributes["otelhook.target.repository.id"]).toBeUndefined();
+    expect(closed?.attributes["otelhook.target.worktree.kind"]).toBeUndefined();
   });
 
   it("reports an error status and outcome from the end process alone", async () => {

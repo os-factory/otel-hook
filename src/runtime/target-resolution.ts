@@ -11,8 +11,9 @@ import type { LocatedWorktree, WorktreeLocator } from "./ports.js";
  * Turns adapters' target hints into exported worktree targets (ADR 0008).
  *
  * This is where local paths stop. A hint's paths are resolved to a worktree
- * root and branch through the injected {@link WorktreeLocator}; only the salted
- * `git-root` handle of that root and the branch name survive onto the event.
+ * root, branch, and repository through the injected {@link WorktreeLocator};
+ * only salted `git-root` handles of the root and of its repository's main
+ * worktree, the worktree's kind, and the branch name survive onto the event.
  *
  * Fail-open in both directions that matter: a slow or failing filesystem costs
  * the event its target, never the event — and never the host more than the
@@ -66,10 +67,18 @@ const resolveHint = async (
   if (identity.keySource !== "git-root") {
     return undefined;
   }
+  // The repository is named by its main worktree, as that worktree would name
+  // itself — so a main worktree's repository id is its own workspace id.
+  const repository =
+    first.mainRoot === undefined
+      ? undefined
+      : deriveWorkspaceIdentity(privacy, { kind: "git-root", absolutePath: first.mainRoot });
   const parsed = workspaceTargetSchema.safeParse({
     workspaceId: identity.workspaceId,
     ...(identity.vcsBranchName === undefined ? {} : { vcsBranchName: identity.vcsBranchName }),
     source: hint.source,
+    ...(repository?.keySource === "git-root" ? { repositoryId: repository.workspaceId } : {}),
+    ...(first.kind === undefined ? {} : { worktreeKind: first.kind }),
   });
   return parsed.success ? parsed.data : undefined;
 };

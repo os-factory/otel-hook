@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -15,6 +15,7 @@ import { claudeTargetHint } from "../../src/providers/claude/target.js";
 import { codexTargetHint, patchHeaderPaths } from "../../src/providers/codex/target.js";
 import {
   createFilesystemWorktreeLocator,
+  parseCommonDirFile,
   parseGitDirFile,
   parseHeadBranch,
 } from "../../src/runtime/git-worktree.js";
@@ -50,6 +51,13 @@ describe("git file parsing", () => {
     expect(parseGitDirFile("gitdir:" + " ".repeat(50_000) + "\n", "/wt")).toBeUndefined();
     expect(parseGitDirFile("not a gitdir\n", "/wt")).toBeUndefined();
   });
+
+  it("resolves a commondir file against the git dir", () => {
+    expect(parseCommonDirFile("../..\n", "/repo/.git/worktrees/a")).toBe(path.resolve("/repo/.git"));
+    expect(parseCommonDirFile("/srv/bare.git\n", "/x")).toBe(path.resolve("/srv/bare.git"));
+    expect(parseCommonDirFile("\n", "/x")).toBeUndefined();
+    expect(parseCommonDirFile("a\u0000b\n", "/x")).toBeUndefined();
+  });
 });
 
 describe("filesystem worktree locator", () => {
@@ -58,6 +66,10 @@ describe("filesystem worktree locator", () => {
   let linked = "";
   let detached = "";
   let broken = "";
+  let orphan = "";
+  let bareLinked = "";
+  let submodule = "";
+  let inner = "";
 
   beforeAll(async () => {
     root = await mkdtemp(path.join(tmpdir(), "otel-hook-locator-"));
@@ -81,6 +93,39 @@ describe("filesystem worktree locator", () => {
     await writeFile(path.join(linked, ".git"), "gitdir: ../repo/.git/worktrees/slot\n");
     await writeFile(path.join(detached, ".git"), `gitdir: ${path.join(main, ".git", "worktrees", "detached")}\n`);
     await writeFile(path.join(broken, ".git"), "gitdir: /nonexistent/otel-hook/gitdir\n");
+    // `git worktree add` writes a commondir into every linked worktree's git dir.
+    await writeFile(path.join(main, ".git", "worktrees", "slot", "commondir"), "../..\n");
+    await writeFile(path.join(main, ".git", "worktrees", "detached", "commondir"), "../..\n");
+
+    // A linked worktree whose git dir survived its main checkout's `.git`.
+    orphan = path.join(root, "orphan");
+    const orphanGitDir = path.join(root, "orphan-gitdir");
+    await mkdir(orphan, { recursive: true });
+    await mkdir(orphanGitDir, { recursive: true });
+    await writeFile(path.join(orphan, ".git"), `gitdir: ${orphanGitDir}\n`);
+    await writeFile(path.join(orphanGitDir, "HEAD"), "ref: refs/heads/orphaned\n");
+    await writeFile(path.join(orphanGitDir, "commondir"), "../gone/.git\n");
+
+    // A linked worktree of a bare repository: its common dir has no checkout.
+    bareLinked = path.join(root, "bare-wt");
+    const bareGitDir = path.join(root, "bare.git", "worktrees", "wt");
+    await mkdir(bareLinked, { recursive: true });
+    await mkdir(bareGitDir, { recursive: true });
+    await writeFile(path.join(bareLinked, ".git"), `gitdir: ${bareGitDir}\n`);
+    await writeFile(path.join(bareGitDir, "HEAD"), "ref: refs/heads/wt\n");
+    await writeFile(path.join(bareGitDir, "commondir"), "../..\n");
+
+    // A submodule: a `.git` file into the superproject's `.git/modules`, no commondir.
+    submodule = path.join(main, "vendor", "lib");
+    await mkdir(path.join(main, ".git", "modules", "lib"), { recursive: true });
+    await mkdir(submodule, { recursive: true });
+    await writeFile(path.join(submodule, ".git"), "gitdir: ../../.git/modules/lib\n");
+    await writeFile(path.join(main, ".git", "modules", "lib", "HEAD"), "ref: refs/heads/lib-main\n");
+
+    // A repository nested inside another's working tree.
+    inner = path.join(main, "vendor", "inner");
+    await mkdir(path.join(inner, ".git"), { recursive: true });
+    await writeFile(path.join(inner, ".git", "HEAD"), "ref: refs/heads/inner-main\n");
   });
 
   afterAll(async () => {
@@ -91,16 +136,71 @@ describe("filesystem worktree locator", () => {
     const located = await createFilesystemWorktreeLocator().locate(
       path.join(main, "src", "deep", "new-file.ts"),
     );
-    expect(located).toEqual({ root: main, branch: "main" });
+    expect(located).toEqual({ root: main, branch: "main", kind: "main", mainRoot: main });
   });
 
   it("finds a linked worktree through its .git file, not the repository it belongs to", async () => {
     const located = await createFilesystemWorktreeLocator().locate(path.join(linked, "src", "a.ts"));
-    expect(located).toEqual({ root: linked, branch: "slot-branch" });
+    expect(located).toEqual({ root: linked, branch: "slot-branch", kind: "linked", mainRoot: main });
   });
 
+  it("names no main worktree for a linked worktree whose main checkout is gone", async () => {
+    expect(await createFilesystemWorktreeLocator().locate(orphan)).toEqual({
+      root: orphan,
+      branch: "orphaned",
+      kind: "linked",
+    });
+  });
+
+  it("names no main worktree for a linked worktree of a bare repository", async () => {
+    expect(await createFilesystemWorktreeLocator().locate(bareLinked)).toEqual({
+      root: bareLinked,
+      branch: "wt",
+      kind: "linked",
+    });
+  });
+
+  it("reports a submodule as its own main worktree, not a linked worktree of the superproject", async () => {
+    expect(await createFilesystemWorktreeLocator().locate(path.join(submodule, "x.ts"))).toEqual({
+      root: submodule,
+      branch: "lib-main",
+      kind: "main",
+      mainRoot: submodule,
+    });
+  });
+
+  it("lets the innermost repository win", async () => {
+    expect(await createFilesystemWorktreeLocator().locate(path.join(inner, "x.ts"))).toEqual({
+      root: inner,
+      branch: "inner-main",
+      kind: "main",
+      mainRoot: inner,
+    });
+  });
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "keeps a linked worktree linked when its commondir is unreadable",
+    async () => {
+      const commonDirFile = path.join(main, ".git", "worktrees", "slot", "commondir");
+      await chmod(commonDirFile, 0o000);
+      try {
+        expect(await createFilesystemWorktreeLocator().locate(linked)).toEqual({
+          root: linked,
+          branch: "slot-branch",
+          kind: "linked",
+        });
+      } finally {
+        await chmod(commonDirFile, 0o644);
+      }
+    },
+  );
+
   it("reports a detached HEAD as a worktree without a branch", async () => {
-    expect(await createFilesystemWorktreeLocator().locate(detached)).toEqual({ root: detached });
+    expect(await createFilesystemWorktreeLocator().locate(detached)).toEqual({
+      root: detached,
+      kind: "linked",
+      mainRoot: main,
+    });
   });
 
   it("does not skip a broken worktree to reach an enclosing one", async () => {
@@ -136,11 +236,15 @@ describe("filesystem worktree locator", () => {
     }
   })();
 
-  it.skipIf(!gitAvailable)("agrees with git itself on a real `git worktree add`", async () => {
-    const realRoot = await mkdtemp(path.join(tmpdir(), "otel-hook-realgit-"));
+  it.skipIf(!gitAvailable)("agrees with git on real worktrees, a bare repository, and a submodule", async () => {
+    // Real paths: git records them resolved, and macOS's temp dir is a symlink.
+    const realRoot = await realpath(await mkdtemp(path.join(tmpdir(), "otel-hook-realgit-")));
     try {
       const repo = path.join(realRoot, "checkout");
       const worktree = path.join(realRoot, "checkout-slot-1");
+      const library = path.join(realRoot, "library");
+      const bare = path.join(realRoot, "bare.git");
+      const bareWorktree = path.join(realRoot, "bare-slot");
       const git = (cwd: string, ...args: string[]): void => {
         execFileSync("git", args, {
           cwd,
@@ -155,15 +259,41 @@ describe("filesystem worktree locator", () => {
         });
       };
       await mkdir(repo);
+      await mkdir(library);
+      git(library, "init", "-q", "-b", "lib-main");
+      git(library, "commit", "-q", "--allow-empty", "-m", "init");
       git(repo, "init", "-q", "-b", "trunk");
       git(repo, "commit", "-q", "--allow-empty", "-m", "init");
-      git(repo, "worktree", "add", "-q", "-b", "har-agent-1", worktree);
+      git(repo, "worktree", "add", "-q", "-b", "agent-1", worktree);
+      git(repo, "-c", "protocol.file.allow=always", "submodule", "add", "-q", library, "vendor/library");
+      git(realRoot, "clone", "-q", "--bare", repo, bare);
+      git(bare, "worktree", "add", "-q", "-b", "bare-agent", bareWorktree);
+
       const locator = createFilesystemWorktreeLocator();
       expect(await locator.locate(path.join(worktree, "src", "x.ts"))).toEqual({
         root: worktree,
-        branch: "har-agent-1",
+        branch: "agent-1",
+        kind: "linked",
+        mainRoot: repo,
       });
-      expect(await locator.locate(path.join(repo, "README.md"))).toEqual({ root: repo, branch: "trunk" });
+      expect(await locator.locate(path.join(repo, "README.md"))).toEqual({
+        root: repo,
+        branch: "trunk",
+        kind: "main",
+        mainRoot: repo,
+      });
+      const submodule = path.join(repo, "vendor", "library");
+      // Branch left out: whether a fresh submodule is on one depends on git's version.
+      expect(await locator.locate(path.join(submodule, "x.ts"))).toMatchObject({
+        root: submodule,
+        kind: "main",
+        mainRoot: submodule,
+      });
+      expect(await locator.locate(bareWorktree)).toEqual({
+        root: bareWorktree,
+        branch: "bare-agent",
+        kind: "linked",
+      });
     } finally {
       await rm(realRoot, { recursive: true, force: true });
     }
@@ -197,7 +327,15 @@ describe("resolveEventTargets", () => {
   // hint paths with the platform's `path`, so the fake does the same.
   const fakeLocator = (table: Record<string, LocatedWorktree>, delayMillis = 0): WorktreeLocator => {
     const native = Object.entries(table).map(
-      ([prefix, worktree]) => [path.resolve(prefix), { ...worktree, root: path.resolve(worktree.root) }] as const,
+      ([prefix, worktree]) =>
+        [
+          path.resolve(prefix),
+          {
+            ...worktree,
+            root: path.resolve(worktree.root),
+            ...(worktree.mainRoot === undefined ? {} : { mainRoot: path.resolve(worktree.mainRoot) }),
+          },
+        ] as const,
     );
     return {
       locate: async (absolutePath) => {
@@ -236,6 +374,38 @@ describe("resolveEventTargets", () => {
     });
     // Only tool events are ever touched.
     expect(events[1]).not.toHaveProperty("target");
+  });
+
+  it("names the repository by its main worktree's git-root id, shared by its linked worktrees", async () => {
+    const gitRootId = (root: string) =>
+      deriveWorkspaceIdentity(privacy, { kind: "git-root", absolutePath: path.resolve(root) }).workspaceId;
+    const locator = fakeLocator({
+      "/w/repo": { root: "/w/repo", branch: "main", kind: "main", mainRoot: "/w/repo" },
+      "/w/slot": { root: "/w/slot", branch: "s", kind: "linked", mainRoot: "/w/repo" },
+      "/w/orphan": { root: "/w/orphan", kind: "linked" },
+    });
+    const main = targetOf((await resolve({ source: "tool-path", paths: ["/w/repo/a.ts"] }, locator)).events);
+    const linked = targetOf((await resolve({ source: "tool-path", paths: ["/w/slot/a.ts"] }, locator)).events);
+    const orphan = targetOf(
+      (await resolve({ source: "tool-path", paths: ["/w/orphan/a.ts"] }, locator)).events,
+    );
+
+    expect(main).toMatchObject({
+      workspaceId: gitRootId("/w/repo"),
+      repositoryId: gitRootId("/w/repo"),
+      worktreeKind: "main",
+    });
+    expect(linked).toMatchObject({
+      workspaceId: gitRootId("/w/slot"),
+      repositoryId: gitRootId("/w/repo"),
+      worktreeKind: "linked",
+    });
+    // No main worktree to name: the kind is still known, the repository is not guessed.
+    expect(orphan).toEqual({
+      workspaceId: gitRootId("/w/orphan"),
+      source: "tool-path",
+      worktreeKind: "linked",
+    });
   });
 
   it("gives no target when paths land in two worktrees", async () => {
