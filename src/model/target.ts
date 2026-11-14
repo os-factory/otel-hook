@@ -16,8 +16,9 @@ import { nonEmptyStringSchema, workspaceIdSchema } from "./primitives.js";
  * - {@link TargetHint} is what an adapter observed — local paths. It is an
  *   in-process value only: it is never part of a {@link CanonicalEvent}, never
  *   persisted, never exported. The core resolves it and drops it.
- * - {@link WorkspaceTarget} is what the core resolved — a salted worktree handle,
- *   the checked-out branch, and what the evidence was. It travels on the event.
+ * - {@link WorkspaceTarget} is what the core resolved — salted handles of the
+ *   worktree and its repository, the worktree's kind, the checked-out branch, and
+ *   what the evidence was. It travels on the event.
  */
 
 /**
@@ -62,10 +63,20 @@ export const targetHintSchema = z
 export type TargetHint = z.infer<typeof targetHintSchema>;
 
 /**
+ * Whether a worktree is its repository's main checkout (`main`) or one added
+ * beside it with `git worktree add` (`linked`).
+ */
+export const worktreeKindSchema = z.enum(["main", "linked"]);
+export type WorktreeKind = z.infer<typeof worktreeKindSchema>;
+
+/**
  * The git worktree a tool event targeted. Exported; carries no path.
  *
  * `workspaceId` is derived exactly like a `git-root` workspace identity, so a
  * consumer holding the same salt can match it against one it derived itself.
+ * `repositoryId` is the same derivation applied to the repository's main
+ * worktree, so every worktree of one repository shares it — and for a main
+ * worktree it equals `workspaceId`.
  */
 export const workspaceTargetSchema = z
   .strictObject({
@@ -73,6 +84,9 @@ export const workspaceTargetSchema = z
     /** Branch checked out in that worktree; absent on a detached HEAD. */
     vcsBranchName: nonEmptyStringSchema.optional(),
     source: targetSourceSchema,
+    /** `git-root` handle of the repository's main worktree; absent when there is none to name. */
+    repositoryId: workspaceIdSchema.optional(),
+    worktreeKind: worktreeKindSchema.optional(),
   })
   .readonly();
 export type WorkspaceTarget = z.infer<typeof workspaceTargetSchema>;

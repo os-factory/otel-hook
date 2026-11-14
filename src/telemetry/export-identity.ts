@@ -43,11 +43,14 @@ export const ATTR_OTELHOOK_SUBAGENT_ID = "otelhook.subagent.id";
 
 /**
  * Worktree a tool event targeted (ADR 0008). Branch under the OTel VCS
- * attribute; the worktree root only as a salted `git-root` handle.
+ * attribute; the worktree root, and its repository's main worktree root, only
+ * as salted `git-root` handles.
  */
 export const ATTR_VCS_REF_HEAD_NAME = "vcs.ref.head.name";
 export const ATTR_OTELHOOK_TARGET_WORKSPACE_ID = "otelhook.target.workspace.id";
 export const ATTR_OTELHOOK_TARGET_SOURCE = "otelhook.target.source";
+export const ATTR_OTELHOOK_TARGET_REPOSITORY_ID = "otelhook.target.repository.id";
+export const ATTR_OTELHOOK_TARGET_WORKTREE_KIND = "otelhook.target.worktree.kind";
 
 /** Whether `gen_ai.usage.*` on this record is a delta or a running total. */
 export const ATTR_OTELHOOK_USAGE_TEMPORALITY = "otelhook.usage.temporality";
@@ -62,6 +65,12 @@ export const targetAttributes = (event: CanonicalEvent): Attributes => {
     [ATTR_OTELHOOK_TARGET_WORKSPACE_ID]: target.workspaceId,
     [ATTR_OTELHOOK_TARGET_SOURCE]: target.source,
     ...(target.vcsBranchName === undefined ? {} : { [ATTR_VCS_REF_HEAD_NAME]: target.vcsBranchName }),
+    ...(target.repositoryId === undefined
+      ? {}
+      : { [ATTR_OTELHOOK_TARGET_REPOSITORY_ID]: target.repositoryId }),
+    ...(target.worktreeKind === undefined
+      ? {}
+      : { [ATTR_OTELHOOK_TARGET_WORKTREE_KIND]: target.worktreeKind }),
   };
 };
 

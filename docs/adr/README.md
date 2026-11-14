@@ -9,7 +9,7 @@
 | [0005](0005-central-privacy-service.md)        | One central privacy service, content omitted by default      |
 | [0006](0006-injected-state-and-telemetry.md)   | State, telemetry, clock, ids, and logging are injected       |
 | [0007](0007-replay-stable-delivery-deduplication.md) | Replay-stable delivery deduplication, at most once     |
-| [0008](0008-per-event-worktree-target.md)      | The core resolves which git worktree a tool event targeted   |
+| [0008](0008-per-event-worktree-target.md)      | The core resolves which git worktree (and repository) a tool event targeted |
 
 Related references: [usage semantics](../usage-semantics.md),
 [registration evidence](../registration-evidence.md).

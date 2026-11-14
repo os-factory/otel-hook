@@ -11,6 +11,7 @@ import {
   type EventId,
   type InvocationId,
 } from "../model/primitives.js";
+import type { WorktreeKind } from "../model/target.js";
 import { canonicalUsageSchema } from "../model/usage.js";
 
 /**
@@ -174,6 +175,14 @@ export type LocatedWorktree = {
   readonly root: string;
   /** Branch checked out there, from `HEAD`; absent when HEAD is detached. */
   readonly branch?: string;
+  /** Main checkout or linked worktree; absent when the locator does not tell. */
+  readonly kind?: WorktreeKind;
+  /**
+   * Absolute path of the repository's main worktree — `root` itself for a main
+   * worktree. Absent when there is none to name: a bare repository, a main
+   * checkout that is gone, or a layout the locator cannot read.
+   */
+  readonly mainRoot?: string;
 };
 
 /**
