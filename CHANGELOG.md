@@ -1,3 +1,10 @@
+# [0.5.0](https://github.com/os-factory/otel-hook/compare/v0.4.1...v0.5.0) (2026-11-15)
+
+
+### Features
+
+* export the repository and worktree kind of each tool event's target ([#42](https://github.com/os-factory/otel-hook/issues/42)) ([dd94535](https://github.com/os-factory/otel-hook/commit/dd945359063226e6bd36747e39ebf0936714e9de))
+
 ## [0.4.1](https://github.com/os-factory/otel-hook/compare/v0.4.0...v0.4.1) (2026-11-13)
 
 
