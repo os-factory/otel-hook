@@ -93,6 +93,8 @@ export const sessionStartEventSchema = event({
   agentName: nonEmptyStringSchema.optional(),
   agentVersion: nonEmptyStringSchema.optional(),
   model: modelDescriptorSchema.optional(),
+  /** The git worktree the session runs in, resolved by the core (ADR 0008). */
+  target: workspaceTargetSchema.optional(),
 });
 
 export const sessionEndEventSchema = event({
@@ -109,6 +111,8 @@ export const promptSubmittedEventSchema = event({
   promptSource: z.enum(["user", "automation", "resumed", "unknown"]),
   content: contentFactSchema.optional(),
   turnIndex: z.number().int().min(0).optional(),
+  /** The git worktree the session runs in, resolved by the core (ADR 0008). */
+  target: workspaceTargetSchema.optional(),
 });
 
 export const generationStartEventSchema = event({
@@ -239,6 +243,19 @@ export type CanonicalEventOfType<TType extends CanonicalEventType> = Extract<
   CanonicalEvent,
   { type: TType }
 >;
+
+/**
+ * The event types that may carry a resolved `target` (ADR 0008): a tool call
+ * names the worktree it touched; a session start and a prompt name the one the
+ * session runs in, so a consumer knows the session's place before its first
+ * tool call.
+ */
+export const TARGETED_EVENT_TYPES = ["session.start", "prompt.submitted", "tool.start", "tool.end"] as const;
+export type TargetedEventType = (typeof TARGETED_EVENT_TYPES)[number];
+export type TargetedEvent = CanonicalEventOfType<TargetedEventType>;
+
+const TARGETED: ReadonlySet<string> = new Set(TARGETED_EVENT_TYPES);
+export const isTargetedEvent = (event: CanonicalEvent): event is TargetedEvent => TARGETED.has(event.type);
 
 export type EventValidationResult =
   | { readonly status: "ok"; readonly event: CanonicalEvent }

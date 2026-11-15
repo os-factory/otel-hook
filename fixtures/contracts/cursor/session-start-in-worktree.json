@@ -1,0 +1,15 @@
+{
+  "conversation_id": "conv-contract-cursor-0002",
+  "generation_id": "gen-contract-cursor-0002",
+  "session_id": "conv-contract-cursor-0002",
+  "model": "composer-2.5-fast",
+  "cursor_version": "3.12.17",
+  "workspace_roots": [
+    "/workspace/contract-repo-slot-7"
+  ],
+  "user_email": "synthetic@example.invalid",
+  "transcript_path": "/workspace/.cursor/transcripts/synthetic-2.jsonl",
+  "hook_event_name": "sessionStart",
+  "is_background_agent": false,
+  "composer_mode": "agent"
+}

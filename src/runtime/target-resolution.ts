@@ -1,6 +1,6 @@
 import * as path from "node:path";
 
-import type { CanonicalEvent } from "../model/events.js";
+import { isTargetedEvent, type CanonicalEvent } from "../model/events.js";
 import type { EventId } from "../model/primitives.js";
 import { workspaceTargetSchema, type TargetHint, type WorkspaceTarget } from "../model/target.js";
 import type { PrivacyService } from "../privacy/service.js";
@@ -100,17 +100,14 @@ export type ResolveEventTargetsResult = {
 };
 
 /**
- * Attach a `target` to each tool event that has a resolvable hint. Never
+ * Attach a `target` to each targeted event (`TARGETED_EVENT_TYPES`) that has a resolvable hint. Never
  * throws or rejects; events without a hint, or whose hint does not resolve,
  * are returned unchanged.
  */
 export const resolveEventTargets = async (
   input: ResolveEventTargetsInput,
 ): Promise<ResolveEventTargetsResult> => {
-  const pending = input.events.filter(
-    (event) =>
-      (event.type === "tool.start" || event.type === "tool.end") && input.hints.has(event.eventId),
-  );
+  const pending = input.events.filter((event) => isTargetedEvent(event) && input.hints.has(event.eventId));
   if (pending.length === 0) {
     return { events: input.events, resolved: 0, timedOut: false };
   }
@@ -148,7 +145,7 @@ export const resolveEventTargets = async (
   const settled = new Map(targets);
   const events = input.events.map((event): CanonicalEvent => {
     const target = settled.get(event.eventId);
-    if (target === undefined || (event.type !== "tool.start" && event.type !== "tool.end")) {
+    if (target === undefined || !isTargetedEvent(event)) {
       return event;
     }
     return { ...event, target };

@@ -1,0 +1,12 @@
+{
+  "fixture": "user-prompt-submit-in-worktree.json",
+  "sourceContract": "Codex CLI hook stdin (UserPromptSubmit), key set observed from Codex CLI 0.163.0 driven by the agent lab's mock Responses server",
+  "provider": "codex",
+  "providerVersionObserved": "0.163.0",
+  "capturedDate": "2026-11-15",
+  "author": "otel-hook worktree-target owner (agent)",
+  "sanitization": "Shape only. Every value is invented: ids are fabricated, file contents and commands are placeholders, and paths live under a fictional /workspace tree (contract-repo = the main checkout, contract-repo-slot-7 = a linked worktree) that tests rebase onto a temporary directory.",
+  "licenseBasis": "Original synthetic authorship: field names reproduce a third-party tool's hook contract, all values are this repository's own.",
+  "sha256": "219700628743596283fea3bf5a3005cf5ec49ad1190b0f04995ca711b16df37a",
+  "notes": "A prompt whose envelope cwd is a linked worktree names it as a session-cwd target, before the turn it starts. The prompt text must not be exported. Exercised by tests/providers/worktree-target.test.ts."
+}

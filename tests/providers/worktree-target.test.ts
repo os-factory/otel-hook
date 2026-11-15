@@ -43,6 +43,8 @@ beforeAll(async () => {
   await mkdir(path.join(slotWorktree, "src"), { recursive: true });
   await writeFile(path.join(mainCheckout, ".git", "HEAD"), "ref: refs/heads/main\n");
   await writeFile(path.join(linkedGitDir, "HEAD"), "ref: refs/heads/har-slot-7\n");
+  // As `git worktree add` writes it: what makes the slot a linked worktree of the main checkout.
+  await writeFile(path.join(linkedGitDir, "commondir"), "../..\n");
   await writeFile(path.join(slotWorktree, ".git"), `gitdir: ${linkedGitDir}\n`);
 });
 
@@ -225,5 +227,63 @@ describe("cursor: tool targets and generation usage keys", () => {
     expect(attributes["otelhook.generation.id"]).toBe("gen-contract-cursor-0001");
     expect(attributes["otelhook.usage.temporality"]).toBe("delta");
     expect(attributes["gen_ai.usage.input_tokens"]).toBe(43859);
+  });
+});
+
+/**
+ * A session started in a linked worktree (`git worktree add`) is placed there
+ * from its first event: its start and each prompt carry the session cwd as a
+ * `session-cwd` target, so a consumer need not wait for a tool call.
+ */
+describe.each([
+  {
+    provider: "claude-code",
+    adapter: createClaudeCodeAdapter,
+    start: "session-start-in-worktree.json",
+    prompt: "user-prompt-submit-in-worktree.json",
+  },
+  {
+    provider: "codex",
+    adapter: createCodexAdapter,
+    start: "session-start-in-worktree.json",
+    prompt: "user-prompt-submit-in-worktree.json",
+  },
+  {
+    provider: "cursor",
+    adapter: createCursorAdapter,
+    start: "session-start-in-worktree.json",
+    prompt: "before-submit-prompt-in-worktree.json",
+  },
+])("$provider: the session's own worktree", ({ provider, adapter, start, prompt }) => {
+  const expectSessionTarget = (harness: TestHarness, attributes: Record<string, unknown>): void => {
+    expect(attributes["otelhook.target.source"]).toBe("session-cwd");
+    expect(attributes["vcs.ref.head.name"]).toBe("har-slot-7");
+    expect(attributes["otelhook.target.workspace.id"]).toBe(gitRootId(harness, slotWorktree));
+    expect(attributes["otelhook.target.repository.id"]).toBe(gitRootId(harness, mainCheckout));
+    expect(attributes["otelhook.target.worktree.kind"]).toBe("linked");
+  };
+
+  it("names it on the session start", async () => {
+    const { harness, events } = await replay(adapter(), provider, start);
+    const record = canonicalEventsToLogRecords(events, { resource }).records.find(
+      (candidate) => candidate.attributes["otelhook.event.type"] === "session.start",
+    );
+    expectSessionTarget(harness, record?.attributes ?? {});
+    expectNoLocalPaths(events);
+  });
+
+  it("names it on each prompt, without exporting the prompt", async () => {
+    const { harness, events } = await replay(adapter(), provider, prompt);
+    expectSessionTarget(harness, spanAttributes(events, "prompt"));
+    const record = canonicalEventsToLogRecords(events, { resource }).records.find(
+      (candidate) => candidate.attributes["otelhook.event.type"] === "prompt.submitted",
+    );
+    expectSessionTarget(harness, record?.attributes ?? {});
+    const exported = JSON.stringify([
+      canonicalEventsToReadableSpans(events, { resource }).map((span) => span.attributes),
+      canonicalEventsToLogRecords(events, { resource }).records,
+    ]);
+    expect(exported).not.toContain("summarize the billing module");
+    expectNoLocalPaths(events);
   });
 });

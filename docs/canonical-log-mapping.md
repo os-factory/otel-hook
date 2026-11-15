@@ -107,11 +107,14 @@ Identity, identical to the span mapping and derived from the same fields:
 | `otelhook.workspace.id` | opaque `<scheme>:<token>` handle; never a path |
 | `otelhook.subagent.id` | the provider's own subagent id (Claude Code `agent_id`), on every record of an event emitted inside a subagent; absent otherwise |
 
-### Worktree target (tool events)
+### Worktree target
 
 [ADR 0008](adr/0008-per-event-worktree-target.md). On `tool.start` and `tool.end`
 records — and on the tool span, chosen once from the strongest edge — when the
-core resolved which git worktree the call touched. The workspace id and source
+core resolved which git worktree the call touched. On `session.start` and
+`prompt.submitted` records, the session span, and the prompt span, the worktree
+the session runs in (always `session-cwd`), so a consumer knows the session's
+place before its first tool call. The workspace id and source
 appear together or not at all; the others only alongside them, when known.
 
 | Attribute | Meaning |
@@ -126,9 +129,9 @@ Per provider, from its hook payload:
 
 | Provider | `tool-path` | `shell-cwd` | `session-cwd` |
 | --- | --- | --- | --- |
-| Claude Code | `tool_input.file_path` (Read, Write, Edit, MultiEdit), `notebook_path` (NotebookEdit), `path` (Glob, Grep) | — (no hook reports `Bash`'s directory) | hook `cwd`, for any other tool call |
-| Codex | `apply_patch` headers, from the `apply_patch` tool or a shell command invoking it | `tool_input.workdir` when present (0.163.0 does not forward it) | hook `cwd` |
-| Cursor | `afterFileEdit.file_path`, `beforeReadFile.file_path` | `beforeShellExecution.cwd` (non-empty) | the workspace root, when `workspace_roots` has exactly one |
+| Claude Code | `tool_input.file_path` (Read, Write, Edit, MultiEdit), `notebook_path` (NotebookEdit), `path` (Glob, Grep) | — (no hook reports `Bash`'s directory) | hook `cwd`, for any other tool call, `SessionStart`, and `UserPromptSubmit` |
+| Codex | `apply_patch` headers, from the `apply_patch` tool or a shell command invoking it | `tool_input.workdir` when present (0.163.0 does not forward it) | hook `cwd`, also on `SessionStart` and `UserPromptSubmit` |
+| Cursor | `afterFileEdit.file_path`, `beforeReadFile.file_path` | `beforeShellExecution.cwd` (non-empty) | the workspace root, when `workspace_roots` has exactly one, also on `sessionStart` and `beforeSubmitPrompt` |
 
 No target is exported when the paths of one call land in different worktrees,
 when a path is outside any repository, or when resolution exceeds its budget.

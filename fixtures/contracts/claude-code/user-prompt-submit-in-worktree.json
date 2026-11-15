@@ -1,0 +1,8 @@
+{
+  "hook_event_name": "UserPromptSubmit",
+  "session_id": "ses-contract-claude-0003",
+  "transcript_path": "/workspace/contract-repo-slot-7/.transcripts/session.jsonl",
+  "cwd": "/workspace/contract-repo-slot-7",
+  "permission_mode": "default",
+  "prompt": "Synthetic prompt: summarize the billing module."
+}

@@ -6,6 +6,7 @@ import { subagentInvocationIdFor } from "./identity.js";
 import { normalizeClaudeHookPayload } from "./payload-normalize.js";
 import { claudeHookPayloadSchema, type ClaudeUsage } from "./schema.js";
 import { extractClaudeAssistantText } from "./stop-content.js";
+import { sessionCwdHint } from "../../model/target.js";
 import { claudeTargetHint } from "./target.js";
 import { inferToolKind } from "./tool-kind.js";
 import { extractClaudeUsage, normalizeClaudeUsage } from "./usage.js";
@@ -103,6 +104,9 @@ export const parseClaudeCode = (
     const hint = claudeTargetHint(toolName, toolInput, payload.cwd);
     return hint === undefined ? {} : { targetHint: hint };
   };
+  // The session's own directory: where it runs before any tool names a path.
+  const sessionHint = sessionCwdHint(payload.cwd);
+  const sessionTarget = sessionHint === undefined ? {} : { targetHint: sessionHint };
   const withUsage = (usage: ClaudeUsage | undefined) => {
     const normalized = normalizeClaudeUsage(usage);
     warnings.push(...normalized.warnings);
@@ -116,6 +120,7 @@ export const parseClaudeCode = (
         sessionKind: "unknown",
         agentName: "claude-code",
         ...(payload.model === undefined ? {} : { model: { modelId: payload.model } }),
+        ...sessionTarget,
       });
       break;
 
@@ -132,6 +137,7 @@ export const parseClaudeCode = (
         type: "prompt.submitted",
         promptSource: "user",
         content: context.privacy.describeContent({ kind: "prompt", role: "user", text: payload.prompt }),
+        ...sessionTarget,
       });
       break;
 

@@ -277,12 +277,15 @@ export const parentScopeRefOf = (event: CanonicalEvent): SpanScopeRef | undefine
  */
 export const startOnlySpanAttributes = (event: CanonicalEvent): Attributes => {
   switch (event.type) {
+    // The session's own worktree is carried forward like a tool's target, so
+    // the session span a later `session.end` process exports still names it.
     case "session.start":
       return {
         ...(event.agentName === undefined ? {} : { [ATTR_OTELHOOK_AGENT_NAME]: event.agentName }),
         ...(event.agentVersion === undefined
           ? {}
           : { [ATTR_OTELHOOK_AGENT_VERSION]: event.agentVersion }),
+        ...targetAttributes(event),
       };
     case "generation.start":
       return {
@@ -390,7 +393,7 @@ const rankOf = (candidate: Attributes): number => {
 };
 
 /**
- * One tool span, one target: the strongest evidence among the recovered start,
+ * One span, one target: the strongest evidence among the recovered start,
  * the live start, and the live end — later wins a tie. A Cursor shell call's
  * start knows its `cwd` and its end does not; the span must keep the former,
  * not be downgraded to the workspace root by whichever edge exported last.
@@ -549,7 +552,8 @@ const buildLifecycleSpan = (
       name = "session";
       kind = SpanKind.INTERNAL;
       attributes = {
-        ...attributes,
+        ...withoutTarget(attributes),
+        ...strongestTarget([pickTarget(resolved.recovered), start === undefined ? {} : targetAttributes(start)]),
         ...(start?.agentName === undefined ? {} : { [ATTR_OTELHOOK_AGENT_NAME]: start.agentName }),
         ...(start?.agentVersion === undefined
           ? {}
@@ -667,7 +671,7 @@ const buildStandaloneSpan = (
   switch (event.type) {
     case "prompt.submitted":
       name = "prompt";
-      attributes = { ...attributes, "otelhook.prompt.source": event.promptSource };
+      attributes = { ...attributes, "otelhook.prompt.source": event.promptSource, ...targetAttributes(event) };
       break;
     case "compaction.performed":
       name = "compaction";

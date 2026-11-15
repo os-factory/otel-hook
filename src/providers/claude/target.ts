@@ -1,4 +1,4 @@
-import type { TargetHint } from "../../model/target.js";
+import { sessionCwdHint, type TargetHint } from "../../model/target.js";
 
 /**
  * Where a Claude Code tool call pointed, as a target hint (ADR 0008).
@@ -50,5 +50,5 @@ export const claudeTargetHint = (
       }
     }
   }
-  return cwd === undefined ? undefined : { source: "session-cwd", paths: [cwd] };
+  return sessionCwdHint(cwd);
 };
