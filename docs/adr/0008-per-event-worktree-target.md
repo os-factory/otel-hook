@@ -1,6 +1,6 @@
 # ADR 0008: The core resolves which git worktree a tool event targeted
 
-- Status: accepted
+- Status: accepted, amended 2026-11-14 ([repository and worktree kind](#amendment-repository-and-worktree-kind))
 - Date: 2026-11-12
 - Milestone: M3 (attribution evidence)
 
@@ -82,6 +82,73 @@ shell command ran in. Two rules stood in the way of using it:
   by default. Those calls get `session-cwd` or nothing.
 - Branch names are exported. They were already an allowed label; operators who
   consider branch names sensitive should not wire a locator.
+
+## Amendment: repository and worktree kind
+
+- Date: 2026-11-14
+
+### Context
+
+`otelhook.target.workspace.id` names the worktree a tool event touched, but not
+the repository that worktree belongs to. A consumer that attributes work to a
+repository had to map a linked worktree back to it by reading `.git` itself —
+impossible for a consumer that is not on the machine (a collector, a container),
+and a second, divergent reading of git's layout where it is possible. The
+locator already follows a linked worktree's `gitdir:` file, one read away from
+the answer.
+
+### Decision
+
+1. **The locator reports the worktree's kind and its repository's main
+   worktree.** `LocatedWorktree` gains `kind` (`main` | `linked`) and `mainRoot`,
+   read the way git reads them, without spawning `git`:
+   - A `.git` directory is a main worktree; `mainRoot` is its own root.
+   - A `.git` file whose git dir holds a `commondir` file is a linked worktree.
+     `commondir` names the common git dir; when that is an existing directory
+     named `.git`, its parent is `mainRoot` — the path `git worktree list`
+     prints first. A common dir with any other name (a bare repository, a
+     `--separate-git-dir` repository, a submodule's `.git/modules/<name>`) or
+     one that no longer exists yields no `mainRoot`; the kind is still `linked`.
+     An unreadable `commondir` is not a missing one: still `linked`, no
+     `mainRoot`.
+   - A `.git` file whose git dir has no `commondir` is a main worktree. That
+     covers a submodule (`gitdir: <super>/.git/modules/<name>`): a submodule is
+     its own repository, never a linked worktree of its superproject.
+   - Nested repositories are unchanged: the innermost `.git` wins.
+
+   The extra reads are one bounded `commondir` read (plus one `stat`) per `.git`
+   file, inside the cached probe; a `.git` directory costs nothing more.
+2. **The repository is named the way its main worktree names itself.**
+   `WorkspaceTarget` gains `repositoryId` — the main worktree root through the
+   same `git-root` derivation as `workspaceId` — and `worktreeKind`. A main
+   worktree's `repositoryId` therefore equals its `workspaceId`, every linked
+   worktree of the repository carries that same value, and a consumer that
+   hashes a repository path it knows with the same salt gets the same id.
+3. **Export.** Tool spans and tool log records carry
+   `otelhook.target.repository.id` and `otelhook.target.worktree.kind` beside
+   the existing target attributes, chosen with them as one unit (decision 5), and
+   persisted with them across processes. Either is omitted when not known; a
+   failure to read the repository costs only these attributes, never the target
+   or the event, and stays inside the existing time budget.
+4. **Session-level workspace identity is not extended.** Adapters derive it from
+   the payload's directory as a `working-directory` key, with no filesystem
+   handle (ADR 0003), so it is never a `git-root` identity to extend. A tool
+   event's `session-cwd` target already reports the session directory's
+   repository and kind.
+
+### Consequences
+
+- A consumer maps any worktree to its repository from exported attributes alone,
+  with no filesystem access and no list of worktrees pushed from elsewhere.
+- Paths are hashed as spelled. git records a linked worktree's common dir as a
+  resolved path, so a main checkout reached through a symlink has a
+  `workspaceId` that differs from the `repositoryId` its linked worktrees carry.
+- A worktree of a bare repository, or of a repository whose `.git` lives
+  elsewhere, has a kind but no repository id: there is no main worktree to name,
+  and the alternative — hashing the git dir — would be an id nothing else
+  derives.
+- No new path leaves the process: `mainRoot` is a `LocatedWorktree` field, as
+  `root` is, and only its salted handle is exported.
 
 ## Alternatives considered
 

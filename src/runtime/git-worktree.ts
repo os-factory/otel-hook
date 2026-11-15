@@ -1,4 +1,4 @@
-import { open, stat } from "node:fs/promises";
+import { lstat, open, stat } from "node:fs/promises";
 import * as path from "node:path";
 
 import type { LocatedWorktree, WorktreeLocator } from "./ports.js";
@@ -15,10 +15,24 @@ import type { LocatedWorktree, WorktreeLocator } from "./ports.js";
  *   `gitdir: <path>`, relative to the worktree root when not absolute.
  *
  * The branch is read from `<gitdir>/HEAD`: `ref: refs/heads/<name>` names a
- * branch; anything else (a detached commit id) names none. A `.git` entry that
- * cannot be read, points nowhere, or has no readable `HEAD` makes the answer
- * `undefined` — a broken worktree is not evidence, and the walk does not skip
- * past it to an enclosing repository that the event did not target.
+ * branch; anything else (a detached commit id) names none.
+ *
+ * Which repository the worktree belongs to is read the same way git reads it:
+ *
+ * - A git dir holding a `commondir` file is a **linked** worktree's; that file
+ *   names the repository's common git dir, relative to the git dir. When the
+ *   common dir is a directory named `.git`, its parent is the main worktree —
+ *   the path `git worktree list` prints first. Any other common dir (a bare
+ *   repository, a `--separate-git-dir` repository, a submodule's
+ *   `.git/modules/<name>`) or one that no longer exists names no main worktree.
+ * - A git dir without one is a **main** worktree's, including a submodule's
+ *   (`gitdir: <super>/.git/modules/<name>`): a submodule is its own repository,
+ *   not a linked worktree of the superproject.
+ *
+ * A `.git` entry that cannot be read, points nowhere, or has no readable `HEAD`
+ * makes the answer `undefined` — a broken worktree is not evidence, and the walk
+ * does not skip past it to an enclosing repository that the event did not
+ * target. A repository that cannot be named costs only `mainRoot`.
  *
  * Everything is bounded: walk depth, bytes read per file, and cache size. Every
  * failure is `undefined`; nothing throws.
@@ -75,16 +89,63 @@ export const parseHeadBranch = (head: string): string | undefined => {
   return branch;
 };
 
+const firstLine = (content: string): string => content.split(/\r?\n/, 1)[0]?.trim() ?? "";
+
+const resolveGitPath = (target: string | undefined, base: string): string | undefined =>
+  target === undefined || target.length === 0 || target.includes("\u0000")
+    ? undefined
+    : path.resolve(base, target);
+
 /** `gitdir: <path>` → the path, resolved against the worktree root. */
 export const parseGitDirFile = (content: string, worktreeRoot: string): string | undefined => {
-  const line = content.split(/\r?\n/, 1)[0]?.trim() ?? "";
+  const line = firstLine(content);
   // A prefix check, not a regex: `gitdir:` followed by long runs of spaces made
   // the former `/^gitdir:\s*(.+)$/` backtrack polynomially (CodeQL).
-  const target = line.startsWith("gitdir:") ? line.slice("gitdir:".length).trim() : undefined;
-  if (target === undefined || target.length === 0 || target.includes("\u0000")) {
-    return undefined;
+  return resolveGitPath(
+    line.startsWith("gitdir:") ? line.slice("gitdir:".length).trim() : undefined,
+    worktreeRoot,
+  );
+};
+
+/** A `commondir` file → the common git dir it names, resolved against the git dir. */
+export const parseCommonDirFile = (content: string, gitDir: string): string | undefined =>
+  resolveGitPath(firstLine(content), gitDir);
+
+const isMissing = async (filePath: string): Promise<boolean> => {
+  try {
+    await lstat(filePath);
+    return false;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code === "ENOENT" || code === "ENOTDIR";
   }
-  return path.resolve(worktreeRoot, target);
+};
+
+const isDirectory = async (directory: string): Promise<boolean> => {
+  try {
+    return (await stat(directory)).isDirectory();
+  } catch {
+    return false;
+  }
+};
+
+type Repository = Pick<LocatedWorktree, "kind" | "mainRoot">;
+
+/** Kind and main worktree for a `.git` file's git dir; see the module note. */
+const repositoryOf = async (worktreeRoot: string, gitDir: string): Promise<Repository> => {
+  const commonDirFile = path.join(gitDir, "commondir");
+  const content = await readBounded(commonDirFile);
+  if (content === undefined) {
+    // Only a missing file makes this a main worktree. An unreadable one is still
+    // a linked worktree's, of a repository it cannot name.
+    return (await isMissing(commonDirFile)) ? { kind: "main", mainRoot: worktreeRoot } : { kind: "linked" };
+  }
+  const commonDir = parseCommonDirFile(content, gitDir);
+  const mainRoot =
+    commonDir !== undefined && path.basename(commonDir) === ".git" && (await isDirectory(commonDir))
+      ? path.dirname(commonDir)
+      : undefined;
+  return { kind: "linked", ...(mainRoot === undefined ? {} : { mainRoot }) };
 };
 
 const probeDirectory = async (directory: string): Promise<Probe> => {
@@ -111,9 +172,13 @@ const probeDirectory = async (directory: string): Promise<Probe> => {
     return INVALID;
   }
   const branch = parseHeadBranch(head);
+  // A `.git` directory is always a main worktree's git dir: nothing more to read.
+  const repository: Repository = info.isDirectory()
+    ? { kind: "main", mainRoot: directory }
+    : await repositoryOf(directory, gitDir);
   return {
     kind: "worktree",
-    located: { root: directory, ...(branch === undefined ? {} : { branch }) },
+    located: { root: directory, ...(branch === undefined ? {} : { branch }), ...repository },
   };
 };
 

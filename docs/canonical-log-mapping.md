@@ -111,14 +111,16 @@ Identity, identical to the span mapping and derived from the same fields:
 
 [ADR 0008](adr/0008-per-event-worktree-target.md). On `tool.start` and `tool.end`
 records — and on the tool span, chosen once from the strongest edge — when the
-core resolved which git worktree the call touched. All three appear together or
-not at all, except the branch, which is absent on a detached `HEAD`.
+core resolved which git worktree the call touched. The workspace id and source
+appear together or not at all; the others only alongside them, when known.
 
 | Attribute | Meaning |
 | --- | --- |
 | `otelhook.target.workspace.id` | salted handle of the worktree root, derived exactly like a `git-root` workspace id; never a path |
 | `vcs.ref.head.name` | branch checked out in that worktree |
 | `otelhook.target.source` | `tool-path` (a file the call named) \| `shell-cwd` (the directory the provider says a command ran in) \| `session-cwd` (only the session's directory was known) |
+| `otelhook.target.worktree.kind` | `main` (the repository's main checkout) \| `linked` (a `git worktree add` checkout) |
+| `otelhook.target.repository.id` | salted handle of the repository's main worktree root, derived exactly like a `git-root` workspace id: equal to `otelhook.target.workspace.id` on a main worktree, and shared by every linked worktree of that repository. Absent when there is no main worktree to name (a bare repository, a main checkout that is gone); never a path |
 
 Per provider, from its hook payload:
 

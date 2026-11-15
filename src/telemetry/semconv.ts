@@ -24,8 +24,10 @@ import type { CanonicalEvent, CanonicalEventType } from "../model/events.js";
 import type { CanonicalUsage } from "../model/usage.js";
 import { VERSION } from "../version.js";
 import {
+  ATTR_OTELHOOK_TARGET_REPOSITORY_ID,
   ATTR_OTELHOOK_TARGET_SOURCE,
   ATTR_OTELHOOK_TARGET_WORKSPACE_ID,
+  ATTR_OTELHOOK_TARGET_WORKTREE_KIND,
   ATTR_VCS_REF_HEAD_NAME,
   exportIdentityAttributes,
   targetAttributes,
@@ -358,6 +360,8 @@ const TARGET_KEYS = [
   ATTR_OTELHOOK_TARGET_WORKSPACE_ID,
   ATTR_OTELHOOK_TARGET_SOURCE,
   ATTR_VCS_REF_HEAD_NAME,
+  ATTR_OTELHOOK_TARGET_REPOSITORY_ID,
+  ATTR_OTELHOOK_TARGET_WORKTREE_KIND,
 ] as const;
 
 const pickTarget = (attributes: Attributes): Attributes => {
