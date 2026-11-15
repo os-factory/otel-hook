@@ -1,3 +1,10 @@
+# [0.6.0](https://github.com/os-factory/otel-hook/compare/v0.5.0...v0.6.0) (2026-11-15)
+
+
+### Features
+
+* name the session's own worktree on its start and prompts ([#43](https://github.com/os-factory/otel-hook/issues/43)) ([dcf1e39](https://github.com/os-factory/otel-hook/commit/dcf1e39e338ee7e2a0be2f4aac3863b914706c77))
+
 # [0.5.0](https://github.com/os-factory/otel-hook/compare/v0.4.1...v0.5.0) (2026-11-15)
 
 
