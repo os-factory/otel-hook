@@ -135,4 +135,56 @@ describe.skipIf(!gitAvailable)("otel-hook run: per-event worktree target", () =>
     // Raw protobuf bodies as text: a path would appear verbatim if it were sent.
     expect(collector.text()).not.toContain(root);
   }, 60_000);
+
+  it("names a session's own linked worktree from its start, before any tool call", async () => {
+    const root = await realpath(await mkdtemp(path.join(tmpdir(), "otel-hook-e2e-session-")));
+    cleanups.push(() => rm(root, { recursive: true, force: true }));
+    const checkout = path.join(root, "checkout");
+    const feature = path.join(root, "checkout-feature");
+    await mkdir(checkout);
+    git(checkout, "init", "-q", "-b", "main");
+    git(checkout, "commit", "-q", "--allow-empty", "-m", "init");
+    git(checkout, "worktree", "add", "-q", "-b", "feature", feature);
+
+    const collector: Collector = await startCollector();
+    cleanups.push(() => collector.close());
+    const state = await makeStateDir();
+    cleanups.push(() => state.remove());
+    const args = ["run", "--provider", "claude-code", "--endpoint", collector.url, "--logs", "--state-dir", state.dir];
+    // One process per hook, as Claude Code runs them, from a session started in the worktree.
+    const base = {
+      session_id: "ses-e2e-session-place",
+      transcript_path: path.join(feature, ".claude", "transcript.jsonl"),
+      cwd: feature,
+    };
+    for (const payload of [
+      { hook_event_name: "SessionStart", source: "startup" },
+      { hook_event_name: "UserPromptSubmit", prompt: "Synthetic prompt for the session place test" },
+      { hook_event_name: "SessionEnd", reason: "prompt_input_exit" },
+    ]) {
+      const result = await runCliProcess(args, JSON.stringify({ ...base, ...payload }));
+      expect(result.code).toBe(0);
+    }
+
+    const spans = decodeAllExportedSpans(
+      collector.requests.filter((request) => request.path === "/v1/traces").map((request) => request.body),
+    );
+    const records = decodeAllExportedLogRecords(
+      collector.requests.filter((request) => request.path === "/v1/logs").map((request) => request.body),
+    );
+    const start = records.find((record) => record.attributes["otelhook.event.type"] === "session.start");
+    const prompt = spans.find((span) => span.name === "prompt");
+    // Exported by the SessionEnd process: the start's target is carried across processes.
+    const session = spans.find((span) => span.name === "session");
+    for (const attributes of [start?.attributes, prompt?.attributes, session?.attributes]) {
+      expect(attributes?.["otelhook.target.source"]).toBe("session-cwd");
+      expect(attributes?.["vcs.ref.head.name"]).toBe("feature");
+      expect(attributes?.["otelhook.target.worktree.kind"]).toBe("linked");
+      expect(String(attributes?.["otelhook.target.repository.id"])).toMatch(/^[a-z0-9]+:[A-Za-z0-9_-]+$/);
+      expect(attributes?.["otelhook.target.repository.id"]).not.toBe(attributes?.["otelhook.target.workspace.id"]);
+    }
+
+    expect(collector.text()).not.toContain(root);
+    expect(collector.text()).not.toContain("Synthetic prompt for the session place test");
+  }, 60_000);
 });

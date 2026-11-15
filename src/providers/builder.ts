@@ -1,6 +1,7 @@
 import { OtelHookError } from "../errors/index.js";
 import {
   canonicalEventSchema,
+  isTargetedEvent,
   type CanonicalEvent,
   type CompactionPerformedEvent,
   type ErrorRaisedEvent,
@@ -42,8 +43,8 @@ type Draft<TEvent extends CanonicalEvent> = Omit<TEvent, ManagedFields> & {
   /** Mixed into the derived event id when one event type repeats. */
   readonly idDiscriminator?: string;
   /**
-   * Where a tool event pointed, for the core to resolve into a `target`
-   * (ADR 0008). Accepted on `tool.start`/`tool.end` drafts only; never placed
+   * Where an event pointed, for the core to resolve into a `target`
+   * (ADR 0008). Accepted on `TARGETED_EVENT_TYPES` drafts only; never placed
    * on the event itself.
    */
   readonly targetHint?: TargetHint;
@@ -79,7 +80,7 @@ export interface EventFactory {
   /** Extension keys rejected during building, for diagnostics. */
   droppedExtensionKeys(): readonly string[];
   /**
-   * Target hints attached to built tool events, keyed by event id. In-process
+   * Target hints attached to built targeted events, keyed by event id. In-process
    * only: hand this to the core through `ProviderParseResult.targetHints`.
    */
   targetHints(): ReadonlyMap<EventId, TargetHint>;
@@ -157,10 +158,7 @@ export const createEventFactory = (input: EventFactoryInput): EventFactory => {
         });
       }
       built.push(parsed.data);
-      if (
-        targetHint !== undefined &&
-        (parsed.data.type === "tool.start" || parsed.data.type === "tool.end")
-      ) {
+      if (targetHint !== undefined && isTargetedEvent(parsed.data)) {
         const hint = targetHintSchema.safeParse(targetHint);
         if (hint.success) {
           hints.set(parsed.data.eventId, hint.data);

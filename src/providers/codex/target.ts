@@ -1,5 +1,5 @@
 import type { TargetHint } from "../../model/target.js";
-import { MAX_TARGET_HINT_PATHS } from "../../model/target.js";
+import { MAX_TARGET_HINT_PATHS, sessionCwdHint } from "../../model/target.js";
 
 /**
  * Where a Codex tool call pointed, as a target hint (ADR 0008).
@@ -104,5 +104,5 @@ export const codexTargetHint = (
       ...(cwd === undefined ? {} : { baseDirectory: cwd }),
     };
   }
-  return cwd === undefined ? undefined : { source: "session-cwd", paths: [cwd] };
+  return sessionCwdHint(cwd);
 };

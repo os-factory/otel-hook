@@ -401,6 +401,7 @@ export const createCursorAdapter = (options: CursorAdapterOptions = {}): Provide
           ...(payload.composer_mode === undefined
             ? {}
             : { extensions: { "cursor.composer_mode": payload.composer_mode } }),
+          ...targetHintField,
         });
         break;
 
@@ -422,6 +423,7 @@ export const createCursorAdapter = (options: CursorAdapterOptions = {}): Provide
           // Cursor reports no prompt provenance. `user` would be a guess: this
           // hook also fires for an automation-driven or resumed turn.
           promptSource: "unknown",
+          ...targetHintField,
           ...(payload.prompt === undefined
             ? {}
             : {

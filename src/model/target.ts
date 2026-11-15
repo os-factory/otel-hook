@@ -63,6 +63,13 @@ export const targetHintSchema = z
 export type TargetHint = z.infer<typeof targetHintSchema>;
 
 /**
+ * The weakest hint: the session's own directory. Every adapter gives it to a
+ * session start and a prompt, and to a tool call that names no path.
+ */
+export const sessionCwdHint = (cwd: string | undefined): TargetHint | undefined =>
+  cwd === undefined || cwd.length === 0 ? undefined : { source: "session-cwd", paths: [cwd] };
+
+/**
  * Whether a worktree is its repository's main checkout (`main`) or one added
  * beside it with `git worktree add` (`linked`).
  */

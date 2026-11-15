@@ -489,11 +489,24 @@ describe("event factory: target hints and subagent id", () => {
     expect(event).not.toHaveProperty("subagentId");
   });
 
-  it("ignores a hint on a non-tool event", () => {
+  it("keeps a hint on a session start and a prompt, the session's own place", () => {
+    const factory = createEventFactory({ identity, sequenceBase: 0, context });
+    const hint = { source: "session-cwd", paths: ["/w"] } as const;
+    const start = factory.build({ type: "session.start", sessionKind: "unknown", targetHint: hint });
+    const prompt = factory.build({ type: "prompt.submitted", promptSource: "user", targetHint: hint });
+    expect(factory.targetHints()).toEqual(
+      new Map([
+        [start.eventId, hint],
+        [prompt.eventId, hint],
+      ]),
+    );
+  });
+
+  it("ignores a hint on an event that names no place", () => {
     const factory = createEventFactory({ identity, sequenceBase: 0, context });
     factory.build({
-      type: "session.start",
-      sessionKind: "unknown",
+      type: "session.end",
+      reason: "completed",
       targetHint: { source: "session-cwd", paths: ["/w"] },
     });
     expect(factory.targetHints().size).toBe(0);

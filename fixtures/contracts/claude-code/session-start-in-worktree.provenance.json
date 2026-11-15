@@ -1,0 +1,12 @@
+{
+  "fixture": "session-start-in-worktree.json",
+  "sourceContract": "Claude Code hook JSON protocol (SessionStart: common fields with cwd, source, model), per code.claude.com/docs/en/hooks",
+  "provider": "claude-code",
+  "providerVersionObserved": "2.1.220",
+  "capturedDate": "2026-11-15",
+  "author": "otel-hook worktree-target owner (agent)",
+  "sanitization": "Shape only. Every value is invented: ids are fabricated, file contents and commands are placeholders, and paths live under a fictional /workspace tree (contract-repo = the main checkout, contract-repo-slot-7 = a linked worktree) that tests rebase onto a temporary directory.",
+  "licenseBasis": "Original synthetic authorship: field names reproduce a third-party tool's hook contract, all values are this repository's own.",
+  "sha256": "52e1dc8ba86d9763ecc2e676579e98d46d9a45728458461130a929680462fb2e",
+  "notes": "The session is started inside a linked worktree (git worktree add). Its start must name that worktree as a session-cwd target, so a consumer knows the session's place before its first tool call. Exercised by tests/providers/worktree-target.test.ts."
+}

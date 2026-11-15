@@ -2,7 +2,7 @@ import type { Attributes } from "@opentelemetry/api";
 import type { Resource } from "@opentelemetry/resources";
 import { ATTR_SESSION_ID } from "@opentelemetry/semantic-conventions/incubating";
 
-import type { CanonicalEvent } from "../model/events.js";
+import { isTargetedEvent, type CanonicalEvent } from "../model/events.js";
 import type { CanonicalUsage } from "../model/usage.js";
 
 /**
@@ -42,7 +42,8 @@ const HAR_SESSION_KEY = "har.session_key";
 export const ATTR_OTELHOOK_SUBAGENT_ID = "otelhook.subagent.id";
 
 /**
- * Worktree a tool event targeted (ADR 0008). Branch under the OTel VCS
+ * Worktree an event targeted (ADR 0008): the one a tool call touched, or the one
+ * a session runs in on its start and prompts. Branch under the OTel VCS
  * attribute; the worktree root, and its repository's main worktree root, only
  * as salted `git-root` handles.
  */
@@ -55,9 +56,9 @@ export const ATTR_OTELHOOK_TARGET_WORKTREE_KIND = "otelhook.target.worktree.kind
 /** Whether `gen_ai.usage.*` on this record is a delta or a running total. */
 export const ATTR_OTELHOOK_USAGE_TEMPORALITY = "otelhook.usage.temporality";
 
-/** Target attributes for a tool event; empty when the core resolved none. */
+/** Target attributes for a targeted event; empty when the core resolved none. */
 export const targetAttributes = (event: CanonicalEvent): Attributes => {
-  if ((event.type !== "tool.start" && event.type !== "tool.end") || event.target === undefined) {
+  if (!isTargetedEvent(event) || event.target === undefined) {
     return {};
   }
   const { target } = event;

@@ -1,4 +1,4 @@
-import type { TargetHint } from "../../model/target.js";
+import { sessionCwdHint, type TargetHint } from "../../model/target.js";
 import type { CursorPayload } from "./payload.js";
 
 /**
@@ -9,7 +9,8 @@ import type { CursorPayload } from "./payload.js";
  * - **`shell-cwd`** — the `cwd` Cursor reports on `beforeShellExecution` (the
  *   reference lists it there and not on `afterShellExecution`; read on the
  *   latter only if a payload carries it).
- * - **`session-cwd`** — the workspace root, when the workspace has exactly one.
+ * - **`session-cwd`** — the workspace root, when the workspace has exactly one;
+ *   also the only hint on `sessionStart` and `beforeSubmitPrompt`.
  *   A multi-root workspace has no single session directory, so it gives none.
  *
  * The CLI captures report `cwd: ""` for a call rooted at the workspace; an
@@ -22,8 +23,6 @@ const singleWorkspaceRoot = (payload: CursorPayload): string | undefined => {
   return roots.length === 1 ? roots[0] : undefined;
 };
 
-const sessionHint = (root: string | undefined): TargetHint | undefined =>
-  root === undefined ? undefined : { source: "session-cwd", paths: [root] };
 
 export const cursorTargetHint = (payload: CursorPayload): TargetHint | undefined => {
   const root = singleWorkspaceRoot(payload);
@@ -32,19 +31,21 @@ export const cursorTargetHint = (payload: CursorPayload): TargetHint | undefined
     case "afterFileEdit":
     case "beforeReadFile":
       return payload.file_path.length === 0
-        ? sessionHint(root)
+        ? sessionCwdHint(root)
         : { source: "tool-path", paths: [payload.file_path], ...base };
     case "beforeShellExecution":
     case "afterShellExecution":
       return payload.cwd !== undefined && payload.cwd.length > 0
         ? { source: "shell-cwd", paths: [payload.cwd], ...base }
-        : sessionHint(root);
+        : sessionCwdHint(root);
+    case "sessionStart":
+    case "beforeSubmitPrompt":
     case "preToolUse":
     case "postToolUse":
     case "postToolUseFailure":
     case "beforeMCPExecution":
     case "afterMCPExecution":
-      return sessionHint(root);
+      return sessionCwdHint(root);
     default:
       return undefined;
   }

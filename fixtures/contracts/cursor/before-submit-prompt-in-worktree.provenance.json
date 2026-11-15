@@ -1,0 +1,12 @@
+{
+  "fixture": "before-submit-prompt-in-worktree.json",
+  "sourceContract": "Cursor agent hook beforeSubmitPrompt (prompt, attachments) with the shared envelope's workspace_roots, cursor.com/docs/agent/hooks",
+  "provider": "cursor",
+  "providerVersionObserved": "3.12.17",
+  "capturedDate": "2026-11-15",
+  "author": "otel-hook worktree-target owner (agent)",
+  "sanitization": "Shape only. Every value is invented: ids are fabricated, file contents and commands are placeholders, and paths live under a fictional /workspace tree (contract-repo = the main checkout, contract-repo-slot-7 = a linked worktree) that tests rebase onto a temporary directory.",
+  "licenseBasis": "Original synthetic authorship: field names reproduce a third-party tool's hook contract, all values are this repository's own.",
+  "sha256": "9aba11e088cd063f17192aea00b8989e7a38d2689788553af0b9bb14b55bad12",
+  "notes": "A prompt in a single-root workspace on a linked worktree names it as a session-cwd target, before the generation it starts. The prompt text must not be exported. Exercised by tests/providers/worktree-target.test.ts."
+}

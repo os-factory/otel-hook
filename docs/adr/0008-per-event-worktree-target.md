@@ -1,6 +1,7 @@
 # ADR 0008: The core resolves which git worktree a tool event targeted
 
-- Status: accepted, amended 2026-11-14 ([repository and worktree kind](#amendment-repository-and-worktree-kind))
+- Status: accepted, amended 2026-11-14 ([repository and worktree kind](#amendment-repository-and-worktree-kind)),
+  2026-11-15 ([the session's own worktree](#amendment-the-sessions-own-worktree))
 - Date: 2026-11-12
 - Milestone: M3 (attribution evidence)
 
@@ -149,6 +150,47 @@ the answer.
   derives.
 - No new path leaves the process: `mainRoot` is a `LocatedWorktree` field, as
   `root` is, and only its salted handle is exported.
+
+## Amendment: the session's own worktree
+
+- Date: 2026-11-15
+
+### Context
+
+A session started in a linked worktree reports that worktree only on its tool
+events. Everything before its first tool call — the session start, the prompt,
+and the request the prompt starts — names no place a consumer can match: the
+session-level workspace id is a `working-directory` key (amendment above,
+decision 4), and a consumer that cannot list the repository's worktrees (a
+container without `.git`) cannot map it to a repository. A consumer then books
+that first request on the repository's main checkout, or drops it, although the
+hook payload named the worktree all along.
+
+### Decision
+
+1. **A session start and a prompt are targeted events.** `session.start` and
+   `prompt.submitted` gain the same optional `target` as the tool events.
+   `TARGETED_EVENT_TYPES` (`src/model/events.ts`) is the one list the event
+   factory, the resolver, and the exporters consult.
+2. **Their hint is the session's directory.** Each adapter attaches a
+   `session-cwd` hint built by `sessionCwdHint` from the directory it already
+   uses for a tool call's fallback: Claude Code's and Codex's hook `cwd`, Cursor's
+   single workspace root. No new payload field is read.
+3. **Export.** The `session.start` and `prompt.submitted` log records, the prompt
+   span, and the session span carry the target attributes. The session start's
+   target is persisted with its other start-only attributes, so the session span
+   a later `session.end` process exports still names it.
+
+### Consequences
+
+- A consumer knows a session's worktree and repository from its first event.
+  Hooks export synchronously while agents batch their usage, so that place
+  arrives before the session's first request is reported.
+- Evidence strength is unchanged: these targets are always `session-cwd`, the
+  weakest source; a tool event's `tool-path` or `shell-cwd` still says where a
+  call actually reached.
+- Two more events per session pay the bounded, cached locator probe. No new path
+  leaves the process.
 
 ## Alternatives considered
 

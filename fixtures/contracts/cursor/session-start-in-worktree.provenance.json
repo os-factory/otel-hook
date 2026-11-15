@@ -1,0 +1,12 @@
+{
+  "fixture": "session-start-in-worktree.json",
+  "sourceContract": "Cursor agent hook sessionStart (is_background_agent, composer_mode) with the shared envelope's workspace_roots, cursor.com/docs/agent/hooks",
+  "provider": "cursor",
+  "providerVersionObserved": "3.12.17",
+  "capturedDate": "2026-11-15",
+  "author": "otel-hook worktree-target owner (agent)",
+  "sanitization": "Shape only. Every value is invented: ids are fabricated, file contents and commands are placeholders, and paths live under a fictional /workspace tree (contract-repo = the main checkout, contract-repo-slot-7 = a linked worktree) that tests rebase onto a temporary directory.",
+  "licenseBasis": "Original synthetic authorship: field names reproduce a third-party tool's hook contract, all values are this repository's own.",
+  "sha256": "8784fa885f4abfb01dc139637b531f65fe58a95f2f8b6fced78784438821548a",
+  "notes": "A single-root workspace opened on a linked worktree: the start names it as a session-cwd target. Exercised by tests/providers/worktree-target.test.ts."
+}

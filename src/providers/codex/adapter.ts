@@ -31,6 +31,7 @@ import {
   type CodexUsage,
 } from "./payload.js";
 import { CODEX_DELIVERY_GAPS, codexDeliveryIdentity } from "./delivery.js";
+import { sessionCwdHint } from "../../model/target.js";
 import { codexTargetHint } from "./target.js";
 import { classifyCodexToolKind } from "./tool-kind.js";
 import { codexUsageToReport } from "./usage.js";
@@ -279,6 +280,9 @@ const parse = (input: ProviderParseInput, context: ProviderContext): ProviderPar
     const hint = codexTargetHint(toolName, toolInput, payload.cwd);
     return hint === undefined ? {} : { targetHint: hint };
   };
+  // The session's own directory: where it runs before any tool names a path.
+  const sessionHint = sessionCwdHint(payload.cwd);
+  const sessionTarget = sessionHint === undefined ? {} : { targetHint: sessionHint };
 
   const buildUsage = (usage: CodexUsage | undefined): CanonicalUsage | undefined => {
     if (usage === undefined) {
@@ -303,6 +307,7 @@ const parse = (input: ProviderParseInput, context: ProviderContext): ProviderPar
         occurredAt,
         ...(payload.codex_version === undefined ? {} : { agentVersion: payload.codex_version }),
         ...(payload.model === undefined ? {} : { model: { modelId: payload.model, vendor: "openai" } }),
+        ...sessionTarget,
       });
       break;
 
@@ -311,6 +316,7 @@ const parse = (input: ProviderParseInput, context: ProviderContext): ProviderPar
         type: "prompt.submitted",
         promptSource: "user",
         occurredAt,
+        ...sessionTarget,
         ...(payload.prompt === undefined
           ? {}
           : {

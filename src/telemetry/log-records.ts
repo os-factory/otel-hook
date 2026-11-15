@@ -403,6 +403,7 @@ const eventAttributes = (event: CanonicalEvent): LogAttributes => {
         ...(event.model === undefined
           ? {}
           : { [ATTR_GEN_AI_REQUEST_MODEL]: event.model.modelId }),
+        ...targetAttributes(event),
       };
     case "session.end":
       return {
@@ -415,6 +416,7 @@ const eventAttributes = (event: CanonicalEvent): LogAttributes => {
         ...(event.turnIndex === undefined
           ? {}
           : { [ATTR_OTELHOOK_PROMPT_TURN_INDEX]: event.turnIndex }),
+        ...targetAttributes(event),
       };
     case "generation.start":
       return {

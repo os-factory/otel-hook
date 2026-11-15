@@ -1,0 +1,8 @@
+{
+  "hook_event_name": "SessionStart",
+  "session_id": "ses-contract-claude-0003",
+  "transcript_path": "/workspace/contract-repo-slot-7/.transcripts/session.jsonl",
+  "cwd": "/workspace/contract-repo-slot-7",
+  "source": "startup",
+  "model": "claude-haiku-5-5"
+}

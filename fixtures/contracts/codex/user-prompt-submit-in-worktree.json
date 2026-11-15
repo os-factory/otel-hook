@@ -1,0 +1,10 @@
+{
+  "session_id": "01a1d1ad-0000-7000-8000-00000000c0df",
+  "turn_id": "01a1d1ad-0000-7000-8000-0000000000t2",
+  "transcript_path": "/workspace/.codex/sessions/rollout-synthetic-2.jsonl",
+  "cwd": "/workspace/contract-repo-slot-7",
+  "hook_event_name": "UserPromptSubmit",
+  "model": "gpt-5-codex",
+  "permission_mode": "bypassPermissions",
+  "prompt": "Synthetic prompt: summarize the billing module."
+}
