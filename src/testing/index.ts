@@ -79,11 +79,17 @@ export type TestHarnessOptions = {
   readonly startMillis?: number;
   readonly tickMillis?: number;
   /**
-   * Worktree resolution for tool targets (ADR 0008). Absent by default, so the
+   * Worktree resolution for event targets (ADR 0008). Absent by default, so the
    * harness stays filesystem-free; pass a fake, or the filesystem locator over a
    * temporary directory.
    */
   readonly worktreeLocator?: WorktreeLocator;
+  /**
+   * Ceiling on target resolution per callback (runtime default 50ms). A test of
+   * what a target says, over a real filesystem, raises it so a slow CI runner
+   * cannot turn the assertion into a timing race.
+   */
+  readonly targetResolutionBudgetMillis?: number;
 };
 
 export type TestHarness = {
@@ -145,6 +151,9 @@ export const createTestHook = (options: TestHarnessOptions = {}): TestHarness =>
     privacy,
     logger,
     ...(options.worktreeLocator === undefined ? {} : { worktreeLocator: options.worktreeLocator }),
+    ...(options.targetResolutionBudgetMillis === undefined
+      ? {}
+      : { targetResolutionBudgetMillis: options.targetResolutionBudgetMillis }),
   });
 
   return { hook, sink, stateStore, clock, ids, privacy, logger, registry, config };

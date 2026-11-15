@@ -59,8 +59,15 @@ const loadFixture = async (provider: string, name: string): Promise<unknown> => 
   return JSON.parse(raw.replaceAll("/workspace/", escapedRoot)) as unknown;
 };
 
+// These tests pin what a target says, not how fast it resolves: the budget's
+// own behavior is tested in tests/runtime/worktree-target.test.ts, and the 50ms
+// default made a cold Windows runner drop a target mid-assertion.
 const harnessFor = (adapter: ProviderAdapter): TestHarness =>
-  createTestHook({ adapters: [adapter], worktreeLocator: createFilesystemWorktreeLocator() });
+  createTestHook({
+    adapters: [adapter],
+    worktreeLocator: createFilesystemWorktreeLocator(),
+    targetResolutionBudgetMillis: 10_000,
+  });
 
 const replay = async (
   adapter: ProviderAdapter,
