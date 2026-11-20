@@ -113,6 +113,12 @@ const decodeAnyValue = (buffer: Buffer): DecodedAttributeValue | undefined => {
   return undefined;
 };
 
+export type DecodedSpanLink = {
+  readonly traceId: string;
+  readonly spanId: string;
+  readonly attributes: Readonly<Record<string, DecodedAttributeValue>>;
+};
+
 export type DecodedSpan = {
   readonly traceId: string;
   readonly spanId: string;
@@ -123,6 +129,8 @@ export type DecodedSpan = {
   readonly endMillis: number;
   readonly durationMillis: number;
   readonly statusCode: number;
+  /** OTLP `Span.links`. Empty when the mapping emitted none. */
+  readonly links: readonly DecodedSpanLink[];
   readonly attributes: Readonly<Record<string, DecodedAttributeValue>>;
   /**
    * Attributes of the `Resource` this span was exported under.
@@ -166,6 +174,15 @@ const decodeSpan = (
   const startMillis = Number(startNanos / 1_000_000n);
   const endMillis = Number(endNanos / 1_000_000n);
   const status = firstBytes(fields, 15);
+  // Span.links is field 13. Link.trace_id is 1, Link.span_id is 2, Link.attributes is 4.
+  const links = submessages(fields, 13).map((link) => {
+    const linkFields = readFields(link);
+    return {
+      traceId: (firstBytes(linkFields, 1) ?? Buffer.alloc(0)).toString("hex"),
+      spanId: (firstBytes(linkFields, 2) ?? Buffer.alloc(0)).toString("hex"),
+      attributes: decodeKeyValues(linkFields, 4),
+    };
+  });
   return {
     traceId: (firstBytes(fields, 1) ?? Buffer.alloc(0)).toString("hex"),
     spanId: (firstBytes(fields, 2) ?? Buffer.alloc(0)).toString("hex"),
@@ -175,6 +192,7 @@ const decodeSpan = (
     endMillis,
     durationMillis: endMillis - startMillis,
     statusCode: status === undefined ? 0 : Number(firstVarint(readFields(status), 3) ?? 0n),
+    links,
     attributes,
     resourceAttributes,
   };

@@ -174,6 +174,23 @@ export const resolveConfig = (layers: readonly ConfigLayer[] = []): ConfigResolu
       "exporter.logs.enabled is true but neither a logs endpoint nor a trace endpoint to derive one from is configured",
     );
   }
+  if (parsed.data.exporter.protocol === "grpc" && parsed.data.exporter.endpoint !== undefined) {
+    try {
+      const path = new URL(parsed.data.exporter.endpoint).pathname;
+      if (path !== "/" && path !== "") {
+        notes.push(
+          "exporter.protocol is grpc, so the endpoint path is ignored; use http://host:4317 or https://host:4317",
+        );
+      }
+    } catch {
+      // The schema already requires a URL. A parse failure here is not a second error.
+    }
+  }
+  if (parsed.data.exporter.logs.enabled && parsed.data.exporter.protocol === "grpc") {
+    notes.push(
+      "exporter.logs is enabled but logs are HTTP/protobuf only in this build; grpc exports traces and leaves logs disabled",
+    );
+  }
   if (parsed.data.exporter.logs.includeContent && parsed.data.privacy.contentMode === "omit") {
     // Not an error: the two settings are independent by design, and this is the
     // combination somebody lands on when they enable one and forget the other. Said

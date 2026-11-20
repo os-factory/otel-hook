@@ -159,20 +159,24 @@ export const collectDoctorReport = async (
     clock,
     logger,
   });
+  const traceProtocol = resolved.config.exporter.protocol;
+  const tracesWired = traceProtocol === "http/protobuf" || traceProtocol === "grpc";
   const exporterConfigured =
     resolved.config.exporter.enabled &&
-    resolved.config.exporter.protocol === "http/protobuf" &&
+    tracesWired &&
     resolved.config.exporter.endpoint !== undefined;
   checks.push({
     name: "exporter",
     ok: exporterConfigured,
     detail: exporterConfigured
-      ? "OTLP HTTP/protobuf exporter is configured"
+      ? traceProtocol === "grpc"
+        ? "OTLP/gRPC trace exporter is configured (http is plaintext, https is TLS; the URL path is ignored)"
+        : "OTLP HTTP/protobuf exporter is configured"
       : !resolved.config.exporter.enabled
         ? "exporter is disabled; events are accepted and discarded"
         : resolved.config.exporter.endpoint === undefined
           ? "exporter is enabled but no endpoint is configured"
-          : `protocol ${resolved.config.exporter.protocol} is not supported by this build`,
+          : `protocol ${traceProtocol} is not supported by this build`,
   });
   /**
    * The logs signal, reported separately and never as a failure when it is simply
@@ -197,7 +201,9 @@ export const collectDoctorReport = async (
           ? "logs are disabled; only traces are exported"
           : logs.reason === "no-endpoint"
             ? "logs are enabled but no endpoint is configured and none could be derived"
-            : `logs are enabled but unroutable: ${logs.reason}`,
+            : logs.reason === "protocol-unsupported"
+              ? `logs are HTTP/protobuf only in this build; protocol ${traceProtocol} does not export logs`
+              : `logs are enabled but unroutable: ${logs.reason}`,
   });
 
   const health = summarizeHealth([sink.health()]);

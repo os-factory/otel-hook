@@ -133,6 +133,12 @@ describe("describeLogsDeliverability", () => {
         withLogs({ enabled: true }, { protocol: "http/json", endpoint: "http://c:4318" }),
       ),
     ).toEqual({ status: "disabled", reason: "protocol-unsupported" });
+    // gRPC is a trace protocol. Logs stay disabled rather than growing a second exporter.
+    expect(
+      describeLogsDeliverability(
+        withLogs({ enabled: true }, { protocol: "grpc", endpoint: "http://127.0.0.1:4317" }),
+      ),
+    ).toEqual({ status: "disabled", reason: "protocol-unsupported" });
     expect(describeLogsDeliverability(withLogs({ enabled: true }, { endpoint: undefined }))).toEqual({
       status: "disabled",
       reason: "no-endpoint",
@@ -188,7 +194,7 @@ describe("createOtlpLogSink: degraded configurations never throw", () => {
       withLogs({ enabled: true }, { protocol: "http/json", endpoint: "http://127.0.0.1:4318" }),
     );
     expect((await sink.emit(events)).accepted).toBe(0);
-    expect(logger.records().some((record) => record.message.includes("not supported"))).toBe(true);
+    expect(logger.records().some((record) => record.message.includes("HTTP/protobuf only"))).toBe(true);
   });
 
   it("drainSpool is a safe no-op when no spool is configured", async () => {

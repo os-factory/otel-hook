@@ -13,6 +13,7 @@ import {
   MAX_RESOURCE_ATTRIBUTE_VALUE_LENGTH,
   RESOURCE_ATTRIBUTE_KEY_REJECTION_DETAIL,
 } from "../config/resource-attributes.js";
+import { EXPORTER_PROTOCOLS, isExporterProtocol, type ExporterProtocol } from "../config/schema.js";
 
 export const CLI_COMMANDS = [
   "run",
@@ -31,7 +32,7 @@ export type CliRegistrationScope = "global" | "project";
 export type CliPolicyFlags = {
   readonly configFile?: string;
   readonly endpoint?: string;
-  readonly protocol?: "http/protobuf" | "http/json" | "none";
+  readonly protocol?: ExporterProtocol;
   readonly serviceName?: string;
   readonly serviceNamespace?: string;
   readonly timeoutMillis?: number;
@@ -375,10 +376,12 @@ const parsePolicy = (tokens: Tokenized, errors: string[]): CliPolicyFlags => {
   const protocolRaw = single(tokens, "--protocol", errors);
   let protocol: CliPolicyFlags["protocol"];
   if (protocolRaw !== undefined) {
-    if (protocolRaw === "http/protobuf" || protocolRaw === "http/json" || protocolRaw === "none") {
+    if (isExporterProtocol(protocolRaw)) {
       protocol = protocolRaw;
     } else {
-      errors.push(`flag --protocol expects http/protobuf, http/json, or none, got "${protocolRaw}"`);
+      errors.push(
+        `flag --protocol expects ${EXPORTER_PROTOCOLS.join(", ")}, got "${protocolRaw}"`,
+      );
     }
   }
 
@@ -791,8 +794,14 @@ Delivery deduplication (at most once per callback, across process restarts):
 
 Exporter and runtime policy (never identity):
   --config-file <path>       JSON configuration patch
-  --endpoint <url>           OTLP HTTP/protobuf traces endpoint
-  --protocol <p>             http/protobuf | http/json | none
+  --endpoint <url>           traces endpoint. http/protobuf: full URL, usually
+                             http://host:4318/v1/traces. grpc: base URL, usually
+                             http://host:4317 (http is plaintext, https is TLS;
+                             the path is ignored)
+  --protocol <p>             http/protobuf | grpc | http/json | none
+                             http/json is accepted and disables export; there is
+                             no JSON exporter. grpc exports traces only — logs
+                             stay HTTP/protobuf
   --service-name <name>      --service-namespace <ns>
   --timeout-ms <n>           per-export timeout
   --no-export                disable the exporter entirely

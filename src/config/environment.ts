@@ -6,7 +6,7 @@ import {
   MAX_RESOURCE_ATTRIBUTE_VALUE_LENGTH,
   parseResourceAttributesValue,
 } from "./resource-attributes.js";
-import type { OtelHookConfigPatch } from "./schema.js";
+import { EXPORTER_PROTOCOLS, isExporterProtocol, type ExporterProtocol, type OtelHookConfigPatch } from "./schema.js";
 
 export type EnvironmentRecord = Readonly<Record<string, string | undefined>>;
 
@@ -195,12 +195,15 @@ export const parseEnvironmentConfig = (env: EnvironmentRecord): EnvironmentConfi
   ]);
 
   const protocolRaw = readString(ENVIRONMENT_VARIABLES.exporterProtocol);
-  let protocol: "http/protobuf" | "http/json" | "none" | undefined;
+  let protocol: ExporterProtocol | undefined;
   if (protocolRaw !== undefined) {
-    if (protocolRaw === "http/protobuf" || protocolRaw === "http/json" || protocolRaw === "none") {
+    if (isExporterProtocol(protocolRaw)) {
       protocol = protocolRaw;
     } else {
-      warn(ENVIRONMENT_VARIABLES.exporterProtocol, "expected http/protobuf, http/json, or none");
+      warn(
+        ENVIRONMENT_VARIABLES.exporterProtocol,
+        `expected ${EXPORTER_PROTOCOLS.join(", ")}`,
+      );
     }
   }
 

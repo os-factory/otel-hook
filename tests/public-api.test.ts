@@ -32,6 +32,8 @@ describe("public surface", () => {
       "createOtelHook",
       "resolveConfig",
       "parseEnvironmentConfig",
+      "EXPORTER_PROTOCOLS",
+      "exporterProtocolSchema",
       // Custom OTLP resource attributes: typed, bounded, and parseable from
       // the standard environment variable.
       "resourceAttributesSchema",

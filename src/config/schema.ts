@@ -49,6 +49,36 @@ export const DEFAULT_LOGS_POLICY: LogsPolicy = Object.freeze({
 });
 
 /**
+ * OTLP protocols the configuration surface accepts.
+ *
+ * `http/protobuf` and `grpc` are delivered. `http/json` is accepted so a file
+ * can name it, and then refused: this build has no JSON exporter. `none`
+ * disables export. Anything else fails configuration (schema, CLI, or a
+ * skipped environment variable) rather than being guessed.
+ *
+ * Endpoint shape depends on the protocol:
+ *
+ * - `http/protobuf` — the full traces URL, path included. The conventional
+ *   collector address is `http://host:4318/v1/traces`.
+ * - `grpc` — a base URL. `http://` selects a plaintext channel and `https://`
+ *   selects TLS. The conventional collector address is `http://host:4317`.
+ *   The URL path is not a signal path; the gRPC exporter ignores it.
+ */
+export const EXPORTER_PROTOCOLS = ["http/protobuf", "grpc", "http/json", "none"] as const;
+export const exporterProtocolSchema = z.enum(EXPORTER_PROTOCOLS);
+export type ExporterProtocol = z.infer<typeof exporterProtocolSchema>;
+
+export const isExporterProtocol = (value: string): value is ExporterProtocol =>
+  (EXPORTER_PROTOCOLS as readonly string[]).includes(value);
+
+/** Protocols this build can deliver traces on. Logs stay `http/protobuf` only. */
+export const WIRED_TRACE_PROTOCOLS = ["http/protobuf", "grpc"] as const;
+export type WiredTraceProtocol = (typeof WIRED_TRACE_PROTOCOLS)[number];
+
+export const isWiredTraceProtocol = (protocol: ExporterProtocol): protocol is WiredTraceProtocol =>
+  (WIRED_TRACE_PROTOCOLS as readonly string[]).includes(protocol);
+
+/**
  * Runtime exporter policy.
  *
  * This describes *where and how* telemetry goes. It deliberately contains no
@@ -57,7 +87,7 @@ export const DEFAULT_LOGS_POLICY: LogsPolicy = Object.freeze({
  */
 export const exporterPolicySchema = z.strictObject({
   enabled: z.boolean(),
-  protocol: z.enum(["http/protobuf", "http/json", "none"]),
+  protocol: exporterProtocolSchema,
   endpoint: z.string().url().max(2048).optional(),
   /**
    * Header names only. Values are supplied separately at construction time and

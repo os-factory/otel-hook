@@ -1,16 +1,17 @@
 import { ExportResultCode, type ExportResult } from "@opentelemetry/core";
-import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-proto";
 import type { InstrumentationScope } from "@opentelemetry/core";
 import type { Resource } from "@opentelemetry/resources";
 import type { ReadableSpan } from "@opentelemetry/sdk-trace";
 
-import type { ExporterPolicy } from "../config/schema.js";
+import { isWiredTraceProtocol, type ExporterPolicy } from "../config/schema.js";
 import { createErrorInfo, type OtelHookErrorInfo } from "../errors/index.js";
 import { createHealthTracker, type DeliveryHealthSnapshot } from "../diagnostics/health.js";
 import type { CanonicalEvent } from "../model/events.js";
 import type { Clock, Logger, TelemetryEmitResult, TelemetrySink } from "../runtime/ports.js";
 import type { DurableSpool, SerializedSpan, SpoolBatch } from "./durable-spool.js";
+import { classifyExportFailure } from "./otlp-export-classification.js";
 import { replayResource, resourceFromExporterPolicy } from "./exporter-resource.js";
+import { createTraceBatchExporter, type TraceBatchExporter } from "./trace-exporter.js";
 import {
   assembleReadableSpan,
   canonicalEventsToReadableSpans,
@@ -108,15 +109,16 @@ const createDisabledSink = (): OtlpTelemetrySink => {
 };
 
 /**
- * OTLP HTTP/protobuf {@link TelemetrySink}.
+ * OTLP trace {@link TelemetrySink} for `http/protobuf` and `grpc`.
  *
  * Semantic mapping lives entirely in `semconv.ts`; this module only owns
  * batching, delivery, bounded flush/shutdown, health tracking, and — when a
- * spool is configured — persisting what a down collector rejected. Every
- * failure mode (disabled config, missing endpoint, export failure, timeout,
- * spool write failure, unreadable correlation state) degrades to a reported
- * diagnostic rather than a thrown error, preserving the hook's fail-open
- * contract.
+ * spool is configured — persisting what a down collector rejected. The spool
+ * stores canonical spans, not a transport frame, so a batch refused over one
+ * protocol is replayed unchanged over the other. Every failure mode (disabled
+ * config, missing endpoint, export failure, timeout, TLS error, spool write
+ * failure, unreadable correlation state) degrades to a reported diagnostic
+ * rather than a thrown error, preserving the hook's fail-open contract.
  *
  * A disabled sink never calls `correlate`: with nothing being exported there is
  * no span to pair, and writing correlation state anyway would leave a disabled
@@ -130,7 +132,7 @@ export const createOtlpTraceSink = (options: OtlpTraceSinkOptions): OtlpTelemetr
     options.logger?.warn("otlp sink disabled: no endpoint configured", {});
     return createDisabledSink();
   }
-  if (options.exporter.protocol !== "http/protobuf") {
+  if (!isWiredTraceProtocol(options.exporter.protocol)) {
     options.logger?.warn("otlp sink: protocol not supported by this build, falling back to disabled", {
       "exporter.protocol": options.exporter.protocol,
     });
@@ -140,11 +142,18 @@ export const createOtlpTraceSink = (options: OtlpTraceSinkOptions): OtlpTelemetr
   const scope = options.instrumentationScope ?? DEFAULT_INSTRUMENTATION_SCOPE;
   const resource = resourceFromExporterPolicy(options.exporter);
   const health = createHealthTracker("telemetry-sink");
-  const exporter = new OTLPTraceExporter({
-    url: options.exporter.endpoint,
-    headers: { ...options.headers },
-    timeoutMillis: options.exporter.timeoutMillis,
-  });
+  let exporter: TraceBatchExporter;
+  try {
+    exporter = createTraceBatchExporter(options.exporter, options.headers);
+  } catch {
+    // A header the gRPC metadata constructor refuses, or a client that cannot
+    // be constructed, must not escape the hook. The batch is accepted and
+    // dropped, same as a disabled exporter.
+    options.logger?.warn("otlp sink disabled: trace exporter could not be constructed", {
+      "exporter.protocol": options.exporter.protocol,
+    });
+    return createDisabledSink();
+  }
   let shutdownCompleted = false;
 
   const exportSpans = (spans: readonly ReadableSpan[]): Promise<ExportResult> =>
@@ -226,7 +235,8 @@ export const createOtlpTraceSink = (options: OtlpTraceSinkOptions): OtlpTelemetr
       }
 
       health.recordFailure("telemetry-export-failure", batch.length, options.clock.now());
-      if (options.spool !== undefined) {
+      const retryable = classifyExportFailure(result.error) === "retryable";
+      if (retryable && options.spool !== undefined) {
         const spoolResult = await options.spool.enqueue(toSpoolBatch(batch)).catch(() => ({
           spooled: false as const,
           reason: "capacity-exceeded" as const,
@@ -241,8 +251,10 @@ export const createOtlpTraceSink = (options: OtlpTraceSinkOptions): OtlpTelemetr
         createErrorInfo({
           code: "telemetry-export-failure",
           phase: "export",
-          detail: "collector rejected or was unreachable for a span batch",
-          details: { "export.batch_size": batch.length },
+          detail: retryable
+            ? "collector rejected or was unreachable for a span batch"
+            : "collector rejected a span batch with a terminal status",
+          details: { "export.batch_size": batch.length, "export.retryable": retryable },
         }),
       );
     }
