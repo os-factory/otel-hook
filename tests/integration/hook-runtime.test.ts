@@ -310,7 +310,7 @@ describe("hook runtime: bounded flush and containment", () => {
     // The bound is what the host actually pays; a generous ceiling here keeps the
     // assertion about "bounded", not about scheduler precision.
     expect(elapsed).toBeLessThan(5_000);
-  }, 30_000);
+  });
 
   it("is idempotent on shutdown and reports health", async () => {
     const { runtime } = await buildRuntime({});

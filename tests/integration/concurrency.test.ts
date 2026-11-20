@@ -101,7 +101,7 @@ describe("concurrency across at least ten identities sharing one filesystem stat
     // observed a partial or interleaved write from another session's updates.
     const totals = new Set(results.map((result) => result.total));
     expect(totals.size).toBeGreaterThan(1); // seeded per-identity, so totals differ
-  }, 30_000);
+  });
 
   it("serializes concurrent writers on the very same key without losing an update", async () => {
     const clock = createSystemClock();
@@ -125,5 +125,5 @@ describe("concurrency across at least ten identities sharing one filesystem stat
 
     const final = await stateStore.read("counter");
     expect(final?.value).toEqual({ kind: "sequence", next: IDENTITY_COUNT });
-  }, 30_000);
+  });
 });

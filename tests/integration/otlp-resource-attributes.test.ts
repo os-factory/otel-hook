@@ -244,7 +244,7 @@ describe("custom resource attributes survive the durable spool", () => {
 
     await sink.shutdown();
     await drainSink.shutdown();
-  }, 30_000);
+  });
 
   it("refuses to replay a resource attribute a tampered spool file added", async () => {
     const rootDir = await withRootDir();
@@ -310,5 +310,5 @@ describe("custom resource attributes survive the durable spool", () => {
     expect(replayed).not.toContain("sk-live-injected-by-hand");
     expect(replayed).not.toContain("also-injected");
     await sink.shutdown();
-  }, 30_000);
+  });
 });

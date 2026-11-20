@@ -68,7 +68,7 @@ describe("performance benchmarks", () => {
     const elapsedMillis = performance.now() - startedAt;
     console.log(`filesystem store: ${OPERATION_COUNT} writes in ${elapsedMillis.toFixed(1)}ms`);
     expect(elapsedMillis).toBeLessThan(20_000);
-  }, 30_000);
+  });
 
   it(`rolls up ${OPERATION_COUNT} usage deltas for one scope well within budget`, async () => {
     const accumulator = createUsageAccumulator({

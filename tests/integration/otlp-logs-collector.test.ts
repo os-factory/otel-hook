@@ -223,7 +223,7 @@ describe("OTLP logs: bounded spooling, retry, and shutdown", () => {
 
     await sink.shutdown();
     await drainSink.shutdown();
-  }, 20_000);
+  });
 
   it("uses its own queue directory, so a logs outage cannot consume the trace spool", async () => {
     const rootDir = await tempRoot();
@@ -243,7 +243,7 @@ describe("OTLP logs: bounded spooling, retry, and shutdown", () => {
     const identityDir = path.join(rootDir, PROVIDER, INSTALLATION);
     expect((await readdir(identityDir)).sort()).toEqual(["spool-logs", "spool-logs-corrupt"]);
     await sink.shutdown();
-  }, 20_000);
+  });
 
   it("refuses new entries at capacity rather than growing without bound", async () => {
     const rootDir = await tempRoot();
@@ -279,7 +279,7 @@ describe("OTLP logs: bounded spooling, retry, and shutdown", () => {
     expect(await spool.size()).toBe(2);
     expect(logger.records().some((record) => record.message.includes("at capacity"))).toBe(true);
     await sink.shutdown();
-  }, 20_000);
+  });
 
   it("quarantines a poisoned spool file instead of wedging the queue behind it", async () => {
     const rootDir = await tempRoot();
@@ -343,7 +343,7 @@ describe("OTLP logs: bounded spooling, retry, and shutdown", () => {
     const corrupt = await readdir(path.join(rootDir, PROVIDER, INSTALLATION, "spool-logs-corrupt"));
     expect(corrupt).toContain("0000000000000000-poison.json");
     await drainSink.shutdown();
-  }, 20_000);
+  });
 
   it("refuses a spooled record whose correlation was tampered with", async () => {
     const rootDir = await tempRoot();
@@ -394,7 +394,7 @@ describe("OTLP logs: bounded spooling, retry, and shutdown", () => {
     expect(await drainSink.drainSpool()).toMatchObject({ drained: 0, quarantined: 1, failed: 0 });
     expect(recovered.requests).toHaveLength(0);
     await drainSink.shutdown();
-  }, 20_000);
+  });
 
   it("drains the spool on shutdown, and shutdown is idempotent", async () => {
     const rootDir = await tempRoot();
@@ -427,5 +427,5 @@ describe("OTLP logs: bounded spooling, retry, and shutdown", () => {
     const before = collector.requests.length;
     await sink.shutdown();
     expect(collector.requests.length).toBe(before);
-  }, 20_000);
+  });
 });
