@@ -76,6 +76,14 @@ describe("public surface", () => {
       "createSignalFanout",
       "shareCorrelationPerBatch",
       "describeLogsDeliverability",
+      "createJsonlSink",
+      "createConsoleSink",
+      "attachLocalExporters",
+      "createLocalExportSinks",
+      "serializeLocalExportLine",
+      "isForbiddenJsonlPath",
+      "LOCAL_EXPORT_SCHEMA",
+      "LOCAL_EXPORT_SCHEMA_VERSION",
       "logSignalOf",
       "logSignalsForLifecycleEvents",
       "LOG_MAPPING_VERSION",
@@ -122,6 +130,9 @@ describe("public surface", () => {
     expect(typeof state.createFilesystemStateStore).toBe("function");
     expect(typeof telemetry.createOtlpTraceSink).toBe("function");
     expect(typeof telemetry.createOtlpLogSink).toBe("function");
+    expect(typeof telemetry.createJsonlSink).toBe("function");
+    expect(telemetry.LOCAL_EXPORT_SCHEMA).toBe("otelhook.local-export");
+    expect(telemetry.LOCAL_EXPORT_SCHEMA_VERSION).toBe(1);
     expect(typeof diagnostics.summarizeHealth).toBe("function");
     expect(typeof integration.createHookRuntime).toBe("function");
     expect(typeof install.planProviderRegistration).toBe("function");

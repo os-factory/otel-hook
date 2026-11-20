@@ -86,3 +86,20 @@ export {
   type SignalFanoutOptions,
   type SignalFanoutSink,
 } from "../telemetry/signal-fanout.js";
+export {
+  LOCAL_EXPORT_SCHEMA,
+  LOCAL_EXPORT_SCHEMA_VERSION,
+  attachLocalExporters,
+  createConsoleSink,
+  createJsonlSink,
+  createLocalExportSinks,
+  describeJsonlDeliverability,
+  isForbiddenJsonlPath,
+  serializeLocalExportLine,
+  stableStringify,
+  type ConsoleSinkOptions,
+  type JsonlDeliverability,
+  type JsonlSinkOptions,
+  type LocalExportEnvelope,
+  type LocalExportSinksOptions,
+} from "../telemetry/local-export.js";
