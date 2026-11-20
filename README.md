@@ -331,6 +331,20 @@ Which providers this works for, and why not the others, is recorded in
 
 ## Library
 
+The OpenTelemetry SDK is an optional peer dependency. The `otel-hook` binary
+bundles its own copy, so `npx` and global installs need nothing else. A host that
+imports `@osfactory/otel-hook`, `/integration`, `/telemetry`, or `/lifecycle`
+installs it alongside:
+
+```bash
+npm install @osfactory/otel-hook @opentelemetry/api @opentelemetry/api-logs \
+  @opentelemetry/exporter-logs-otlp-proto @opentelemetry/exporter-trace-otlp-proto \
+  @opentelemetry/resources @opentelemetry/sdk-logs @opentelemetry/sdk-trace-node \
+  @opentelemetry/semantic-conventions
+```
+
+Every other subpath — `/privacy` and `/semconv` included — loads without it.
+
 ```ts
 import { createHookRuntime } from "@osfactory/otel-hook/integration";
 import { createDefaultProviderRegistry } from "@osfactory/otel-hook/providers";
@@ -380,6 +394,7 @@ lower-level orchestrator without the filesystem and lifecycle wiring, use
 | `@osfactory/otel-hook/state`       | Filesystem and bounded-memory state stores, session locking                    |
 | `@osfactory/otel-hook/telemetry`   | OTLP trace and log sinks, durable spools, canonical-event-to-span and -to-log mappings |
 | `@osfactory/otel-hook/diagnostics` | Delivery health tracking and summaries                                        |
+| `@osfactory/otel-hook/semconv`     | Names of the identity and worktree-target attributes on every log and span     |
 | `@osfactory/otel-hook/integration` | `createHookRuntime`: state + lifecycle + OTLP wired for short-lived hooks       |
 | `@osfactory/otel-hook/install`     | Pure hook-registration planners, plus the locked/atomic apply lifecycle       |
 | `@osfactory/otel-hook/testing`     | Test doubles, harness, synthetic reference adapter                            |

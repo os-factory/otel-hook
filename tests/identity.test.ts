@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   canonicalizeGitRemote,
+  createPrivacyService,
+  DEFAULT_PRIVACY_POLICY,
   deriveWorkspaceIdentity,
   invocationIdentitySchema,
   resolveInvocationIdentity,
@@ -242,6 +244,34 @@ describe("workspace identity", () => {
     const workspace = deriveWorkspaceIdentity(privacy, { kind: "unknown" });
     expect(workspace.keySource).toBe("unknown");
     expect(workspace).toEqual(unknownWorkspaceIdentity());
+  });
+
+  it("hashes golden vectors byte-for-byte, so consumers recomputing ids stay in step", () => {
+    // Consumers (HAR Mission Control) recompute these ids from a path to join
+    // records to a checkout. Changing any of them silently breaks that join.
+    const unsalted = createPrivacyService(DEFAULT_PRIVACY_POLICY);
+    const salted = createPrivacyService({ ...DEFAULT_PRIVACY_POLICY, hashSalt: "deployment-salt" });
+    const idOf = (service: typeof unsalted, input: Parameters<typeof deriveWorkspaceIdentity>[1]) =>
+      deriveWorkspaceIdentity(service, input).workspaceId;
+
+    expect(idOf(unsalted, { kind: "git-root", absolutePath: "/home/dev/repo/" })).toBe(
+      "sha256:6853cf907d76b1435badf9c9083016fb375bb0fc73c16dd765b0b257128d6064",
+    );
+    expect(idOf(unsalted, { kind: "working-directory", absolutePath: "/home/dev/repo" })).toBe(
+      "sha256:1fc0e234c398a687c602642ce7529433c82921d3376a862cb123af5f9b76e387",
+    );
+    expect(idOf(unsalted, { kind: "git-remote", remoteUrl: "git@github.com:Org/Repo.git" })).toBe(
+      "sha256:c8f5321b6b583913af97d30980efe605dc4f399571b525f24841565a92a47173",
+    );
+    expect(idOf(unsalted, { kind: "explicit", value: "my-workspace" })).toBe(
+      "sha256:f29a739db2b29327330f03ffa1259683e874e7274845e36f4c1b87e167d94fad",
+    );
+    expect(idOf(salted, { kind: "git-root", absolutePath: "/home/dev/repo/" })).toBe(
+      "sha256:cdcbb1ab13c2bbbf9f4b811662a993182160365d719319bdda998ce446735f8a",
+    );
+    expect(
+      deriveWorkspaceIdentity(unsalted, { kind: "unknown" }, { vcsRevisionId: "abc123" }).vcsRevisionId,
+    ).toBe("sha256:0ee335cdd3a577a95323337eec9bc859b153e836a08077ed43d4f6a85c8e2a05");
   });
 
   it("rejects a raw path supplied directly as a workspace id", () => {
