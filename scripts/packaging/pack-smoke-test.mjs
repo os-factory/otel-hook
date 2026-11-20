@@ -110,9 +110,16 @@ const runSmokeTest = async ({ skipBuild = false } = {}) => {
         // claims to ship: a subpath that resolves in the tarball says nothing
         // about whether the bundled CLI can actually construct the adapters.
         const { stdout: providersJson } = await runBin(["providers", "--json"]);
-        const providers = JSON.parse(providersJson);
-        if (!Array.isArray(providers) || providers.length === 0) {
-          throw new Error(`bin ${binName} providers --json returned no adapters`);
+        const manifest = JSON.parse(providersJson);
+        const providers = manifest?.providers;
+        if (
+          manifest === null ||
+          typeof manifest !== "object" ||
+          manifest.manifestVersion !== 1 ||
+          !Array.isArray(providers) ||
+          providers.length === 0
+        ) {
+          throw new Error(`bin ${binName} providers --json must be capability manifest version 1`);
         }
         for (const entry of providers) {
           if (typeof entry.id !== "string" || typeof entry.maturity !== "string") {

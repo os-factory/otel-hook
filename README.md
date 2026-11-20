@@ -26,26 +26,33 @@ intentionally does and does not claim.
 
 ## Supported providers
 
-`otel-hook providers` prints this table for your installed version, with the full
-capability matrix. Adapter behaviour is *declared* rather than inferred, because
-"this provider reports no cached tokens" and "this session used no cache" are
-indistinguishable in the data.
+`otel-hook providers` prints this table for your installed version. The table
+and `otel-hook providers --json` are two renderings of one versioned manifest
+(`manifestVersion` 1) built from adapter declarations — maturity, lifecycle
+events, usage semantics, stdout behaviour, registration, and the log signals
+each provider can export. The committed copy is
+[docs/provider-capability-manifest.json](docs/provider-capability-manifest.json).
+Adapter behaviour is *declared* rather than inferred, because "this provider
+reports no cached tokens" and "this session used no cache" are indistinguishable
+in the data.
 
+<!-- capability-matrix:start -->
 | Provider id   | Agent              | Maturity     | stdout protocol | Usage temporality | Registration                 |
 | ------------- | ------------------ | ------------ | --------------- | ----------------- | ---------------------------- |
+| `antigravity` | Google Antigravity | experimental | silent          | delta             | `setup --settings-file`      |
 | `claude-code` | Claude Code        | stable       | silent          | delta             | `setup` (global and project) |
 | `codex`       | OpenAI Codex CLI   | stable       | silent          | cumulative[^1]    | `setup` (global and project) |
 | `cursor`      | Cursor             | stable       | provider JSON   | delta             | `setup` (global and project) |
 | `gemini-cli`  | Gemini CLI         | stable       | silent          | cumulative        | `setup` (global and project) |
-| `antigravity` | Google Antigravity | experimental | silent          | delta             | `setup --settings-file`      |
 
-[^1]: Codex's counters are cumulative over the **whole session**, not per turn:
-    every usage-bearing hook stamps the rollout's running `total_token_usage`.
+[^1]: OpenAI Codex CLI reports usage as cumulative over the **whole session**, not per turn:
+    every usage-bearing hook stamps the running total.
     Deltas are therefore diffed against the session's previous snapshot rather
-    than per `turn_id`, which is what keeps a three-turn session from billing its
-    first turn three times. `otel-hook providers` prints this as
+    than per turn, which is what keeps a multi-turn session from billing its
+    first turn repeatedly. `otel-hook providers` prints this as
     `usage temporality  cumulative (series: session-lifetime)`; see
     [docs/usage-semantics.md](docs/usage-semantics.md#which-series-a-cumulative-report-continues).
+<!-- capability-matrix:end -->
 
 `antigravity` is registered but marked `experimental`: parts of its field and
 lifecycle mapping are reconstructions pending confirmation against real captures.
@@ -170,7 +177,7 @@ provider-recorded timestamp:
 
 ```bash
 otel-hook run --provider cursor            # redelivered tool callbacks dedupe
-otel-hook providers --json                 # per-adapter "deliveryIdentifier"
+otel-hook providers --json                 # versioned capability manifest
 ```
 
 Either way, a redelivery suppresses duplicate *telemetry* while still producing
@@ -959,13 +966,14 @@ fixing one means updating that test rather than discovering a silent change.
    *shape* is recorded but no install *path* has been verified, so `setup`
    requires an explicit `--settings-file` and `diagnose` does not sweep it.
 9. **No Python parity is claimed for Codex or Gemini CLI.** The pinned
-    `opentelemetry-hooks==0.14.0` reference rewrites Gemini's `BeforeTool` into
-    Claude Code's `PreToolUse` (`DIVERGENCE-007`), and reads Codex's
-    `gen_ai.client.version` from whichever `codex` binary is on the *host's* PATH
-    rather than from the payload's own `codex_version` — host-dependent, and wrong
-    for a replayed payload (`DIVERGENCE-010`).
-    `tests/parity/codex-gemini.parity.test.ts` establishes our own semantics and
-    pins both divergences instead of asserting agreement.
+   `opentelemetry-hooks==0.14.0` reference rewrites Gemini's `BeforeTool` into
+   Claude Code's `PreToolUse` (`DIVERGENCE-007`), and reads Codex's
+   `gen_ai.client.version` from whichever `codex` binary is on the *host's* PATH
+   rather than from the payload's own `codex_version` — host-dependent, and wrong
+   for a replayed payload (`DIVERGENCE-010`).
+   `tests/parity/codex-gemini.parity.test.ts` establishes our own semantics and
+   pins both divergences instead of asserting agreement. The full named set is
+   in [docs/compatibility-policy.md](docs/compatibility-policy.md#upstream-divergences).
 10. **Only OTLP HTTP/protobuf is exported, for traces and logs.** `http/json` falls
     back to a disabled sink with a warning, and there is no metrics pipeline. The
     logs pipeline is off by default; see [Logs](#logs).
