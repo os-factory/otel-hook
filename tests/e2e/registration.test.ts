@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { ensureBuiltCli, makeStateDir, runCliProcess } from "./harness.js";
 
@@ -14,7 +14,13 @@ import { ensureBuiltCli, makeStateDir, runCliProcess } from "./harness.js";
  * `--project-dir` exist partly for this: resolving the scopes from flags rather
  * than from `HOME`/`USERPROFILE` means one assertion covers all three platforms,
  * and no test can ever reach a real `~/.claude/settings.json`.
+ *
+ * Each case spawns the built CLI several times. The default 5s budget is
+ * enough on an idle runner and too tight when the rest of the suite is
+ * competing for the machine, so this file uses the same raised budget as the
+ * parity suites.
  */
+vi.setConfig({ testTimeout: 15_000 });
 
 beforeAll(async () => {
   await ensureBuiltCli();
