@@ -17,7 +17,8 @@ machine-readable version is `PROVIDER_REGISTRATION_SUPPORT` in
 every unsupported entry carries a blocker.
 
 Sources were read on 2026-07-26. The Gemini CLI row was re-verified against
-upstream source on 2026-07-29, and the Cursor row on 2026-07-29.
+upstream source on 2026-07-29, the Cursor row on 2026-07-29, and the
+Antigravity row against `antigravity.google/docs/hooks` on 2026-11-02.
 
 ## Verified
 
@@ -27,7 +28,7 @@ upstream source on 2026-07-29, and the Cursor row on 2026-07-29.
 | `codex`       | `~/.codex/hooks.json`        | `.codex/hooks.json`          | same nested shape                                                                         | [learn.chatgpt.com/docs/hooks][cx] (`developers.openai.com/codex/hooks` redirects here); same cross-check |
 | `cursor`      | `~/.cursor/hooks.json`       | `.cursor/hooks.json`         | `{ version: 1, hooks: { <event>: [{ command, type?, timeout?, matcher? }] } }` (flat)      | [cursor.com/docs/agent/hooks][cu]; same cross-check                                                  |
 | `gemini-cli`  | `~/.gemini/settings.json`    | `.gemini/settings.json`      | same nested shape, plus `name` on each handler and `sequential` on each group             | [geminicli.com/docs/hooks/reference][gm]; cross-checked against `google-gemini/gemini-cli@3499c84` and `o11y-dev/opentelemetry-hooks` v0.14.0 `setup.sh` (`setup_gemini`) |
-| `antigravity` | *not verified — see below*   | *not verified — see below*   | `hooks.<Event>[] = { command, matcher? }` (flat), recorded by this repository's adapter    | `src/providers/antigravity/payload.ts`                                                               |
+| `antigravity` | `~/.gemini/config/hooks.json` | `.agents/hooks.json`     | named-hook map: tool events are `{ matcher, hooks: [{ type: "command", command, timeout? }] }`; `SessionStart`, `PreInvocation`, `PostInvocation`, and `Stop` are bare `{ type, command, timeout? }` lists. `timeout` is seconds. | [antigravity.google/docs/hooks][ag] (read 2026-11-02) |
 
 ### `timeout` is not one unit across these vocabularies
 
@@ -184,23 +185,23 @@ consistent with) and drops the breakdown rather than reinterpret a payload that
 contradicts it. `cache_write_tokens` is not mapped at all. See
 `CURSOR_USAGE_INCLUSIVITY_NOTE` and known limitation 7 in the README.
 
-## Blocked
+## Antigravity notes
 
-### `antigravity` — planner verified, location not
+The same two paths apply to the Antigravity App, CLI, and IDE. The CLI note on
+that page says hooks in `~/.gemini/antigravity-cli/settings.json` are not
+loaded, so setup does not write that file.
+`google-antigravity/antigravity-cli` issue 49 reports the CLI sometimes writing
+`~/.gemini/antigravity-cli/hooks.json` while still triggering from
+`~/.gemini/config/hooks.json`. That write-path bug is not a second install
+location; setup writes the documented trigger path.
 
-The hook-file *shape* is recorded by the adapter and the planner is supported,
-but no path has been verified. `o11y-dev/opentelemetry-hooks` v0.14.0 lists
-Antigravity as a "manual hook command, runner-defined" integration and writes no
-file for it, and this repository has no other source.
-
-`setup --provider antigravity` therefore refuses until given
-`--settings-file <path>`, and a bare `diagnose` does not sweep it — there is
-nowhere to look.
-
-**To unblock:** a published Antigravity hook-file path, or a documented
-convention for the runner in use.
+Default registration is `SessionStart` and `PostToolUse`. The other documented
+events can be opted in with `--event`, and they are left off the default
+because stdin does not name the event: a process registered for them would
+emit no telemetry. See `src/providers/antigravity/registration.ts`.
 
 [cc]: https://code.claude.com/docs/en/hooks
 [cx]: https://learn.chatgpt.com/docs/hooks
 [cu]: https://cursor.com/docs/agent/hooks
 [gm]: https://geminicli.com/docs/hooks/reference/
+[ag]: https://antigravity.google/docs/hooks

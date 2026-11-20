@@ -1,0 +1,11 @@
+{
+  "fixture": "post-tool-use-is-error.json",
+  "sourceContract": "Antigravity tool stdin carrying the reconstructed boolean isError, which the published reference does not define",
+  "provider": "antigravity",
+  "capturedDate": "2026-11-02",
+  "author": "otel-hook antigravity provider owner (agent)",
+  "sanitization": "No captured payload. Ids, model name, paths, tool arguments, and error text are placeholders under /workspace/example-repo. Secret-shaped strings, where present, are fabricated.",
+  "licenseBasis": "Original synthetic authorship. Field names follow antigravity.google/docs/hooks (read 2026-11-02). Every value is invented; no transcript, path, or credential is copied.",
+  "sha256": "545a082dd2bf99713c276c31f24b095d499d25a01ba18434ca3222dc172bcf4d",
+  "notes": "No error key. The boolean must not become an outcome, and the payload stays an unlabeled tool edge."
+}

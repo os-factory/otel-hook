@@ -274,20 +274,36 @@ describe("planProviderRegistration", () => {
     expect(hooks.BeforeTool?.[0]?.hooks.map((hook) => hook.name)).toEqual(["someone-else", "otel-hook"]);
   });
 
-  it("plans an Antigravity registration only for the requested events", () => {
+  it("plans an Antigravity registration in the documented named-hook shape", () => {
     const result = planProviderRegistration({
       providerId: "antigravity",
-      options: { command: "otel-hook run --provider antigravity", events: ["PreToolUse", "PostToolUse"] },
+      options: {
+        command: "otel-hook run --provider antigravity",
+        events: ["PreToolUse", "PostToolUse"],
+        timeoutSeconds: 10,
+      },
     });
 
     expect(result.status).toBe("planned");
     if (result.status !== "planned") {
       return;
     }
-    expect(Object.keys(result.document.hooks as Record<string, unknown>).sort()).toEqual([
-      "PostToolUse",
-      "PreToolUse",
-    ]);
+    expect(result.document).toEqual({
+      "otel-hook": {
+        PreToolUse: [
+          {
+            matcher: "*",
+            hooks: [{ type: "command", command: "otel-hook run --provider antigravity", timeout: 10 }],
+          },
+        ],
+        PostToolUse: [
+          {
+            matcher: "*",
+            hooks: [{ type: "command", command: "otel-hook run --provider antigravity", timeout: 10 }],
+          },
+        ],
+      },
+    });
   });
 });
 

@@ -1,0 +1,11 @@
+{
+  "fixture": "unknown-fields.json",
+  "sourceContract": "Antigravity SessionStart stdin plus an additive field the reference does not list",
+  "provider": "antigravity",
+  "capturedDate": "2026-11-02",
+  "author": "otel-hook antigravity provider owner (agent)",
+  "sanitization": "No captured payload. Ids, model name, paths, tool arguments, and error text are placeholders under /workspace/example-repo. Secret-shaped strings, where present, are fabricated.",
+  "licenseBasis": "Original synthetic authorship. Field names follow antigravity.google/docs/hooks (read 2026-11-02). Every value is invented; no transcript, path, or credential is copied.",
+  "sha256": "e292019cb775c8c0a763ba07fbfd8c69df76857cc24970a52e709131f770f15f",
+  "notes": "Unknown keys are tolerated. They are not propagated and they do not change the event."
+}

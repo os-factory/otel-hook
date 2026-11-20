@@ -1,0 +1,11 @@
+{
+  "fixture": "post-tool-use-subagent.json",
+  "sourceContract": "Antigravity PostToolUse for the documented invoke_subagent tool, per antigravity.google/docs/hooks",
+  "provider": "antigravity",
+  "capturedDate": "2026-11-02",
+  "author": "otel-hook antigravity provider owner (agent)",
+  "sanitization": "No captured payload. Ids, model name, paths, tool arguments, and error text are placeholders under /workspace/example-repo. Secret-shaped strings, where present, are fabricated.",
+  "licenseBasis": "Original synthetic authorship. Field names follow antigravity.google/docs/hooks (read 2026-11-02). Every value is invented; no transcript, path, or credential is copied.",
+  "sha256": "8bf71cf73c303d1d51f896fd2aa1d7c7ca110332f13bca9fe322e082e3b65865",
+  "notes": "invoke_subagent is a tool name. The adapter must emit tool.end and not a subagent lifecycle."
+}

@@ -227,12 +227,12 @@ are content rather than identifiers.
   asserted exhaustively in `tests/providers/delivery-identity.test.ts` — every
   recognized event is either always identifiable or has a documented gap, so adding a
   hook event without deciding its delivery status reads as an omission.
-- The Antigravity adapter identifies its invocation edges as well as its tool steps,
-  from `invocationNum` alone. A counter named for the invocation it numbers repeats on
-  a redelivery and advances on a genuine second invocation, which is the same argument
-  the tool pair rests on applied to a field present on every payload. `Stop` stays
-  refused: keying it on `invocationNum` would suppress its second real firing, and the
-  field that separates the two is an unconfirmed reconstruction.
+- The Antigravity adapter identifies `Stop` from `executionNum` and `fullyIdle`
+  together, so an idle stop and a not-yet-idle stop stay distinct, and identifies
+  `PostToolUse` from `stepIdx` only when `error` is present. The invocation edges
+  share one stdin shape, so `invocationNum` is not an identity: keying on it would
+  suppress one of the two edges. A tool payload that omits `error` is the same
+  shape as `PreToolUse` and is not identified either.
 - Detection runs twice per invocation (once to resolve the delivery, once inside
   `ingest`). `detect` is contractually cheap and side-effect free, so this buys
   the ordering guarantee above at a measured cost.

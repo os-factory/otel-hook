@@ -238,17 +238,22 @@ export const PROVIDER_CASES: readonly ProviderCase[] = [
   },
   {
     providerId: "antigravity",
-    // An *end* edge, for the same reason as the gemini-cli case above.
+    // PostToolUse is the end edge stdin can name: `error` is absent from
+    // PreToolUse, so a lone tool payload without it is not this event.
     payload: (sessionId) => ({
-      hookEventName: "PostToolUse",
       conversationId: sessionId,
       workspacePaths: ["/workspace/fixture-repo"],
+      transcriptPath: "/workspace/fixture-repo/transcript.jsonl",
+      artifactDirectoryPath: "/workspace/fixture-repo/artifacts",
+      modelName: "example-model",
       stepIdx: 3,
-      invocationNum: 1,
-      toolName: "run_command",
-      toolResponse: { stdout: ANTIGRAVITY_SECRET },
+      error: "exit status 1",
+      toolCall: {
+        name: "run_command",
+        args: { CommandLine: ANTIGRAVITY_SECRET, Cwd: "/workspace/fixture-repo" },
+      },
     }),
-    expectedStdout: "",
+    expectedStdout: "{}",
     secret: ANTIGRAVITY_SECRET,
   },
 ];

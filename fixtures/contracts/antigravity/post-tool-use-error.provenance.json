@@ -1,0 +1,11 @@
+{
+  "fixture": "post-tool-use-error.json",
+  "sourceContract": "Antigravity PostToolUse stdin with a non-empty error string, per antigravity.google/docs/hooks",
+  "provider": "antigravity",
+  "capturedDate": "2026-11-02",
+  "author": "otel-hook antigravity provider owner (agent)",
+  "sanitization": "No captured payload. Ids, model name, paths, tool arguments, and error text are placeholders under /workspace/example-repo. Secret-shaped strings, where present, are fabricated.",
+  "licenseBasis": "Original synthetic authorship. Field names follow antigravity.google/docs/hooks (read 2026-11-02). Every value is invented; no transcript, path, or credential is copied.",
+  "sha256": "bbdc7c7f511e8c6cbfea914dea0b717c6c194601fc1ee49e9f9d8e119a5a1152",
+  "notes": "error is the documented failure signal. The string is a placeholder, not a captured stderr."
+}

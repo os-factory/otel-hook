@@ -1,85 +1,120 @@
 import { describe, expect, it } from "vitest";
 
-import { mergeAntigravityHookRegistration } from "../../../src/providers/antigravity/registration.js";
+import { ANTIGRAVITY_HOOK_EVENT_NAMES } from "../../../src/providers/antigravity/payload.js";
+import {
+  ANTIGRAVITY_MANAGED_HOOK_NAME,
+  ANTIGRAVITY_REGISTRABLE_HOOK_EVENTS,
+  ANTIGRAVITY_UNREGISTERED_HOOK_EVENTS,
+  mergeAntigravityHookRegistration,
+  readAntigravityHookRegistrations,
+  removeAntigravityHookRegistration,
+} from "../../../src/providers/antigravity/registration.js";
 
-const COMMAND = "otel-hook antigravity-hook";
+const COMMAND = "otel-hook run --provider antigravity";
+const identifies = (entry: Readonly<Record<string, unknown>>): boolean => entry.command === COMMAND;
+
+const hook = (config: Record<string, unknown>): Record<string, unknown> =>
+  config[ANTIGRAVITY_MANAGED_HOOK_NAME] as Record<string, unknown>;
 
 describe("mergeAntigravityHookRegistration", () => {
-  it("registers all five documented hooks when no file exists yet", () => {
+  it("writes the documented named-hook shape for the events that produce telemetry", () => {
     const result = mergeAntigravityHookRegistration({ command: COMMAND });
     expect(result.changed).toBe(true);
-    const hooks = result.config.hooks as Record<string, unknown[]>;
-    for (const event of ["PreInvocation", "PostInvocation", "PreToolUse", "PostToolUse", "Stop"]) {
-      expect(hooks[event]).toEqual([{ command: COMMAND }]);
+    expect(result.conflicts).toEqual([]);
+    expect(hook(result.config)).toEqual({
+      SessionStart: [{ type: "command", command: COMMAND }],
+      PostToolUse: [{ matcher: "*", hooks: [{ type: "command", command: COMMAND }] }],
+    });
+    expect(result.changes.map((change) => change.event)).toEqual(["SessionStart", "PostToolUse"]);
+  });
+
+  it("registers every documented event that emits nothing only when asked, and explains the default skip", () => {
+    expect([...ANTIGRAVITY_REGISTRABLE_HOOK_EVENTS]).toEqual(["SessionStart", "PostToolUse"]);
+    const skipped = ANTIGRAVITY_HOOK_EVENT_NAMES.filter(
+      (event) => !ANTIGRAVITY_REGISTRABLE_HOOK_EVENTS.includes(event),
+    );
+    expect([...skipped]).toEqual(["PreToolUse", "PreInvocation", "PostInvocation", "Stop"]);
+    for (const event of skipped) {
+      expect(ANTIGRAVITY_UNREGISTERED_HOOK_EVENTS[event], event).toBeDefined();
     }
+
+    const result = mergeAntigravityHookRegistration({
+      command: COMMAND,
+      events: ["PreToolUse", "Stop"],
+      matcher: "run_command",
+      timeoutSeconds: 10,
+    });
+    expect(hook(result.config)).toEqual({
+      PreToolUse: [
+        { matcher: "run_command", hooks: [{ type: "command", command: COMMAND, timeout: 10 }] },
+      ],
+      Stop: [{ type: "command", command: COMMAND, timeout: 10 }],
+    });
   });
 
   it("is idempotent: merging the result again changes nothing", () => {
-    const first = mergeAntigravityHookRegistration({ command: COMMAND });
-    const second = mergeAntigravityHookRegistration({ existing: first.config, command: COMMAND });
+    const first = mergeAntigravityHookRegistration({ command: COMMAND, timeoutSeconds: 30 });
+    const second = mergeAntigravityHookRegistration({
+      existing: first.config,
+      command: COMMAND,
+      timeoutSeconds: 30,
+    });
 
     expect(second.changed).toBe(false);
     expect(second.config).toEqual(first.config);
+    expect(second.changes.every((change) => change.action === "unchanged")).toBe(true);
   });
 
-  it("does not duplicate the command across repeated merges", () => {
-    let config: unknown = undefined;
-    for (let i = 0; i < 5; i += 1) {
-      const result = mergeAntigravityHookRegistration({ existing: config, command: COMMAND });
-      config = result.config;
-    }
-    const hooks = (config as { hooks: Record<string, unknown[]> }).hooks;
-    expect(hooks.PreToolUse).toHaveLength(1);
-  });
-
-  it("preserves unrelated top-level keys", () => {
-    const existing = { someOtherTool: { enabled: true }, hooks: {} };
-    const result = mergeAntigravityHookRegistration({ existing, command: COMMAND });
-    expect(result.config.someOtherTool).toEqual({ enabled: true });
-  });
-
-  it("preserves unrelated hook events and other entries for targeted events", () => {
+  it("preserves another named hook and rewrites our own command in place", () => {
     const existing = {
-      hooks: {
-        Stop: [{ command: "some-other-tool stop-hook" }],
-        SomeFutureHook: [{ command: "unrelated" }],
+      "safety-gate": {
+        enabled: false,
+        PreToolUse: [{ matcher: "run_command", hooks: [{ command: "./scripts/safety-check.sh" }] }],
+      },
+      [ANTIGRAVITY_MANAGED_HOOK_NAME]: {
+        PostToolUse: [{ matcher: "*", hooks: [{ type: "command", command: "otel-hook run --old" }] }],
       },
     };
-    const result = mergeAntigravityHookRegistration({ existing, command: COMMAND, events: ["Stop"] });
-    const hooks = result.config.hooks as Record<string, unknown[]>;
-
-    expect(hooks.Stop).toEqual([{ command: "some-other-tool stop-hook" }, { command: COMMAND }]);
-    expect(hooks.SomeFutureHook).toEqual([{ command: "unrelated" }]);
-    expect(hooks.PreInvocation).toBeUndefined();
-  });
-
-  it("supports registering only a subset of events", () => {
-    const result = mergeAntigravityHookRegistration({ command: COMMAND, events: ["Stop"] });
-    const hooks = result.config.hooks as Record<string, unknown[]>;
-    expect(Object.keys(hooks)).toEqual(["Stop"]);
-  });
-
-  it("carries an optional matcher on the registered entry", () => {
     const result = mergeAntigravityHookRegistration({
+      existing,
       command: COMMAND,
-      events: ["PreToolUse"],
-      matcher: "*",
+      events: ["PostToolUse"],
+      identifies: (entry) =>
+        typeof entry.command === "string" && String(entry.command).includes("otel-hook"),
     });
-    const hooks = result.config.hooks as Record<string, unknown[]>;
-    expect(hooks.PreToolUse).toEqual([{ command: COMMAND, matcher: "*" }]);
+
+    expect(result.config["safety-gate"]).toEqual(existing["safety-gate"]);
+    expect(hook(result.config).PostToolUse).toEqual([
+      { matcher: "*", hooks: [{ type: "command", command: COMMAND }] },
+    ]);
+    const read = readAntigravityHookRegistrations(result.config, (entry) =>
+      typeof entry.command === "string" && String(entry.command).includes("otel-hook"),
+    );
+    expect(read.get("PostToolUse")).toEqual([COMMAND]);
   });
 
-  it("rebuilds gracefully when an existing hook event is malformed", () => {
-    const existing = { hooks: { Stop: "not-an-array" } };
-    const result = mergeAntigravityHookRegistration({ existing, command: COMMAND, events: ["Stop"] });
-    const hooks = result.config.hooks as Record<string, unknown[]>;
-    expect(hooks.Stop).toEqual([{ command: COMMAND }]);
-    expect(result.changed).toBe(true);
+  it("refuses a hook definition that is not the documented shape", () => {
+    const result = mergeAntigravityHookRegistration({
+      existing: { "safety-gate": "not-an-object", keep: 1 },
+      command: COMMAND,
+    });
+    expect(result.changed).toBe(false);
+    expect(result.conflicts.length).toBeGreaterThan(0);
+    expect(result.config).toEqual({ "safety-gate": "not-an-object", keep: 1 });
   });
 
   it("treats a non-object existing value as absent without throwing", () => {
     const result = mergeAntigravityHookRegistration({ existing: "not-an-object", command: COMMAND });
     expect(result.changed).toBe(true);
-    expect(Object.keys(result.config.hooks as Record<string, unknown>)).toHaveLength(5);
+    expect(result.conflicts).toEqual([]);
+    expect(hook(result.config).SessionStart).toBeDefined();
+  });
+
+  it("removes our handlers and restores a document that only contained them", () => {
+    const merged = mergeAntigravityHookRegistration({ command: COMMAND });
+    const removed = removeAntigravityHookRegistration({ existing: merged.config, identifies });
+    expect(removed.changed).toBe(true);
+    expect(removed.config).toEqual({});
+    expect(removed.changes.map((change) => change.action)).toEqual(["removed", "removed"]);
   });
 });

@@ -1,0 +1,6 @@
+{
+  "conversationId": "conv_synthetic_0001",
+  "toolCall": {
+    "name": "view_file"
+  }
+}

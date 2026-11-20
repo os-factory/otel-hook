@@ -1,0 +1,11 @@
+{
+  "fixture": "pre-tool-use.json",
+  "sourceContract": "Antigravity PreToolUse stdin: toolCall.name, toolCall.args, stepIdx, and the common fields, per antigravity.google/docs/hooks",
+  "provider": "antigravity",
+  "capturedDate": "2026-11-02",
+  "author": "otel-hook antigravity provider owner (agent)",
+  "sanitization": "No captured payload. Ids, model name, paths, tool arguments, and error text are placeholders under /workspace/example-repo. Secret-shaped strings, where present, are fabricated.",
+  "licenseBasis": "Original synthetic authorship. Field names follow antigravity.google/docs/hooks (read 2026-11-02). Every value is invented; no transcript, path, or credential is copied.",
+  "sha256": "3710b85ed2e38f275c9eaa930890be38f6c2f9ac4b9932a9d7131b5e0996a65b",
+  "notes": "No error key, so this shape is also a PostToolUse that omitted the optional field. The adapter must not choose an edge."
+}

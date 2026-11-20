@@ -1,0 +1,11 @@
+{
+  "fixture": "malformed.json",
+  "sourceContract": "Incomplete Antigravity tool stdin: conversationId and toolCall without the documented stepIdx and workspacePaths",
+  "provider": "antigravity",
+  "capturedDate": "2026-11-02",
+  "author": "otel-hook antigravity provider owner (agent)",
+  "sanitization": "No captured payload. Ids, model name, paths, tool arguments, and error text are placeholders under /workspace/example-repo. Secret-shaped strings, where present, are fabricated.",
+  "licenseBasis": "Original synthetic authorship. Field names follow antigravity.google/docs/hooks (read 2026-11-02). Every value is invented; no transcript, path, or credential is copied.",
+  "sha256": "99cec60c6ad277f3ad6b6282ff9594f7a4740a11a3d465d0d57756fe3b5423a0",
+  "notes": "Recognizable as Antigravity, not a valid hook input. Used by the malformed-input test."
+}

@@ -185,30 +185,32 @@ const runSmokeTest = async ({ skipBuild = false } = {}) => {
           `bin ${binName} setup --dry-run --json: planned ${setupReport.outcomes.length} target(s), wrote nothing`,
         );
 
-        // A provider whose install *location* is unverified must fail loudly and
-        // machine-readably rather than write a guessed path into a home directory.
-        let refusedStdout;
-        try {
-          ({ stdout: refusedStdout } = await runBin([
-            "setup",
-            "--provider",
-            "antigravity",
-            "--project-dir",
-            scratchProject,
-            "--json",
-          ]));
-          throw new Error(`bin ${binName} setup --provider antigravity unexpectedly succeeded`);
-        } catch (error) {
-          if (typeof error?.stdout !== "string" || error.stdout.length === 0) {
-            throw error;
-          }
-          refusedStdout = error.stdout;
+        // Antigravity's published project path is .agents/hooks.json. A dry run
+        // must plan that file and the named-hook document, and must not write it.
+        const { stdout: antigravityStdout } = await runBin([
+          "setup",
+          "--provider",
+          "antigravity",
+          "--project-dir",
+          scratchProject,
+          "--dry-run",
+          "--json",
+        ]);
+        const antigravityReport = JSON.parse(antigravityStdout);
+        const antigravityOutcome = antigravityReport.outcomes?.[0];
+        if (antigravityReport.ok !== true || antigravityOutcome?.status !== "planned") {
+          throw new Error(`bin ${binName} setup --provider antigravity did not plan a registration`);
         }
-        const refusedReport = JSON.parse(refusedStdout);
-        if (refusedReport.ok !== false || refusedReport.outcomes[0]?.status !== "unsupported") {
-          throw new Error(`bin ${binName} setup --provider antigravity did not report "unsupported"`);
+        if (typeof antigravityOutcome.configPath !== "string" || !antigravityOutcome.configPath.endsWith(`${path.sep}.agents${path.sep}hooks.json`)) {
+          throw new Error(
+            `bin ${binName} setup --provider antigravity planned ${String(antigravityOutcome.configPath)}`,
+          );
         }
-        steps.push(`bin ${binName} setup --provider antigravity: unsupported, exit 1`);
+        const antigravityDocument = JSON.parse(antigravityOutcome.plannedContents);
+        if (antigravityDocument["otel-hook"]?.PostToolUse?.[0]?.hooks?.[0]?.command !== "otel-hook run --provider antigravity") {
+          throw new Error(`bin ${binName} setup --provider antigravity planned an unexpected document`);
+        }
+        steps.push(`bin ${binName} setup --provider antigravity: planned .agents/hooks.json`);
       }
     }
 
