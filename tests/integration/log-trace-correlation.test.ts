@@ -152,7 +152,7 @@ describe("log records correlate to the spans the trace pipeline exported", () =>
     );
     expect(endRecord?.spanId).toBe(toolSpan?.spanId);
     expect(endRecord?.traceId).toBe(toolSpan?.traceId);
-  }, 30_000);
+  });
 
   it("resolves correlation once per batch, so neither signal sees the other's writes", async () => {
     const rootDir = await stateRoot();
@@ -171,7 +171,7 @@ describe("log records correlate to the spans the trace pipeline exported", () =>
     );
     expect(startRecords).toHaveLength(1);
     expect(logs).not.toContain("span correlation unavailable; exporting uncorrelated log records");
-  }, 30_000);
+  });
 
   it("never merges two sessions into one trace", async () => {
     const rootDir = await stateRoot();
@@ -202,7 +202,7 @@ describe("log records correlate to the spans the trace pipeline exported", () =>
     }
     const [a, b] = [...bySession.values()].map((traces) => [...traces][0]);
     expect(a).not.toBe(b);
-  }, 30_000);
+  });
 
   it("holds the default privacy posture on both signals at once", async () => {
     const rootDir = await stateRoot();
@@ -230,7 +230,7 @@ describe("log records correlate to the spans the trace pipeline exported", () =>
     for (const record of records) {
       expect(record.body).toBeUndefined();
     }
-  }, 30_000);
+  });
 
   it("carries content on the logs signal only, once both gates are open", async () => {
     const rootDir = await stateRoot();
@@ -255,7 +255,7 @@ describe("log records correlate to the spans the trace pipeline exported", () =>
     // its own switch: enabling content must not retroactively change what a span is.
     const spanText = JSON.stringify(spans);
     expect(spanText).not.toContain("build succeeded");
-  }, 30_000);
+  });
 
   it("reports both signals separately in health", async () => {
     const rootDir = await stateRoot();
@@ -276,7 +276,7 @@ describe("log records correlate to the spans the trace pipeline exported", () =>
       expect(subsystem.totalAccepted).toBeGreaterThan(0);
       expect(subsystem.totalRejected).toBe(0);
     }
-  }, 30_000);
+  });
 
   it("gives the logs signal its own retry queue under the shared state root", async () => {
     const rootDir = await stateRoot();
@@ -290,7 +290,7 @@ describe("log records correlate to the spans the trace pipeline exported", () =>
     expect(runtime.logSpool).toBeDefined();
     expect(await runtime.logSpool?.size()).toBe(0);
     expect(await runtime.spool?.size()).toBe(0);
-  }, 30_000);
+  });
 });
 
 describe("durability across two signals", () => {
@@ -347,7 +347,7 @@ describe("durability across two signals", () => {
     expect(outcome.ingest.emitted).toBeGreaterThan(0);
     expect(outcome.ingest.exportRejected).toBeGreaterThan(0);
     expect(collector.bodiesFor("/v1/traces").length).toBeGreaterThan(0);
-  }, 30_000);
+  });
 
   it("stays retryable when neither signal survived", async () => {
     const rootDir = await stateRoot();
@@ -363,5 +363,5 @@ describe("durability across two signals", () => {
     expect(outcome.ingest.durability).toBe("lost");
     expect(outcome.ingest.emitted).toBe(0);
     expect(outcome.delivery.retryable).toBe(true);
-  }, 30_000);
+  });
 });

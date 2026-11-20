@@ -218,5 +218,5 @@ describe("createOtlpLogSink: degraded configurations never throw", () => {
     expect(sink.health().subsystem).toBe("telemetry-log-sink");
     expect(sink.health().lastErrorCode).toBe("telemetry-export-failure");
     await sink.shutdown();
-  }, 15_000);
+  });
 });
