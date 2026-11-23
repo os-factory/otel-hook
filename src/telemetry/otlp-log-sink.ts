@@ -1,5 +1,4 @@
 import { TraceFlags, type AttributeValue, type Attributes, type SpanContext } from "@opentelemetry/api";
-import type { LogAttributes } from "@opentelemetry/api-logs";
 import { ExportResultCode, type ExportResult } from "@opentelemetry/core";
 import { millisToHrTime, type InstrumentationScope } from "@opentelemetry/core";
 import { OTLPLogExporter } from "@opentelemetry/exporter-logs-otlp-proto";
@@ -84,14 +83,14 @@ export const resolveLogsEndpoint = (
 /**
  * Narrow a log record's attributes to what a spool file can hold.
  *
- * `LogAttributes` admits nested maps and byte strings; the spool's own validator
+ * Log attributes admit any value (`AnyValue` is `unknown` since api 1.10); the spool's own validator
  * does not, and neither does `assembleReadableSpan`'s sibling contract for traces.
  * This mapping only ever produces primitives, so the filter is unreachable in
  * practice — it is here so that "what the live path emits" and "what survives a
  * spool round-trip" cannot silently diverge if a future attribute is richer than
  * the queue's schema.
  */
-const toSpoolAttributes = (attributes: LogAttributes): Attributes => {
+const toSpoolAttributes = (attributes: Attributes): Attributes => {
   const safe: Record<string, AttributeValue> = {};
   for (const [key, value] of Object.entries(attributes)) {
     if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
