@@ -1,3 +1,10 @@
+# [0.7.0](https://github.com/os-factory/otel-hook/compare/v0.6.0...v0.7.0) (2026-11-23)
+
+
+### Features
+
+* **config:** read OTEL_EXPORTER_OTLP_*_HEADERS and accept session.id from the harness ([#52](https://github.com/os-factory/otel-hook/issues/52)) ([0032c32](https://github.com/os-factory/otel-hook/commit/0032c32f9f48546a8ab1c129ee43dec1d31ec37a))
+
 # [0.6.0](https://github.com/os-factory/otel-hook/compare/v0.5.0...v0.6.0) (2026-11-15)
 
 
