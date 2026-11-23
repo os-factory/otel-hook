@@ -1,3 +1,11 @@
+# [0.8.0](https://github.com/os-factory/otel-hook/compare/v0.7.0...v0.8.0) (2026-11-23)
+
+
+### Features
+
+* **config:** standard OTLP endpoint env vars and profile attribute passthrough ([#53](https://github.com/os-factory/otel-hook/issues/53)) ([a763a33](https://github.com/os-factory/otel-hook/commit/a763a334767bbd104a383a7b0655f20c38852d7a))
+* **deps:** move to OpenTelemetry JS 3.x (api 1.10) ([#51](https://github.com/os-factory/otel-hook/issues/51)) ([e39cc4c](https://github.com/os-factory/otel-hook/commit/e39cc4ce9d19c82bb68178de1c992292c1cf8fbe)), closes [os-factory/har#447](https://github.com/os-factory/har/issues/447)
+
 # [0.7.0](https://github.com/os-factory/otel-hook/compare/v0.6.0...v0.7.0) (2026-11-23)
 
 
