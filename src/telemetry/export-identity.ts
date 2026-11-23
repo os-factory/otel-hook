@@ -91,16 +91,42 @@ const isPrimitiveAttribute = (value: unknown): value is string | number | boolea
   typeof value === "string" || typeof value === "number" || typeof value === "boolean";
 
 /**
- * Resource attributes a HAR (or similar) launcher put on the process.
+ * Resource attribute namespaces a launcher puts on the process that are also
+ * copied onto every span and log record.
  *
- * Copied onto every log and span so a consumer that reads record attributes
- * rather than the resource still sees them. Only `har.*` primitives are
- * forwarded; nothing is invented when they are absent.
+ * Many backends index only record attributes (filters, search, dashboards), so a
+ * value that exists only on the Resource is invisible there. Copied:
+ *
+ * - `har.*` — attributes earlier launchers send;
+ * - `factory.*` — the Factory Commits telemetry profile (work unit, slot, …),
+ *   **except** `factory.local.*`, which the profile defines as local-only: it
+ *   stays on the Resource and never reaches a record;
+ * - `vcs.*` — OpenTelemetry VCS attributes. An event's own resolved target
+ *   (ADR 0008) still wins for the keys it sets, such as `vcs.ref.head.name`.
+ *
+ * `session.id` is not copied: it is resolved separately (see
+ * `resolveExportedSessionId`), so a resource value cannot overwrite the
+ * trimmed, resolved one.
  */
-export const passthroughHarAttributes = (resource: Resource): Attributes => {
+export const PASSTHROUGH_RESOURCE_PREFIXES: readonly string[] = Object.freeze(["har.", "factory.", "vcs."]);
+/** Local-only profile namespace: never copied from the Resource onto records. */
+export const LOCAL_ONLY_RESOURCE_PREFIX = "factory.local.";
+
+const isPassthroughKey = (key: string): boolean =>
+  PASSTHROUGH_RESOURCE_PREFIXES.some((prefix) => key.startsWith(prefix)) &&
+  !key.startsWith(LOCAL_ONLY_RESOURCE_PREFIX) &&
+  key !== "factory.local";
+
+/**
+ * Primitive resource attributes to copy onto every log and span record.
+ *
+ * Only the namespaces in `PASSTHROUGH_RESOURCE_PREFIXES` are forwarded, minus
+ * `factory.local.*`; nothing is invented when they are absent.
+ */
+export const passthroughResourceAttributes = (resource: Resource): Attributes => {
   const attributes: Record<string, string | number | boolean> = {};
   for (const [key, value] of Object.entries(resource.attributes)) {
-    if (key.startsWith("har.") && isPrimitiveAttribute(value)) {
+    if (isPassthroughKey(key) && isPrimitiveAttribute(value)) {
       attributes[key] = value;
     }
   }
@@ -154,8 +180,10 @@ export const hexTraceAttributes = (ids: ExportedTraceIds): Attributes => ({
  * Identity attributes shared by the log and span mappings.
  *
  * `session.id` is the externally supplied session key when the resource carries
- * one (`session.id`, then `har.session_key`), otherwise the provider session id. The provider id is always also emitted under
- * `otelhook.session.id` and `gen_ai.conversation.id`.
+ * one (`session.id`, then `har.session_key`), otherwise the provider session id.
+ * The provider id is always also emitted under `otelhook.session.id` and
+ * `gen_ai.conversation.id`. Profile resource attributes are copied on too (see
+ * `passthroughResourceAttributes`).
  */
 export const exportIdentityAttributes = (
   event: CanonicalEvent,
@@ -174,7 +202,7 @@ export const exportIdentityAttributes = (
       : { [ATTR_OTELHOOK_PROVIDER_VERSION]: event.provenance.providerVersion }),
     [ATTR_OTELHOOK_WORKSPACE_ID]: event.workspace.workspaceId,
     ...(event.subagentId === undefined ? {} : { [ATTR_OTELHOOK_SUBAGENT_ID]: event.subagentId }),
-    ...passthroughHarAttributes(resource),
+    ...passthroughResourceAttributes(resource),
     ...hexTraceAttributes(ids),
   };
 };
