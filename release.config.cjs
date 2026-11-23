@@ -46,6 +46,11 @@ module.exports = {
       },
     ],
     // Tarball + SBOMs are attached by the publish-npm job after npm publish.
-    "@semantic-release/github",
+    // The release App token has contents:write only, so no issue/PR comments
+    // or labels.
+    [
+      "@semantic-release/github",
+      { successComment: false, failComment: false, releasedLabels: false },
+    ],
   ],
 };
