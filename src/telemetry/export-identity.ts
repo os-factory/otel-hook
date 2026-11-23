@@ -31,7 +31,15 @@ const ATTR_OTELHOOK_PROVIDER_ID = "otelhook.provider.id";
 const ATTR_OTELHOOK_PROVIDER_VERSION = "otelhook.provider.version";
 const ATTR_OTELHOOK_WORKSPACE_ID = "otelhook.workspace.id";
 
-const HAR_SESSION_KEY = "har.session_key";
+/**
+ * Resource attributes a launcher may set to supply the session key, in
+ * preference order: the OpenTelemetry semantic-convention `session.id`, then the
+ * legacy `har.session_key` that earlier launchers still send.
+ */
+export const EXTERNAL_SESSION_KEY_ATTRIBUTES: readonly string[] = Object.freeze([
+  ATTR_SESSION_ID,
+  "har.session_key",
+]);
 
 /**
  * The provider's own subagent id (Claude Code `agent_id`), on every record of an
@@ -100,20 +108,25 @@ export const passthroughHarAttributes = (resource: Resource): Attributes => {
 };
 
 /**
- * Session id to put on `session.id`, preferring a HAR-supplied key.
+ * Session id to put on `session.id`, preferring an externally supplied key.
  *
- * The provider's own session id is never discarded: it is returned separately
- * so callers can emit it as `otelhook.session.id` / `gen_ai.conversation.id`.
+ * A launcher supplies the key as a resource attribute (usually through
+ * `OTEL_RESOURCE_ATTRIBUTES`): `session.id` first, then the legacy
+ * `har.session_key`, then the provider's own session id. The provider's id is
+ * never discarded: it is returned separately so callers can emit it as
+ * `otelhook.session.id` / `gen_ai.conversation.id`.
  */
 export const resolveExportedSessionId = (
   eventSessionId: string,
   resource: Resource,
 ): { readonly sessionId: string; readonly providerSessionId: string } => {
-  const har = resource.attributes[HAR_SESSION_KEY];
-  if (typeof har === "string") {
-    const trimmed = har.trim();
-    if (trimmed.length > 0) {
-      return { sessionId: trimmed, providerSessionId: eventSessionId };
+  for (const key of EXTERNAL_SESSION_KEY_ATTRIBUTES) {
+    const supplied = resource.attributes[key];
+    if (typeof supplied === "string") {
+      const trimmed = supplied.trim();
+      if (trimmed.length > 0) {
+        return { sessionId: trimmed, providerSessionId: eventSessionId };
+      }
     }
   }
   return { sessionId: eventSessionId, providerSessionId: eventSessionId };
@@ -140,8 +153,8 @@ export const hexTraceAttributes = (ids: ExportedTraceIds): Attributes => ({
 /**
  * Identity attributes shared by the log and span mappings.
  *
- * `session.id` is the HAR session key when the resource carries one, otherwise
- * the provider session id. The provider id is always also emitted under
+ * `session.id` is the externally supplied session key when the resource carries
+ * one (`session.id`, then `har.session_key`), otherwise the provider session id. The provider id is always also emitted under
  * `otelhook.session.id` and `gen_ai.conversation.id`.
  */
 export const exportIdentityAttributes = (

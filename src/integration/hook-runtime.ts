@@ -275,6 +275,11 @@ export type HookRuntimeOptions = {
   readonly providerNamespace: string;
   /** Exporter header *values*, deliberately absent from the config snapshot. */
   readonly headers?: Readonly<Record<string, string>>;
+  /**
+   * Header values for the logs signal only, when they differ from the traces
+   * signal's (`OTEL_EXPORTER_OTLP_LOGS_HEADERS`). Defaults to {@link headers}.
+   */
+  readonly logHeaders?: Readonly<Record<string, string>>;
   readonly clock?: Clock;
   readonly ids?: IdGenerator;
   readonly logger?: Logger;
@@ -532,9 +537,10 @@ export const createHookRuntime = (options: HookRuntimeOptions): HookRuntime => {
     correlate,
   });
 
+  const logHeaders = options.logHeaders ?? options.headers;
   const logSink = createOtlpLogSink({
     exporter: options.config.exporter,
-    ...(options.headers === undefined ? {} : { headers: options.headers }),
+    ...(logHeaders === undefined ? {} : { headers: logHeaders }),
     providerId: options.providerNamespace,
     installationId: options.installationId,
     clock,

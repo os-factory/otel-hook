@@ -79,9 +79,11 @@ fail its host agent is a liability.
 
 ```bash
 # Register this as the hook command; the payload arrives on stdin.
+# The credential comes from the standard OTLP header variable rather than a
+# --header flag, so it never appears in `ps` or /proc/<pid>/cmdline.
+export OTEL_EXPORTER_OTLP_HEADERS="authorization=Bearer%20$COLLECTOR_TOKEN"
 otel-hook run --provider claude-code \
-  --endpoint https://collector.example/v1/traces \
-  --header "authorization=Bearer $COLLECTOR_TOKEN"
+  --endpoint https://collector.example/v1/traces
 ```
 
 Provider selection:
@@ -119,9 +121,12 @@ provider payload — the result is an identity **conflict**: attribution is decl
 and nothing is exported, rather than one assertion silently winning.
 
 No environment variable sets identity. The `OTEL_HOOK_*` variables and the
-standard `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME`, and
-`OTEL_RESOURCE_ATTRIBUTES` configure the exporter, privacy, detection, and
-logging only.
+standard `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_*HEADERS`,
+`OTEL_SERVICE_NAME`, and `OTEL_RESOURCE_ATTRIBUTES` configure the exporter,
+privacy, detection, and logging only. (A launcher may still put an exported
+*session key* on the resource — see [Externally supplied session
+key](#externally-supplied-session-key) — but that changes only the exported
+`session.id` attribute, never invocation identity or attribution.)
 
 Exporter and runtime policy (never identity):
 
@@ -134,7 +139,8 @@ Exporter and runtime policy (never identity):
 
 Only header *names* enter the resolved-config snapshot that is logged and
 reported; the values go straight to the exporter, so a snapshot cannot leak a
-credential.
+credential. Prefer the standard header variables over `--header` for secrets —
+see [Exporter headers](#exporter-headers).
 
 `--resource-attr` and `--attr` are different channels and never mix.
 `--resource-attr` sets an OTLP **resource** attribute — a fact about this
@@ -676,7 +682,9 @@ file may enable the signal while the environment sets only the endpoint:
 | `maxBatchSize` | `128` | — | — |
 
 Everything else — protocol, headers, timeout, service identity, resource
-attributes — is shared with the traces signal, which is why `logs` is nested under
+attributes — is shared with the traces signal (headers can additionally be set
+for logs alone with `OTEL_EXPORTER_OTLP_LOGS_HEADERS`; see [Exporter
+headers](#exporter-headers)), which is why `logs` is nested under
 `exporter` rather than being a second top-level section that could drift.
 
 Two combinations are reported as notes rather than errors, because both are things
@@ -684,6 +692,63 @@ an operator lands on by setting one switch and forgetting the other: logs enable
 with no endpoint and none derivable, and `includeContent` set while `contentMode` is
 `omit` (so there is nothing disclosed to carry — the symptom, every body withheld,
 otherwise looks like a bug).
+
+### Exporter headers
+
+Header *values* — typically a credential — come from three standard OpenTelemetry
+variables and the `--header` flag, resolved **per signal** and **per header
+name** (case-insensitively), highest first:
+
+```
+--header name=value  >  OTEL_EXPORTER_OTLP_TRACES_HEADERS  >  OTEL_EXPORTER_OTLP_HEADERS   (traces)
+--header name=value  >  OTEL_EXPORTER_OTLP_LOGS_HEADERS    >  OTEL_EXPORTER_OTLP_HEADERS   (logs)
+```
+
+So the generic variable applies to both signals, a signal-specific variable
+overrides it for the names it sets on its own signal only, and a flag overrides
+both. Prefer the variables for secrets: a flag is visible to every local user in
+`ps` and `/proc/<pid>/cmdline`, an environment variable is not.
+
+```bash
+# Basic auth: base64("public-key:secret-key"); the space is percent-encoded.
+export OTEL_EXPORTER_OTLP_HEADERS="authorization=Basic%20$(printf '%s' "$PUBLIC_KEY:$SECRET_KEY" | base64 -w0)"
+```
+
+The format is the one the OpenTelemetry exporter specification defines:
+comma-separated `key=value` pairs, surrounding whitespace trimmed, keys and
+values **percent-decoded** (so a space is `%20` and a `,` inside a value is
+`%2C`). Only the first `=` splits a pair, so base64 `=` padding survives. An
+unusable entry — no `=`, an empty key or value, a key that is not an HTTP token,
+malformed percent-encoding, a control or non-Latin-1 character in the value — is
+skipped with a warning naming the variable and the entry's *position*, never its
+key or value; the rest of the variable still applies. At most 32 headers per
+variable.
+
+Values never enter configuration: the environment layer contributes header
+*names* to `exporter.headerNames` (reported as `exporter.header_names` by
+`doctor --json` and in every snapshot), and the values are handed to the sinks
+at construction. The CLI also keeps all of these `*_HEADERS` variables out of
+the environment provider adapters can see.
+
+### Externally supplied session key
+
+A launcher that runs coding agents for a larger unit of work can supply its own
+session key, so every record of that run shares one `session.id`. It is read from
+the resource attributes (normally `OTEL_RESOURCE_ATTRIBUTES`), in this order:
+
+1. `session.id` — the OpenTelemetry semantic-convention key;
+2. `har.session_key` — the legacy key earlier launchers send (also settable
+   through `HAR_SESSION_KEY`);
+3. otherwise, the provider's own session id.
+
+```bash
+export OTEL_RESOURCE_ATTRIBUTES="session.id=run-2041,vcs.ref.head.name=feat%2Fexample"
+```
+
+The provider's own session id is never discarded: it is always exported as
+`otelhook.session.id` and `gen_ai.conversation.id`. The supplied key changes
+only the exported `session.id` attribute; trace and span ids, state, and
+attribution remain derived from the provider's identity.
 
 ### Resource attributes
 
