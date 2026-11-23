@@ -8,7 +8,9 @@ every push/PR:
 - Full matrix (typecheck, lint, test, build) on **Node 20 and 22, Linux**.
 - A targeted, single-Node-version (22) pass on **macOS and Windows**, to catch
   OS-sensitive bugs (process spawning, path handling) without paying for a
-  full matrix on every platform.
+  full matrix on every platform. On pull requests, macOS runs only when the
+  library changes (`src/`, `tests/`, `fixtures/`, packaging/parity scripts,
+  package or build config); pushes to `main` always run it.
 
 Dropping a Node major requires: (1) confirming no supported provider hosts
 still require it, (2) a version bump documented in this file's changelog

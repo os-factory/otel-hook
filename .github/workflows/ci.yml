@@ -46,6 +46,35 @@ jobs:
       - name: Test (unit, e2e, parity, packaging)
         run: npm test
 
+  # macOS runners are the most expensive, so PRs that leave the library alone
+  # (docs, release tooling, CI config, harness files) skip macOS. Pushes to
+  # main always run the full cross-platform matrix.
+  changes:
+    name: detect library changes
+    runs-on: ubuntu-latest
+    outputs:
+      os: ${{ steps.matrix.outputs.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Pick cross-platform runners
+        id: matrix
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # Library core: what the macOS job builds, tests or packs.
+          CORE='^(src/|tests/|fixtures/|scripts/(packaging|parity)/|package(-lock)?\.json$|tsconfig\.json$|tsup\.config\.ts$|vitest\.config\.ts$)'
+          if [ "$EVENT" != "pull_request" ] || git diff --name-only "$BASE...$HEAD" | grep -Eq "$CORE"; then
+            echo 'os=["macos-latest","windows-latest"]' >> "$GITHUB_OUTPUT"
+          else
+            echo "No library changes: skipping macOS."
+            echo 'os=["windows-latest"]' >> "$GITHUB_OUTPUT"
+          fi
+
   # Targeted, single-Node-version paths on the other two platforms, per the
   # release-hardening compatibility policy (docs/compatibility-policy.md):
   # cross-platform correctness matters, but a full N-version matrix on every
@@ -53,11 +82,12 @@ jobs:
   # surfaces are process spawning and filesystem paths.
   cross-platform:
     name: ${{ matrix.os }} (node 22)
+    needs: changes
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest]
+        os: ${{ fromJSON(needs.changes.outputs.os) }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

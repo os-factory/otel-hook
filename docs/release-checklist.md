@@ -52,7 +52,12 @@ Set up once:
    GitHub Actions**: organization `os-factory`, repository `otel-hook`,
    workflow `release.yml`, environment `npm-publish`.
 
-`GITHUB_TOKEN` is provided by Actions (contents write for tags/releases).
+3. The release commit and tag are pushed to the protected `main` with a
+   GitHub App token, not `GITHUB_TOKEN` (which the ruleset blocks). The
+   `release-har-cli` App must be installed on `os-factory/otel-hook` and be on
+   the `main` ruleset's bypass list, with:
+   - repository variable `RELEASE_APP_CLIENT_ID` (the App's client ID)
+   - `npm-publish` environment secret `RELEASE_APP_PRIVATE_KEY` (its `.pem`)
 
 ## Dry-run
 
