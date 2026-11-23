@@ -121,7 +121,7 @@ provider payload — the result is an identity **conflict**: attribution is decl
 and nothing is exported, rather than one assertion silently winning.
 
 No environment variable sets identity. The `OTEL_HOOK_*` variables and the
-standard `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_*HEADERS`,
+standard `OTEL_EXPORTER_OTLP_*ENDPOINT`, `OTEL_EXPORTER_OTLP_*HEADERS`,
 `OTEL_SERVICE_NAME`, and `OTEL_RESOURCE_ATTRIBUTES` configure the exporter,
 privacy, detection, and logging only. (A launcher may still put an exported
 *session key* on the resource — see [Externally supplied session
@@ -669,6 +669,46 @@ Precedence, lowest to highest: `defaults` → `file` → `environment` →
 layer is rejected rather than partially applied, and the CLI then falls back to
 `DEFAULT_CONFIG` with a diagnostic rather than exiting.
 
+### Exporter endpoints
+
+Where each signal is posted, highest precedence first. The first source that is
+set (and not blank) wins:
+
+| Signal | Source | Value is |
+| --- | --- | --- |
+| traces | `--endpoint` | full traces URL |
+| traces | `OTEL_HOOK_EXPORTER_ENDPOINT` | full traces URL |
+| traces | `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | full traces URL, used as-is |
+| traces | `OTEL_EXPORTER_OTLP_ENDPOINT` | base URL; `/v1/traces` is appended |
+| traces | `exporter.endpoint` in a config file | full traces URL |
+| logs | `--logs-endpoint` | full logs URL |
+| logs | `OTEL_HOOK_LOGS_ENDPOINT` | full logs URL |
+| logs | `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` | full logs URL, used as-is |
+| logs | `OTEL_EXPORTER_OTLP_ENDPOINT` | base URL; `/v1/logs` is appended (see below) |
+| logs | `exporter.logs.endpoint` in a config file | full logs URL |
+| logs | derived from the resolved traces endpoint | `/v1/traces` swapped for `/v1/logs`, or `/v1/logs` appended |
+
+`OTEL_EXPORTER_OTLP_ENDPOINT` follows the OpenTelemetry exporter
+specification: it is a **base** URL, and the signal path is appended to it.
+Trailing slashes are dropped first, so `https://collector.example/otlp/` posts
+traces to `https://collector.example/otlp/v1/traces`. The per-signal
+`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` and `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` are
+full URLs and are used exactly as given.
+
+**Compatibility rule.** Releases before this one read `OTEL_EXPORTER_OTLP_ENDPOINT`
+as the full traces URL. A value that already ends in `/v1/traces` (ignoring
+trailing slashes) is therefore still used as-is for traces, and its logs URL is the
+same with `/v1/logs` in place of `/v1/traces`. A full traces URL with any *other*
+path (say `https://collector.example/ingest/traces`) is now a base URL and gets
+`/v1/traces` appended: move such a value to `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`
+or `OTEL_HOOK_EXPORTER_ENDPOINT`.
+
+`OTEL_EXPORTER_OTLP_ENDPOINT` sets the logs URL directly only when the traces URL
+came from `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`. In every other case logs are
+derived from whatever traces URL won, which gives the same result for the base
+URL and keeps `--endpoint` and `OTEL_HOOK_EXPORTER_ENDPOINT` carrying both
+signals, as they always have.
+
 ### The logs signal
 
 `exporter.logs` is its own sub-object, merged per leaf like everything else, so a
@@ -677,7 +717,7 @@ file may enable the signal while the environment sets only the endpoint:
 | Field | Default | Flag | Variable |
 | --- | --- | --- | --- |
 | `enabled` | `false` | `--logs` / `--no-logs` | `OTEL_HOOK_LOGS_ENABLED` |
-| `endpoint` | derived from `endpoint` | `--logs-endpoint` | `OTEL_HOOK_LOGS_ENDPOINT`, then `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` |
+| `endpoint` | derived from `endpoint` | `--logs-endpoint` | `OTEL_HOOK_LOGS_ENDPOINT`, then `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT`, then `OTEL_EXPORTER_OTLP_ENDPOINT` (see [Exporter endpoints](#exporter-endpoints)) |
 | `includeContent` | `false` | `--logs-content` | `OTEL_HOOK_LOGS_INCLUDE_CONTENT` |
 | `maxBatchSize` | `128` | — | — |
 
@@ -750,6 +790,29 @@ The provider's own session id is never discarded: it is always exported as
 only the exported `session.id` attribute; trace and span ids, state, and
 attribution remain derived from the provider's identity.
 
+### Use with a harness (HAR 2.0)
+
+A harness that launches coding agents describes each run with the Factory
+Commits telemetry profile on `OTEL_RESOURCE_ATTRIBUTES` (`session.id`,
+`factory.work_unit.id`, `factory.slot.id`, `vcs.*`, and local-only
+`factory.local.*`). otel-hook needs nothing else to export those runs: the
+standard variables are enough, including for direct export to a backend such as
+Langfuse, which takes OTLP/HTTP traces at `/api/public/otel/v1/traces` with Basic
+auth:
+
+```bash
+export OTEL_EXPORTER_OTLP_TRACES_ENDPOINT="https://langfuse.example.com/api/public/otel/v1/traces"
+export OTEL_EXPORTER_OTLP_TRACES_HEADERS="Authorization=Basic%20$(printf '%s' "$LANGFUSE_PUBLIC_KEY:$LANGFUSE_SECRET_KEY" | base64 -w0)"
+export OTEL_RESOURCE_ATTRIBUTES="session.id=run-2041,factory.work_unit.id=wu-42,factory.slot.id=3"
+```
+
+- Use the `TRACES_` variables, not the generic ones: Langfuse ingests traces
+  only, and the logs signal (off by default) should not be pointed at it.
+- The credential is in an environment variable, never a `--header` flag, so it
+  does not show up in `ps`.
+- Langfuse filters on span attributes, which is why `factory.*` and `vcs.*` are
+  [copied onto every span](#on-records-too); `factory.local.*` is not.
+
 ### Resource attributes
 
 `exporter.resourceAttributes` adds custom attributes to the OTLP Resource every
@@ -808,6 +871,26 @@ persisted with the batch and replayed as recorded, because it describes the
 invocation that made the observation rather than the one that drained the spool.
 Custom attributes are re-checked on the way out, so a hand-edited spool file
 cannot inject one the live path would have refused.
+
+#### On records, too
+
+Some backends index only span and log record attributes, so a value that exists
+only on the Resource cannot be filtered on there. Primitive resource attributes in
+these namespaces are therefore also copied onto every span and log record:
+
+- `har.*` — sent by earlier launchers;
+- `factory.*` — the [Factory Commits telemetry
+  profile](https://github.com/os-factory/factory-commits/blob/main/profiles/telemetry.md)
+  (`factory.work_unit.id`, `factory.slot.id`, …), **except `factory.local.*`**,
+  which the profile defines as local-only: it stays on the Resource and is never
+  copied onto a record;
+- `vcs.*` — OpenTelemetry VCS attributes. An event's own resolved target worktree
+  ([ADR 0008](docs/adr/0008-per-event-worktree-target.md)) still wins for the keys it sets, such as
+  `vcs.ref.head.name`.
+
+`session.id` is not copied as-is: it is the externally supplied session key
+described above, resolved (and trimmed) on its own. Other attributes, such as
+`deployment.environment`, stay on the Resource only.
 
 Diagnostics report resource attribute **names** only — `doctor --json` shows
 `exporter.resource_attribute_names`. A name is already on the wire in every

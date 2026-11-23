@@ -30,6 +30,7 @@ import {
   ATTR_OTELHOOK_TARGET_WORKTREE_KIND,
   ATTR_VCS_REF_HEAD_NAME,
   exportIdentityAttributes,
+  passthroughResourceAttributes,
   targetAttributes,
   usageTemporalityAttributes,
 } from "./export-identity.js";
@@ -377,12 +378,17 @@ const pickTarget = (attributes: Attributes): Attributes => {
   return picked;
 };
 
-const withoutTarget = (attributes: Attributes): Attributes => {
+/**
+ * Drop the target keys so they can be re-chosen as one unit, keeping only what
+ * the launcher put on the Resource (a `vcs.ref.head.name` passed through by
+ * `exportIdentityAttributes`) as the fallback beneath the chosen target.
+ */
+const withoutTarget = (attributes: Attributes, resource: Resource): Attributes => {
   const rest: Attributes = { ...attributes };
   for (const key of TARGET_KEYS) {
     delete rest[key];
   }
-  return rest;
+  return { ...rest, ...pickTarget(passthroughResourceAttributes(resource)) };
 };
 
 const rankOf = (candidate: Attributes): number => {
@@ -552,7 +558,7 @@ const buildLifecycleSpan = (
       name = "session";
       kind = SpanKind.INTERNAL;
       attributes = {
-        ...withoutTarget(attributes),
+        ...withoutTarget(attributes, resource),
         ...strongestTarget([pickTarget(resolved.recovered), start === undefined ? {} : targetAttributes(start)]),
         ...(start?.agentName === undefined ? {} : { [ATTR_OTELHOOK_AGENT_NAME]: start.agentName }),
         ...(start?.agentVersion === undefined
@@ -595,7 +601,7 @@ const buildLifecycleSpan = (
       kind = SpanKind.CLIENT;
       attributes = {
         // Target keys are re-chosen below as one unit, never mixed across edges.
-        ...withoutTarget(attributes),
+        ...withoutTarget(attributes, resource),
         [ATTR_GEN_AI_TOOL_NAME]: toolName,
         [ATTR_GEN_AI_TOOL_CALL_ID]: start?.toolCallId ?? end?.toolCallId ?? group.ref.scopeKey,
         ...(start?.toolKind === undefined ? {} : { [ATTR_OTELHOOK_TOOL_KIND]: start.toolKind }),

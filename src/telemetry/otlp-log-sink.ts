@@ -6,6 +6,7 @@ import { OTLPLogExporter } from "@opentelemetry/exporter-logs-otlp-proto";
 import type { Resource } from "@opentelemetry/resources";
 import type { ReadableLogRecord } from "@opentelemetry/sdk-logs";
 
+import { OTLP_LOGS_PATH, OTLP_TRACES_PATH, withoutTrailingSlashes } from "../config/otlp-endpoint.js";
 import type { ExporterPolicy } from "../config/schema.js";
 import { createHealthTracker, type DeliveryHealthSnapshot } from "../diagnostics/health.js";
 import { createErrorInfo, type OtelHookErrorInfo } from "../errors/index.js";
@@ -40,25 +41,6 @@ import {
  * operator who pointed logs at the wrong port, must cost the logs signal and
  * nothing else. The trace pipeline is the one an installation already depends on.
  */
-
-const OTLP_TRACES_PATH = "/v1/traces";
-const OTLP_LOGS_PATH = "/v1/logs";
-
-/**
- * Strip trailing slashes, by scan rather than by regex.
- *
- * `/\/+$/` is a polynomial-ReDoS on this input: an endpoint of many `/` followed by
- * anything else makes the engine retry the `+` from every position. The endpoint is
- * operator-supplied configuration bounded to 2048 characters, so the practical cost
- * is small — but a linear scan is just as short, and the bound is not the guarantee.
- */
-const withoutTrailingSlashes = (value: string): string => {
-  let end = value.length;
-  while (end > 0 && value.charCodeAt(end - 1) === 0x2f) {
-    end -= 1;
-  }
-  return value.slice(0, end);
-};
 
 /**
  * Where log records are posted.

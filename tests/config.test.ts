@@ -154,7 +154,8 @@ describe("environment configuration", () => {
 
     expect(warnings).toEqual([]);
     expect(patch).toEqual({
-      exporter: { enabled: true, endpoint: "https://collector.example" },
+      // A standard base URL: the traces signal path is appended.
+      exporter: { enabled: true, endpoint: "https://collector.example/v1/traces" },
       privacy: { contentMode: "redact", limits: { maxDepth: 3 } },
       detection: { minimumConfidence: "exact" },
       diagnostics: { logLevel: "debug" },

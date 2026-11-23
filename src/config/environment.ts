@@ -1,6 +1,7 @@
 import { createErrorInfo, type OtelHookErrorInfo } from "../errors/index.js";
 import { detectionConfidenceSchema } from "../model/primitives.js";
 import { contentModeSchema } from "../privacy/policy.js";
+import { OTLP_ENDPOINT_VARIABLES, otlpSignalEndpointFromBase } from "./otlp-endpoint.js";
 import { describeOtlpHeaderNames, resolveOtlpHeaders } from "./otlp-headers.js";
 import {
   checkResourceAttributeKey,
@@ -33,10 +34,21 @@ export type EnvironmentConfigResult = {
  * `OTLP_HEADER_VARIABLES`: only the header *names* they set enter the
  * configuration patch, and their values are resolved by `resolveOtlpHeaders`
  * for the sinks alone.
+ *
+ * `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` is read too, but listed in
+ * `OTLP_ENDPOINT_VARIABLES` with its two siblings: an endpoint is not identity,
+ * yet a `TRACE` name in this list would defeat the guard that keeps identity
+ * variables out of it.
  */
 export const ENVIRONMENT_VARIABLES = Object.freeze({
   exporterEnabled: "OTEL_HOOK_ENABLED",
+  /** Full traces URL; otel-hook's own variable, above the standard ones. */
   exporterEndpoint: "OTEL_HOOK_EXPORTER_ENDPOINT",
+  /**
+   * Standard base URL: `/v1/traces` and `/v1/logs` are appended per signal. A
+   * value already ending in `/v1/traces` is the legacy full traces URL and is
+   * used as-is (see `otlpSignalEndpointFromBase`).
+   */
   otlpEndpoint: "OTEL_EXPORTER_OTLP_ENDPOINT",
   exporterProtocol: "OTEL_HOOK_EXPORTER_PROTOCOL",
   exporterTimeoutMillis: "OTEL_HOOK_EXPORTER_TIMEOUT_MS",
@@ -122,9 +134,18 @@ export const parseEnvironmentConfig = (env: EnvironmentRecord): EnvironmentConfi
   };
 
   const exporterEnabled = readBoolean(ENVIRONMENT_VARIABLES.exporterEnabled);
+  /**
+   * Traces endpoint, highest first: `OTEL_HOOK_EXPORTER_ENDPOINT` (full URL),
+   * `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` (full URL), then
+   * `OTEL_EXPORTER_OTLP_ENDPOINT` as a base URL with `/v1/traces` appended.
+   */
+  const hookEndpoint = readString(ENVIRONMENT_VARIABLES.exporterEndpoint);
+  const otlpTracesEndpoint = readString(OTLP_ENDPOINT_VARIABLES.traces);
+  const otlpBaseEndpoint = readString(ENVIRONMENT_VARIABLES.otlpEndpoint);
   const endpoint =
-    readString(ENVIRONMENT_VARIABLES.exporterEndpoint) ??
-    readString(ENVIRONMENT_VARIABLES.otlpEndpoint);
+    hookEndpoint ??
+    otlpTracesEndpoint ??
+    (otlpBaseEndpoint === undefined ? undefined : otlpSignalEndpointFromBase(otlpBaseEndpoint, "traces"));
   const timeoutMillis = readInteger(ENVIRONMENT_VARIABLES.exporterTimeoutMillis);
 
   const resourceRaw = readString(ENVIRONMENT_VARIABLES.resourceAttributes);
@@ -246,9 +267,21 @@ export const parseEnvironmentConfig = (env: EnvironmentRecord): EnvironmentConfi
 
   const logsEnabled = readBoolean(ENVIRONMENT_VARIABLES.logsEnabled);
   const logsIncludeContent = readBoolean(ENVIRONMENT_VARIABLES.logsIncludeContent);
+  /**
+   * Logs endpoint, highest first: `OTEL_HOOK_LOGS_ENDPOINT`,
+   * `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT`, then `OTEL_EXPORTER_OTLP_ENDPOINT` with
+   * `/v1/logs` appended — but only when the traces endpoint came from
+   * `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`. Otherwise it is left unset and the
+   * logs sink derives it from the resolved traces endpoint, as before: from the
+   * base itself that gives the same URL, and `OTEL_HOOK_EXPORTER_ENDPOINT` or
+   * `--endpoint` keep carrying logs along with traces, as they always have.
+   */
   const logsEndpoint =
     readString(ENVIRONMENT_VARIABLES.logsEndpoint) ??
-    readString(ENVIRONMENT_VARIABLES.otlpLogsEndpoint);
+    readString(ENVIRONMENT_VARIABLES.otlpLogsEndpoint) ??
+    (hookEndpoint === undefined && otlpTracesEndpoint !== undefined && otlpBaseEndpoint !== undefined
+      ? otlpSignalEndpointFromBase(otlpBaseEndpoint, "logs")
+      : undefined);
 
   const logs = {
     ...(logsEnabled === undefined ? {} : { enabled: logsEnabled }),
