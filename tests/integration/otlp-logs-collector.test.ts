@@ -2,7 +2,7 @@ import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 
-import { SeverityNumber } from "@opentelemetry/api-logs";
+import { SeverityNumber } from "@opentelemetry/api";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { DEFAULT_EXPORTER_POLICY, type ExporterPolicy } from "../../src/config/schema.js";

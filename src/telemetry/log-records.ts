@@ -1,5 +1,4 @@
-import { TraceFlags, type SpanContext } from "@opentelemetry/api";
-import { SeverityNumber, type LogAttributes } from "@opentelemetry/api-logs";
+import { SeverityNumber, TraceFlags, type Attributes, type SpanContext } from "@opentelemetry/api";
 import { millisToHrTime, type InstrumentationScope } from "@opentelemetry/core";
 import type { Resource } from "@opentelemetry/resources";
 import type { ReadableLogRecord } from "@opentelemetry/sdk-logs";
@@ -381,7 +380,7 @@ const identityAttributes = (
   event: CanonicalEvent,
   resource: Resource,
   ids: { readonly traceId: string; readonly spanId: string; readonly parentSpanId?: string },
-): LogAttributes => exportIdentityAttributes(event, resource, ids);
+): Attributes => exportIdentityAttributes(event, resource, ids);
 
 /**
  * Attributes describing the event itself, independent of any content it carries.
@@ -391,7 +390,7 @@ const identityAttributes = (
  * applies everywhere else, so an attribute can never become a second disclosure
  * path alongside the body.
  */
-const eventAttributes = (event: CanonicalEvent): LogAttributes => {
+const eventAttributes = (event: CanonicalEvent): Attributes => {
   switch (event.type) {
     case "session.start":
       return {
@@ -492,7 +491,7 @@ const eventAttributes = (event: CanonicalEvent): LogAttributes => {
   }
 };
 
-const usageAttributes = (usage: CanonicalUsage | undefined): LogAttributes =>
+const usageAttributes = (usage: CanonicalUsage | undefined): Attributes =>
   usage === undefined
     ? {}
     : {
@@ -553,7 +552,7 @@ const discloseBody = (fact: ContentFact, policy: LogContentPolicy): DisclosedBod
     : { text: sliceCodePoints(fact.text, MAX_LOG_BODY_CHARACTERS), truncated: true };
 };
 
-const contentAttributes = (fact: ContentFact, body: DisclosedBody): LogAttributes => ({
+const contentAttributes = (fact: ContentFact, body: DisclosedBody): Attributes => ({
   [ATTR_CONTENT_KIND]: fact.kind,
   ...(fact.role === undefined ? {} : { [ATTR_CONTENT_ROLE]: fact.role }),
   [ATTR_CONTENT_DISCLOSURE]: "metadataOnly" in body ? "metadata_only" : fact.disclosure,
@@ -598,7 +597,7 @@ export type LogMappingResult = {
 const buildRecord = (input: {
   readonly event: CanonicalEvent;
   readonly signal: LogSignal;
-  readonly attributes: LogAttributes;
+  readonly attributes: Attributes;
   readonly body?: string;
   readonly spanContext: SpanContext;
   readonly parentSpanId?: string;
