@@ -4,6 +4,7 @@ import * as path from "node:path";
 import type { Readable, Writable } from "node:stream";
 
 import { parseEnvironmentConfig } from "../config/environment.js";
+import { resolveOtlpHeaders, unionOtlpHeaderNames } from "../config/otlp-headers.js";
 import { resolveConfig, type ConfigLayer, type ConfigProvenance } from "../config/resolve.js";
 import { DEFAULT_CONFIG, type OtelHookConfig, type OtelHookConfigPatch } from "../config/schema.js";
 import { createErrorInfo, type OtelHookErrorInfo } from "../errors/index.js";
@@ -113,6 +114,26 @@ export const policyFlagsToPatch = (policy: CliPolicyFlags): OtelHookConfigPatch 
   } as OtelHookConfigPatch;
 };
 
+export type CliExporterHeaders = {
+  readonly traces: Readonly<Record<string, string>>;
+  readonly logs: Readonly<Record<string, string>>;
+};
+
+/**
+ * Header *values* for each signal's sink: `--header` over the signal-specific
+ * `OTEL_EXPORTER_OTLP_*_HEADERS` over `OTEL_EXPORTER_OTLP_HEADERS`.
+ *
+ * The result goes straight to sink construction and nowhere else. Malformed
+ * entries were already reported by {@link resolveCliConfig}, without values.
+ */
+export const resolveCliExporterHeaders = (
+  policy: CliPolicyFlags,
+  io: CliIo,
+): CliExporterHeaders => {
+  const { traces, logs } = resolveOtlpHeaders(io.env, policy.headers);
+  return { traces, logs };
+};
+
 export type ResolvedCliConfig = {
   readonly config: OtelHookConfig;
   readonly provenance?: ConfigProvenance;
@@ -187,7 +208,23 @@ export const resolveCliConfig = async (
   const environment = parseEnvironmentConfig(io.env);
   warnings.push(...environment.warnings);
   layers.push({ source: "environment", patch: environment.patch });
-  layers.push({ source: "inline-override", patch: policyFlagsToPatch(policy) });
+  const inline = policyFlagsToPatch(policy);
+  const environmentHeaderNames = environment.patch.exporter?.headerNames;
+  const inlineHeaderNames = inline.exporter?.headerNames;
+  // `headerNames` is one leaf, so the flag layer would otherwise *replace* the
+  // names the environment supplied. Every header those layers set is sent, so
+  // the snapshot names their union.
+  const exporterPatch =
+    environmentHeaderNames !== undefined && inlineHeaderNames !== undefined
+      ? {
+          ...inline.exporter,
+          headerNames: [...unionOtlpHeaderNames(environmentHeaderNames, inlineHeaderNames)],
+        }
+      : inline.exporter;
+  layers.push({
+    source: "inline-override",
+    patch: { ...inline, ...(exporterPatch === undefined ? {} : { exporter: exporterPatch }) },
+  });
 
   const resolution = resolveConfig(layers);
   if (resolution.status !== "ok") {

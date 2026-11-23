@@ -101,7 +101,8 @@ Identity, identical to the span mapping and derived from the same fields:
 
 | Attribute | Meaning |
 | --- | --- |
-| `session.id` | provider session id |
+| `session.id` | externally supplied session key when the resource carries one (`session.id`, then `har.session_key`), otherwise the provider session id |
+| `otelhook.session.id`, `gen_ai.conversation.id` | provider session id, always |
 | `otelhook.invocation.id` | one hook invocation |
 | `otelhook.provider.id`, `otelhook.provider.version` | attributed provider |
 | `otelhook.workspace.id` | opaque `<scheme>:<token>` handle; never a path |

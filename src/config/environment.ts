@@ -1,6 +1,7 @@
 import { createErrorInfo, type OtelHookErrorInfo } from "../errors/index.js";
 import { detectionConfidenceSchema } from "../model/primitives.js";
 import { contentModeSchema } from "../privacy/policy.js";
+import { describeOtlpHeaderNames, resolveOtlpHeaders } from "./otlp-headers.js";
 import {
   checkResourceAttributeKey,
   MAX_RESOURCE_ATTRIBUTE_VALUE_LENGTH,
@@ -27,6 +28,11 @@ export type EnvironmentConfigResult = {
  * No identity variable appears here by design: session, invocation, and
  * workspace identity are supplied per invocation as identity claims, never
  * through ambient configuration (ADR 0001).
+ *
+ * The standard OTLP header variables are read too, but listed separately in
+ * `OTLP_HEADER_VARIABLES`: only the header *names* they set enter the
+ * configuration patch, and their values are resolved by `resolveOtlpHeaders`
+ * for the sinks alone.
  */
 export const ENVIRONMENT_VARIABLES = Object.freeze({
   exporterEnabled: "OTEL_HOOK_ENABLED",
@@ -250,11 +256,20 @@ export const parseEnvironmentConfig = (env: EnvironmentRecord): EnvironmentConfi
     ...(logsIncludeContent === undefined ? {} : { includeContent: logsIncludeContent }),
   };
 
+  // Names only: the values stay out of configuration, and so out of every
+  // resolved-config snapshot. Their warnings are position-only.
+  const otlpHeaders = resolveOtlpHeaders(env);
+  for (const { variable, detail } of otlpHeaders.warnings) {
+    warn(variable, detail);
+  }
+  const headerNames = describeOtlpHeaderNames(otlpHeaders.traces, otlpHeaders.logs);
+
   const exporter = {
     ...(exporterEnabled === undefined ? {} : { enabled: exporterEnabled }),
     ...(endpoint === undefined ? {} : { endpoint }),
     ...(protocol === undefined ? {} : { protocol }),
     ...(timeoutMillis === undefined ? {} : { timeoutMillis }),
+    ...(headerNames.length === 0 ? {} : { headerNames: [...headerNames] }),
     ...(serviceName === undefined ? {} : { serviceName }),
     ...(serviceNamespace === undefined ? {} : { serviceNamespace }),
     ...(Object.keys(resourceAttributes).length === 0 ? {} : { resourceAttributes }),

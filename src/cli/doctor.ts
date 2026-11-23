@@ -13,6 +13,7 @@ import type { CliDoctorCommand } from "./args.js";
 import {
   createCliLogger,
   resolveCliConfig,
+  resolveCliExporterHeaders,
   resolveInstallationId,
   resolveStateRootDir,
   writeLine,
@@ -149,11 +150,10 @@ export const collectDoctorReport = async (
     }
   }
 
+  const traceHeaders = resolveCliExporterHeaders(command.policy, io).traces;
   const sink = createOtlpTraceSink({
     exporter: resolved.config.exporter,
-    ...(Object.keys(command.policy.headers).length === 0
-      ? {}
-      : { headers: command.policy.headers }),
+    ...(Object.keys(traceHeaders).length === 0 ? {} : { headers: traceHeaders }),
     providerId: DOCTOR_STATE_NAMESPACE,
     installationId,
     clock,

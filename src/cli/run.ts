@@ -19,6 +19,7 @@ import {
   createCliLogger,
   readIdentityFile,
   resolveCliConfig,
+  resolveCliExporterHeaders,
   resolveInstallationId,
   resolveStateRootDir,
   type CliIo,
@@ -239,6 +240,7 @@ export const runHookCommand = async (command: CliRunCommand, io: CliIo): Promise
   logDiagnostics(logger, fromFlags.errors);
   identityClaims.push(...fromFlags.claims);
 
+  const headers = resolveCliExporterHeaders(command.policy, io);
   const runtime = createHookRuntime({
     // Detection policy narrowed to the selected adapter; everything else is the
     // resolved configuration exactly as it stands.
@@ -247,9 +249,8 @@ export const runHookCommand = async (command: CliRunCommand, io: CliIo): Promise
     stateRootDir: resolveStateRootDir(command.policy, io),
     installationId: resolveInstallationId(command.policy, io),
     providerNamespace: selection.namespace,
-    ...(Object.keys(command.policy.headers).length === 0
-      ? {}
-      : { headers: command.policy.headers }),
+    ...(Object.keys(headers.traces).length === 0 ? {} : { headers: headers.traces }),
+    ...(Object.keys(headers.logs).length === 0 ? {} : { logHeaders: headers.logs }),
     clock,
     ids,
     logger,
