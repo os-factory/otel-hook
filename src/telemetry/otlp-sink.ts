@@ -10,6 +10,8 @@ import { createHealthTracker, type DeliveryHealthSnapshot } from "../diagnostics
 import type { CanonicalEvent } from "../model/events.js";
 import type { Clock, Logger, TelemetryEmitResult, TelemetrySink } from "../runtime/ports.js";
 import type { DurableSpool, SerializedSpan, SpoolBatch } from "./durable-spool.js";
+import { isPermanentExportFailure } from "./export-failure.js";
+import type { SpoolSendOutcome } from "./spool-queue.js";
 import { replayResource, resourceFromExporterPolicy } from "./exporter-resource.js";
 import {
   assembleReadableSpan,
@@ -83,6 +85,12 @@ export type OtlpTraceSinkOptions = {
    * layer keeps no dependency on lifecycle or on the state store (ADR 0006).
    */
   readonly correlate?: SpanCorrelationResolver;
+  /**
+   * Export destination this sink delivers to, when `exporter.destinations` is in
+   * use. Labels health snapshots, diagnostics, and log lines; absent, all three are
+   * exactly what a single-destination installation has always produced.
+   */
+  readonly destination?: string;
 };
 
 export interface OtlpTelemetrySink extends TelemetrySink {
@@ -92,8 +100,11 @@ export interface OtlpTelemetrySink extends TelemetrySink {
 }
 
 /** Sink that accepts every batch and does nothing else: exporter disabled or protocol `none`. */
-const createDisabledSink = (): OtlpTelemetrySink => {
-  const health = createHealthTracker("telemetry-sink");
+const createDisabledSink = (destination?: string): OtlpTelemetrySink => {
+  const health = createHealthTracker(
+    "telemetry-sink",
+    destination === undefined ? {} : { destination },
+  );
   return {
     emit: (events): Promise<TelemetryEmitResult> => {
       health.recordSuccess(events.length);
@@ -123,23 +134,29 @@ const createDisabledSink = (): OtlpTelemetrySink => {
  * installation quietly accumulating files.
  */
 export const createOtlpTraceSink = (options: OtlpTraceSinkOptions): OtlpTelemetrySink => {
+  const destinationFields =
+    options.destination === undefined ? {} : { "export.destination": options.destination };
   if (!options.exporter.enabled || options.exporter.protocol === "none") {
-    return createDisabledSink();
+    return createDisabledSink(options.destination);
   }
   if (options.exporter.endpoint === undefined) {
-    options.logger?.warn("otlp sink disabled: no endpoint configured", {});
-    return createDisabledSink();
+    options.logger?.warn("otlp sink disabled: no endpoint configured", destinationFields);
+    return createDisabledSink(options.destination);
   }
   if (options.exporter.protocol !== "http/protobuf") {
     options.logger?.warn("otlp sink: protocol not supported by this build, falling back to disabled", {
       "exporter.protocol": options.exporter.protocol,
+      ...destinationFields,
     });
-    return createDisabledSink();
+    return createDisabledSink(options.destination);
   }
 
   const scope = options.instrumentationScope ?? DEFAULT_INSTRUMENTATION_SCOPE;
   const resource = resourceFromExporterPolicy(options.exporter);
-  const health = createHealthTracker("telemetry-sink");
+  const health = createHealthTracker(
+    "telemetry-sink",
+    options.destination === undefined ? {} : { destination: options.destination },
+  );
   const exporter = new OTLPTraceExporter({
     url: options.exporter.endpoint,
     headers: { ...options.headers },
@@ -161,11 +178,14 @@ export const createOtlpTraceSink = (options: OtlpTraceSinkOptions): OtlpTelemetr
     enqueuedAt: options.clock.now(),
   });
 
-  const sendSerializedBatch = async (batch: SpoolBatch): Promise<boolean> => {
+  const sendSerializedBatch = async (batch: SpoolBatch): Promise<SpoolSendOutcome> => {
     const batchResource = replayResource(batch.resourceAttributes, options.exporter);
     const spans = batch.spans.map((span) => deserializeSpan(span, batchResource, batch.instrumentationScope));
     const result = await exportSpans(spans);
-    return result.code === ExportResultCode.SUCCESS;
+    if (result.code === ExportResultCode.SUCCESS) {
+      return true;
+    }
+    return isPermanentExportFailure(result) ? "discard" : false;
   };
 
   /**
@@ -213,6 +233,14 @@ export const createOtlpTraceSink = (options: OtlpTraceSinkOptions): OtlpTelemetr
     let rejected = 0;
 
     for (const batch of chunk(spans, options.exporter.maxBatchSize)) {
+      if (batch.length === 0) {
+        // A batch of only start edges maps to no span at all: a lone `*.start` is
+        // held for its end rather than exported. Sending it anyway POSTed an
+        // `ExportTraceServiceRequest` with no resource spans — an empty body at the
+        // collector — and, against a down collector, spooled an empty batch that
+        // the drain could only quarantine.
+        continue;
+      }
       let result: ExportResult;
       try {
         result = await exportSpans(batch);
@@ -226,13 +254,18 @@ export const createOtlpTraceSink = (options: OtlpTraceSinkOptions): OtlpTelemetr
       }
 
       health.recordFailure("telemetry-export-failure", batch.length, options.clock.now());
-      if (options.spool !== undefined) {
+      const permanent = isPermanentExportFailure(result);
+      if (options.spool !== undefined && !permanent) {
         const spoolResult = await options.spool.enqueue(toSpoolBatch(batch)).catch(() => ({
           spooled: false as const,
           reason: "capacity-exceeded" as const,
         }));
         if (spoolResult.spooled) {
           accepted += batch.length;
+          options.logger?.warn("span batch not delivered; spooled for the next invocation", {
+            "export.batch_size": batch.length,
+            ...destinationFields,
+          });
           continue;
         }
       }
@@ -241,8 +274,10 @@ export const createOtlpTraceSink = (options: OtlpTraceSinkOptions): OtlpTelemetr
         createErrorInfo({
           code: "telemetry-export-failure",
           phase: "export",
-          detail: "collector rejected or was unreachable for a span batch",
-          details: { "export.batch_size": batch.length },
+          detail: permanent
+            ? "collector refused a span batch with a non-retryable status"
+            : "collector rejected or was unreachable for a span batch",
+          details: { "export.batch_size": batch.length, ...destinationFields },
         }),
       );
     }

@@ -1,3 +1,14 @@
+import { readdir } from "node:fs/promises";
+import * as path from "node:path";
+
+import {
+  describeExportDestinations,
+  hasConfiguredDestinations,
+  resolveDestinationHeaders,
+  resolveExportDestinations,
+  type DestinationDescription,
+  type ExportSignal,
+} from "../config/destinations.js";
 import { describeResolvedConfig } from "../config/resolve.js";
 import { summarizeHealth } from "../diagnostics/health.js";
 import { CANONICAL_SCHEMA_VERSION } from "../model/version.js";
@@ -9,6 +20,13 @@ import { createFileDurableLogSpool } from "../telemetry/durable-log-spool.js";
 import { createFileDurableSpool } from "../telemetry/durable-spool.js";
 import { describeLogsDeliverability } from "../telemetry/otlp-log-sink.js";
 import { createOtlpTraceSink } from "../telemetry/otlp-sink.js";
+import { spoolQueueNamesFor } from "../telemetry/export-destinations.js";
+import {
+  EMPTY_SPOOL_DROP_COUNTS,
+  readSpoolQueueStats,
+  type SpoolStats,
+} from "../telemetry/spool-queue.js";
+import { sanitizeSegment } from "../state/keys.js";
 import type { CliDoctorCommand } from "./args.js";
 import {
   createCliLogger,
@@ -26,6 +44,24 @@ export type DoctorCheck = {
   readonly ok: boolean;
   /** Non-sensitive explanation; never an exception message. */
   readonly detail: string;
+};
+
+/**
+ * One export destination as `doctor` sees it.
+ *
+ * Header *names* and the *names* of the environment variables they reference —
+ * never a value, whether it came from the file or from the environment.
+ */
+export type DoctorDestination = DestinationDescription & {
+  /** Referenced variables that are unset or empty, so the destination is skipped. */
+  readonly missingVariables: readonly string[];
+  readonly ok: boolean;
+  readonly detail: string;
+  /**
+   * Retry spool per signal, summed over every provider namespace under this
+   * installation. Absent when spooling is off or the signal is not sent here.
+   */
+  readonly spool?: Partial<Readonly<Record<ExportSignal, SpoolStats>>>;
 };
 
 export type DoctorReport = {
@@ -47,6 +83,8 @@ export type DoctorReport = {
     /** Queued log batches awaiting retry. Absent when logs or spooling are off. */
     readonly spooledLogBatches?: number;
   };
+  /** Every export destination, `default` first; disabled ones are listed too. */
+  readonly destinations: readonly DoctorDestination[];
   readonly providers: readonly {
     readonly id: string;
     readonly version: string;
@@ -151,6 +189,13 @@ export const collectDoctorReport = async (
   }
 
   const traceHeaders = resolveCliExporterHeaders(command.policy, io).traces;
+  const destinations = await describeDoctorDestinations(
+    resolved.config.exporter,
+    io.env,
+    command.policy.spoolDisabled === true ? undefined : { rootDir: stateRootDir, installationId },
+  );
+  const withDestinations = hasConfiguredDestinations(resolved.config.exporter);
+
   const sink = createOtlpTraceSink({
     exporter: resolved.config.exporter,
     ...(Object.keys(traceHeaders).length === 0 ? {} : { headers: traceHeaders }),
@@ -159,19 +204,28 @@ export const collectDoctorReport = async (
     clock,
     logger,
   });
-  const exporterConfigured =
+  const legacyConfigured =
     resolved.config.exporter.enabled &&
     resolved.config.exporter.protocol === "http/protobuf" &&
     resolved.config.exporter.endpoint !== undefined;
+  const routable = destinations.filter((destination) => destination.enabled && destination.ok);
+  const exporterConfigured =
+    legacyConfigured || (withDestinations && resolved.config.exporter.enabled && routable.length > 0);
   checks.push({
     name: "exporter",
     ok: exporterConfigured,
     detail: exporterConfigured
-      ? "OTLP HTTP/protobuf exporter is configured"
+      ? withDestinations
+        ? `OTLP HTTP/protobuf export to ${String(routable.length)} destination(s): ${routable
+            .map((destination) => destination.name)
+            .join(", ")}`
+        : "OTLP HTTP/protobuf exporter is configured"
       : !resolved.config.exporter.enabled
         ? "exporter is disabled; events are accepted and discarded"
-        : resolved.config.exporter.endpoint === undefined
+        : resolved.config.exporter.endpoint === undefined && !withDestinations
           ? "exporter is enabled but no endpoint is configured"
+          : withDestinations
+            ? "exporter.destinations is set but no destination can be sent to"
           : `protocol ${resolved.config.exporter.protocol} is not supported by this build`,
   });
   /**
@@ -199,6 +253,18 @@ export const collectDoctorReport = async (
             ? "logs are enabled but no endpoint is configured and none could be derived"
             : `logs are enabled but unroutable: ${logs.reason}`,
   });
+
+  if (withDestinations) {
+    const failing = destinations.filter((destination) => destination.enabled && !destination.ok);
+    checks.push({
+      name: "destinations",
+      ok: failing.length === 0,
+      detail:
+        failing.length === 0
+          ? `${String(destinations.filter((destination) => destination.enabled).length)} enabled destination(s) resolve`
+          : failing.map((destination) => `${destination.name}: ${destination.detail}`).join("; "),
+    });
+  }
 
   const health = summarizeHealth([sink.health()]);
   await sink.shutdown();
@@ -239,6 +305,7 @@ export const collectDoctorReport = async (
       ...(spooledBatches === undefined ? {} : { spooledBatches }),
       ...(spooledLogBatches === undefined ? {} : { spooledLogBatches }),
     },
+    destinations,
     providers: providers.map((entry) => ({
       id: entry.id,
       version: entry.version,
@@ -246,6 +313,149 @@ export const collectDoctorReport = async (
       lifecycleEvents: entry.lifecycleEvents,
     })),
   };
+};
+
+const formatBytes = (bytes: number): string =>
+  bytes < 1024 ? `${String(bytes)} B` : `${(bytes / 1024).toFixed(1)} KiB`;
+
+const describeDestinationLine = (destination: DoctorDestination): string => {
+  const parts: string[] = [];
+  parts.push(destination.enabled ? destination.signals.join("+") || "no signals" : "disabled");
+  if (destination.tracesEndpointOrigin !== undefined) {
+    parts.push(`traces -> ${destination.tracesEndpointOrigin}`);
+  }
+  if (destination.logsEndpointOrigin !== undefined) {
+    parts.push(`logs -> ${destination.logsEndpointOrigin}`);
+  }
+  if (destination.headerNames.length > 0) {
+    parts.push(`headers ${destination.headerNames.join(", ")}`);
+  }
+  if (destination.missingVariables.length > 0) {
+    parts.push(`MISSING ${destination.missingVariables.join(", ")}`);
+  }
+  for (const [signal, stats] of Object.entries(destination.spool ?? {})) {
+    if (stats.batches > 0 || stats.dropped.total > 0) {
+      const dropped = stats.dropped;
+      parts.push(
+        `${signal} spool ${String(stats.batches)} batch(es) ${formatBytes(stats.bytes)}, dropped ${String(
+          dropped.total,
+        )} (age ${String(dropped.age)}, size ${String(dropped.size)}, count ${String(
+          dropped.count,
+        )}, rejected ${String(dropped.rejected)})`,
+      );
+    }
+  }
+  return `${destination.ok ? "ok  " : "FAIL"} destination ${destination.name}: ${parts.join("; ")}`;
+};
+
+const sumSpoolStats = (all: readonly SpoolStats[]): SpoolStats => {
+  const oldest = all
+    .map((stats) => stats.oldestEnqueuedAt)
+    .filter((value): value is number => value !== undefined);
+  const lastDropped = all
+    .map((stats) => stats.dropped.lastDroppedAt)
+    .filter((value): value is number => value !== undefined);
+  return {
+    batches: all.reduce((sum, stats) => sum + stats.batches, 0),
+    bytes: all.reduce((sum, stats) => sum + stats.bytes, 0),
+    ...(oldest.length === 0 ? {} : { oldestEnqueuedAt: Math.min(...oldest) }),
+    dropped: {
+      total: all.reduce((sum, stats) => sum + stats.dropped.total, 0),
+      age: all.reduce((sum, stats) => sum + stats.dropped.age, 0),
+      size: all.reduce((sum, stats) => sum + stats.dropped.size, 0),
+      count: all.reduce((sum, stats) => sum + stats.dropped.count, 0),
+      rejected: all.reduce((sum, stats) => sum + stats.dropped.rejected, 0),
+      ...(lastDropped.length === 0 ? {} : { lastDroppedAt: Math.max(...lastDropped) }),
+    },
+  };
+};
+
+/**
+ * Spool depth and drops for one queue, across every provider namespace.
+ *
+ * The hook spools under the provider it ran as, and `doctor` is not told which
+ * providers run here — so it reads every namespace directory under this
+ * installation. Read-only: nothing is created.
+ */
+const inspectQueue = async (
+  spool: { readonly rootDir: string; readonly installationId: string },
+  queueName: string,
+): Promise<SpoolStats> => {
+  let namespaces: string[];
+  try {
+    namespaces = await readdir(spool.rootDir);
+  } catch {
+    namespaces = [];
+  }
+  const installation = sanitizeSegment(spool.installationId);
+  const stats = await Promise.all(
+    namespaces.map((namespace) =>
+      readSpoolQueueStats(path.join(spool.rootDir, namespace, installation, queueName)),
+    ),
+  );
+  return stats.length === 0
+    ? { batches: 0, bytes: 0, dropped: EMPTY_SPOOL_DROP_COUNTS }
+    : sumSpoolStats(stats);
+};
+
+const describeDoctorDestinations = async (
+  exporter: Parameters<typeof describeExportDestinations>[0],
+  environment: Readonly<Record<string, string | undefined>>,
+  spool: { readonly rootDir: string; readonly installationId: string } | undefined,
+): Promise<readonly DoctorDestination[]> => {
+  const configured = new Map(
+    (exporter.destinations ?? []).map((destination) => [destination.name, destination]),
+  );
+  const resolvedNames = new Set(resolveExportDestinations(exporter).map((destination) => destination.name));
+  const descriptions = describeExportDestinations(exporter);
+  return Promise.all(
+    descriptions.map(async (description): Promise<DoctorDestination> => {
+      const headers = configured.get(description.name)?.headers ?? {};
+      // Resolved only to learn which variables are missing; the values are dropped
+      // on the floor here and never reach the report.
+      const missingVariables = resolveDestinationHeaders(headers, environment).missingVariables;
+      const sends = description.signals.length > 0;
+      const reachable =
+        (description.signals.includes("traces") && description.tracesEndpointOrigin !== undefined) ||
+        (description.signals.includes("logs") && description.logsEndpointOrigin !== undefined);
+      let detail = "resolves";
+      let ok = true;
+      if (!description.enabled) {
+        detail = "disabled";
+      } else if (missingVariables.length > 0) {
+        ok = false;
+        detail = `header variable(s) not set: ${missingVariables.join(", ")}; skipped until they are`;
+      } else if (description.protocol !== "http/protobuf") {
+        ok = description.protocol === "none";
+        detail =
+          description.protocol === "none"
+            ? "protocol is none; nothing is sent"
+            : `protocol ${description.protocol} is not supported by this build`;
+      } else if (!sends || !reachable) {
+        ok = false;
+        detail = "no endpoint for any signal it receives";
+      }
+      const queues = spoolQueueNamesFor(description.name);
+      const spoolStats =
+        spool === undefined || !resolvedNames.has(description.name)
+          ? undefined
+          : {
+              ...(description.signals.includes("traces")
+                ? { traces: await inspectQueue(spool, queues.traces) }
+                : {}),
+              ...(description.signals.includes("logs")
+                ? { logs: await inspectQueue(spool, queues.logs) }
+                : {}),
+            };
+      return {
+        ...description,
+        missingVariables,
+        ok,
+        detail,
+        ...(spoolStats === undefined ? {} : { spool: spoolStats }),
+      };
+    }),
+  );
 };
 
 export const runDoctorCommand = async (command: CliDoctorCommand, io: CliIo): Promise<number> => {
@@ -269,6 +479,20 @@ export const runDoctorCommand = async (command: CliDoctorCommand, io: CliIo): Pr
   }
   if (report.state.spooledLogBatches !== undefined) {
     writeLine(io.stdout, `spooled log batches: ${String(report.state.spooledLogBatches)}`);
+  }
+  // A single-destination installation prints exactly what it always has, unless its
+  // spool has something to say: queued batches or drops.
+  const listDestinations =
+    report.config["exporter.destination_names"] !== undefined ||
+    report.destinations.some((destination) =>
+      Object.values(destination.spool ?? {}).some(
+        (stats) => stats.dropped.total > 0,
+      ),
+    );
+  if (listDestinations) {
+    for (const destination of report.destinations) {
+      writeLine(io.stdout, describeDestinationLine(destination));
+    }
   }
   for (const note of report.configNotes) {
     writeLine(io.stdout, `note: ${note}`);

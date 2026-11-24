@@ -33,11 +33,19 @@ export type DeliveryHealthSnapshot = {
   readonly lastSuccessAt?: EpochMillis;
   readonly lastFailureAt?: EpochMillis;
   readonly lastErrorCode?: OtelHookErrorCode;
+  /**
+   * Export destination this snapshot describes. Present only when
+   * `exporter.destinations` is in use, so a single-destination snapshot is
+   * unchanged.
+   */
+  readonly destination?: string;
 };
 
 export type HealthTrackerOptions = {
   /** Consecutive failures at or beyond this count flip `healthy` to false. Default 3. */
   readonly unhealthyAfterConsecutiveFailures?: number;
+  /** Labels every snapshot with an export destination name. */
+  readonly destination?: string;
 };
 
 /**
@@ -91,6 +99,7 @@ export const createHealthTracker = (
       ...(lastSuccessAt === undefined ? {} : { lastSuccessAt }),
       ...(lastFailureAt === undefined ? {} : { lastFailureAt }),
       ...(lastErrorCode === undefined ? {} : { lastErrorCode }),
+      ...(options.destination === undefined ? {} : { destination: options.destination }),
     }),
   };
 };

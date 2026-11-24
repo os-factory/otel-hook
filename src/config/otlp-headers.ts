@@ -15,6 +15,8 @@
  * malformed entry may be the secret itself (`Basic abc` with no `=`).
  */
 
+import { isUnsafeHeaderValue } from "./header-value.js";
+
 /** Upper bound on headers per variable, matching `exporter.headerNames`. */
 export const MAX_OTLP_HEADERS = 32;
 
@@ -26,18 +28,6 @@ export const OTLP_HEADER_VARIABLES = Object.freeze({
 
 /** RFC 9110 `token`: the characters an HTTP field name may contain. */
 const HEADER_NAME_PATTERN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
-
-/**
- * Characters an HTTP field value must not contain once decoded. CR and LF would
- * split the request; the other controls and anything beyond Latin-1 are refused
- * by Node's HTTP client anyway, and refusing them here turns a failed export into
- * a reported, skipped entry.
- */
-const isUnsafeHeaderValue = (value: string): boolean =>
-  [...value].some((char) => {
-    const code = char.codePointAt(0) ?? 0;
-    return (code < 0x20 && code !== 0x09) || code === 0x7f || code > 0xff;
-  });
 
 export type ParsedOtlpHeaders = {
   readonly headers: Readonly<Record<string, string>>;

@@ -6,6 +6,7 @@ import {
   DEFAULT_PRIVACY_POLICY,
   privacyPolicySchema,
 } from "../privacy/policy.js";
+import { exportDestinationsSchema, spoolPolicySchema } from "./destinations.js";
 import { EMPTY_RESOURCE_ATTRIBUTES, resourceAttributesSchema } from "./resource-attributes.js";
 
 /**
@@ -85,6 +86,23 @@ export const exporterPolicySchema = z.strictObject({
    * a second top-level section would invite two of each to drift apart.
    */
   logs: logsPolicySchema,
+  /**
+   * Additional OTLP destinations, each sent every batch in parallel.
+   *
+   * Absent (the default), the exporter has exactly one destination — the
+   * single-endpoint settings above, named `default` — and behaves exactly as it
+   * did before this list existed. See `destinations.ts`.
+   *
+   * Merged as one leaf: a higher layer that sets the list replaces it whole,
+   * because "the union of two partial lists" has no answer an operator could
+   * predict.
+   */
+  destinations: exportDestinationsSchema.optional(),
+  /**
+   * Per-destination retry spool bounds, each optional and merged per leaf; any
+   * bound left unset takes its value from `DEFAULT_SPOOL_POLICY`.
+   */
+  spool: spoolPolicySchema.partial().optional(),
 });
 export type ExporterPolicy = z.infer<typeof exporterPolicySchema>;
 
@@ -119,9 +137,12 @@ export const otelHookConfigPatchSchema = z.strictObject({
   // merging happens per leaf, so a layer must be able to set `logs.enabled` alone
   // without also restating the endpoint and the batch size.
   exporter: exporterPolicySchema
-    .omit({ logs: true })
+    .omit({ logs: true, spool: true })
     .partial()
-    .extend({ logs: logsPolicySchema.partial().optional() })
+    .extend({
+      logs: logsPolicySchema.partial().optional(),
+      spool: spoolPolicySchema.partial().optional(),
+    })
     .optional(),
   privacy: privacyPolicySchema
     .omit({ limits: true })

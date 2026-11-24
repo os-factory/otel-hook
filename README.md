@@ -286,7 +286,10 @@ otel-hook doctor --json
 
 Reports the version, an attribute-safe configuration snapshot, a real
 write/read/delete probe of the state directory, spool depth, exporter
-configuration, privacy mode, and the adapter count. Exits 1 when any check fails,
+configuration, privacy mode, and the adapter count. With
+[multiple destinations](#multiple-destinations) it also reports each one: its
+signals and endpoint origins, the environment variables its headers reference (by
+name — never a value), any that are missing, and its spool depth and drops. Exits 1 when any check fails,
 so CI can gate on it. Every check is local: `doctor` never sends a span.
 
 ### `setup`, `diagnose`, `uninstall`
@@ -323,6 +326,10 @@ conservative by construction:
 - **Read-only when it says so.** `diagnose` and `--dry-run` take no lock and
   create no directories; `--dry-run` prints the exact bytes a real run would
   write.
+
+To register a hook that reads a configuration file — for example one with
+[multiple destinations](#multiple-destinations) — pass the full command:
+`--hook-command "otel-hook run --provider claude-code --config-file /path/to/otel-hook.json"`.
 
 `--scope` is `project` by default for `setup` and `uninstall` (writing into a home
 directory is the surprising choice) and `all` for `diagnose`. Only events the
@@ -812,6 +819,113 @@ export OTEL_RESOURCE_ATTRIBUTES="session.id=run-2041,factory.work_unit.id=wu-42,
   does not show up in `ps`.
 - Langfuse filters on span attributes, which is why `factory.*` and `vcs.*` are
   [copied onto every span](#on-records-too); `factory.local.*` is not.
+
+### Multiple destinations
+
+`exporter.destinations` sends every batch to several OTLP endpoints at once — a
+local Langfuse and a team Collector, say — with no proxy or Collector in between.
+otel-hook is a short-lived process, so it does the fan-out itself: each enabled
+destination is sent the same spans in parallel, each bounded by the exporter's
+`timeoutMillis`, and whatever a destination could not take is kept in that
+destination's own disk spool for the next hook event.
+
+A standalone configuration, Langfuse plus a local Collector:
+
+```json
+{
+  "exporter": {
+    "destinations": [
+      {
+        "name": "langfuse",
+        "endpoint": "http://localhost:3000/api/public/otel/v1/traces",
+        "headers": { "authorization": "env:LANGFUSE_AUTH" },
+        "signals": ["traces"]
+      },
+      {
+        "name": "collector",
+        "endpoint": "http://127.0.0.1:4318/v1/traces"
+      }
+    ]
+  }
+}
+```
+
+```bash
+# Langfuse's OTLP endpoint takes HTTP Basic auth: base64 of "public-key:secret-key".
+export LANGFUSE_AUTH="Basic $(printf '%s' "$LANGFUSE_PUBLIC_KEY:$LANGFUSE_SECRET_KEY" | base64)"
+
+otel-hook doctor --config-file ~/.config/otel-hook/destinations.json
+otel-hook setup --provider claude-code \
+  --hook-command "otel-hook run --provider claude-code --config-file $HOME/.config/otel-hook/destinations.json"
+```
+
+Each destination takes:
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `name` | — | Unique; lowercase letters, digits, `_` and `-`. Also its spool directory. `default` is reserved. |
+| `endpoint` | — | Traces URL, as `exporter.endpoint`. The logs URL is derived from it (`/v1/traces` → `/v1/logs`). |
+| `tracesEndpoint`, `logsEndpoint` | — | Per-signal URLs, overriding `endpoint`. At least one of the three is required. |
+| `protocol` | `exporter.protocol` | `http/protobuf` is the protocol this build sends. |
+| `headers` | `{}` | Header name → value. `"env:NAME"` reads the value from that environment variable when sending. |
+| `signals` | `["traces", "logs"]` | Which signals it receives. Logs still need `exporter.logs.enabled`. |
+| `enabled` | `true` | `false` keeps the entry but neither sends to it nor drains its spool. |
+
+Everything else — timeout, batch sizes, service identity, resource attributes,
+log content policy — is shared, so every destination receives the same spans with
+the same trace and span ids.
+
+**Secrets stay out of the file.** A header value of `env:LANGFUSE_AUTH` is read from
+the hook's environment at send time; the variable's *name* is the only part that
+ever appears in a snapshot, a diagnostic, or `doctor`. If the variable is unset or
+empty, that destination sits the invocation out with a stderr diagnostic naming
+the variable — it is never sent a request without its credentials — and `doctor`
+fails the `destinations` check with the same name. Literal header values are
+accepted for things that are not secrets (a tenant id) and are never printed either.
+
+**The single endpoint is the `default` destination.** `exporter.endpoint`,
+`exporter.logs.endpoint`, `--endpoint`, `--header`, the standard
+`OTEL_EXPORTER_OTLP_ENDPOINT` / `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` /
+`OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` variables (see [Exporter
+endpoints](#exporter-endpoints)), and the `OTEL_EXPORTER_OTLP_HEADERS` /
+`OTEL_EXPORTER_OTLP_TRACES_HEADERS` / `OTEL_EXPORTER_OTLP_LOGS_HEADERS` variables
+(see [Exporter headers](#exporter-headers)) still describe one destination, named
+`default`, resolved exactly as described in those sections. Those header
+variables apply to `default` only; a `destinations[]` entry sends exactly the
+headers it lists. With no `destinations` list nothing changes. With a list,
+`default` is sent to as well whenever one of those settings names an endpoint —
+so an existing setup keeps receiving alongside the new ones.
+The list merges as one leaf: a higher configuration layer that sets it replaces it
+whole.
+
+**A failing destination never blocks the others or the agent.** A destination
+that refuses the connection, times out, or answers a retryable status (408, 429,
+500, 502, 503, 504) has the batch written to its spool; one that answers any other
+error status has refused *this batch*, so it is reported and not spooled. A 500 is
+treated as transient, like the OTLP-specified retryable set, because a backend
+restarting or overloaded commonly answers with it; the spool's bounds below are
+what keep a backend that answers 500 forever from holding batches forever. Either
+way the hook exits 0 with a diagnostic on stderr, and the other destinations are
+unaffected. A callback that reached at least one destination (or a spool) is
+committed — retrying it would duplicate spans at the destinations that accepted.
+
+**Spools are per destination and bounded.** Every destination queues under
+`<state-dir>/<provider>/<installation>/destinations/<name>/` (`default` keeps the
+original `spool` and `spool-logs` directories), and each spool is drained at the
+end of the next hook event. Bounds apply per destination and per signal, and can
+be set under `exporter.spool`:
+
+| Bound | Default |
+| --- | --- |
+| `maxBytes` | 16 MiB |
+| `maxAgeMillis` | 72 hours |
+| `maxBatches` | 500 |
+
+When a bound is reached the **oldest** batches are dropped first; a batch older
+than `maxAgeMillis` is dropped rather than sent; a spooled batch a destination
+later refuses with a non-retryable status is dropped instead of blocking the
+queue behind it. Every drop is counted on disk, by reason, and `otel-hook doctor`
+reports each destination's queued batches, bytes, and drops.
 
 ### Resource attributes
 

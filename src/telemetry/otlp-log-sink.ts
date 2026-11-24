@@ -12,6 +12,8 @@ import { createErrorInfo, type OtelHookErrorInfo } from "../errors/index.js";
 import type { CanonicalEvent } from "../model/events.js";
 import type { Clock, Logger, TelemetryEmitResult, TelemetrySink } from "../runtime/ports.js";
 import type { DurableLogSpool, LogSpoolBatch, SerializedLogRecord } from "./durable-log-spool.js";
+import { isPermanentExportFailure } from "./export-failure.js";
+import type { SpoolSendOutcome } from "./spool-queue.js";
 import { replayResource, resourceFromExporterPolicy } from "./exporter-resource.js";
 import {
   canonicalEventsToLogRecords,
@@ -187,6 +189,8 @@ export type OtlpLogSinkOptions = {
    * would record a start edge twice.
    */
   readonly correlate?: SpanCorrelationResolver;
+  /** Export destination this sink delivers to; see `OtlpTraceSinkOptions.destination`. */
+  readonly destination?: string;
 };
 
 export interface OtlpLogTelemetrySink extends TelemetrySink {
@@ -214,8 +218,11 @@ export interface OtlpLogTelemetrySink extends TelemetrySink {
  * Health still records the batch as accepted: nothing failed, and a disabled signal
  * must not read as unhealthy.
  */
-const createDisabledSink = (): OtlpLogTelemetrySink => {
-  const health = createHealthTracker("telemetry-log-sink");
+const createDisabledSink = (destination?: string): OtlpLogTelemetrySink => {
+  const health = createHealthTracker(
+    "telemetry-log-sink",
+    destination === undefined ? {} : { destination },
+  );
   return {
     emit: (events): Promise<TelemetryEmitResult> => {
       health.recordSuccess(events.length);
@@ -289,6 +296,8 @@ const DISABLED_DETAIL: Readonly<Record<Extract<LogsDeliverability, { status: "di
  * installation quietly accumulating files.
  */
 export const createOtlpLogSink = (options: OtlpLogSinkOptions): OtlpLogTelemetrySink => {
+  const destinationFields =
+    options.destination === undefined ? {} : { "export.destination": options.destination };
   const deliverability = describeLogsDeliverability(options.exporter);
   if (deliverability.status === "disabled") {
     if (deliverability.reason !== "logs-disabled") {
@@ -297,15 +306,19 @@ export const createOtlpLogSink = (options: OtlpLogSinkOptions): OtlpLogTelemetry
       // logs and will not get them.
       options.logger?.warn(DISABLED_DETAIL[deliverability.reason], {
         "exporter.protocol": options.exporter.protocol,
+        ...destinationFields,
       });
     }
-    return createDisabledSink();
+    return createDisabledSink(options.destination);
   }
 
   const scope = options.instrumentationScope ?? DEFAULT_INSTRUMENTATION_SCOPE;
   const resource = resourceFromExporterPolicy(options.exporter);
   const content = options.content ?? NO_LOG_CONTENT;
-  const health = createHealthTracker("telemetry-log-sink");
+  const health = createHealthTracker(
+    "telemetry-log-sink",
+    options.destination === undefined ? {} : { destination: options.destination },
+  );
   const exporter = new OTLPLogExporter({
     url: deliverability.endpoint,
     headers: { ...options.headers },
@@ -330,13 +343,16 @@ export const createOtlpLogSink = (options: OtlpLogSinkOptions): OtlpLogTelemetry
     enqueuedAt: options.clock.now(),
   });
 
-  const sendSerializedBatch = async (batch: LogSpoolBatch): Promise<boolean> => {
+  const sendSerializedBatch = async (batch: LogSpoolBatch): Promise<SpoolSendOutcome> => {
     const batchResource = replayResource(batch.resourceAttributes, options.exporter);
     const records = batch.records.map((record) =>
       deserializeRecord(record, batchResource, batch.instrumentationScope),
     );
     const result = await exportRecords(records);
-    return result.code === ExportResultCode.SUCCESS;
+    if (result.code === ExportResultCode.SUCCESS) {
+      return true;
+    }
+    return isPermanentExportFailure(result) ? "discard" : false;
   };
 
   /**
@@ -404,13 +420,18 @@ export const createOtlpLogSink = (options: OtlpLogSinkOptions): OtlpLogTelemetry
       }
 
       health.recordFailure("telemetry-export-failure", batch.length, options.clock.now());
-      if (options.spool !== undefined) {
+      const permanent = isPermanentExportFailure(result);
+      if (options.spool !== undefined && !permanent) {
         const spoolResult = await options.spool.enqueue(toSpoolBatch(batch)).catch(() => ({
           spooled: false as const,
           reason: "capacity-exceeded" as const,
         }));
         if (spoolResult.spooled) {
           accepted += batch.length;
+          options.logger?.warn("log record batch not delivered; spooled for the next invocation", {
+            "export.batch_size": batch.length,
+            ...destinationFields,
+          });
           continue;
         }
       }
@@ -419,8 +440,14 @@ export const createOtlpLogSink = (options: OtlpLogSinkOptions): OtlpLogTelemetry
         createErrorInfo({
           code: "telemetry-export-failure",
           phase: "export",
-          detail: "collector rejected or was unreachable for a log record batch",
-          details: { "export.batch_size": batch.length, "export.signal": "logs" },
+          detail: permanent
+            ? "collector refused a log record batch with a non-retryable status"
+            : "collector rejected or was unreachable for a log record batch",
+          details: {
+            "export.batch_size": batch.length,
+            "export.signal": "logs",
+            ...destinationFields,
+          },
         }),
       );
     }

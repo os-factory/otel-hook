@@ -32,7 +32,12 @@ export {
 } from "../telemetry/durable-spool.js";
 export {
   type SpoolDrainResult,
+  type SpoolDropCounts,
+  type SpoolDropReason,
   type SpoolEnqueueResult,
+  type SpoolOverflowPolicy,
+  type SpoolSendOutcome,
+  type SpoolStats,
 } from "../telemetry/spool-queue.js";
 export {
   createOtlpTraceSink,
@@ -86,3 +91,18 @@ export {
   type SignalFanoutOptions,
   type SignalFanoutSink,
 } from "../telemetry/signal-fanout.js";
+/**
+ * Multiple export destinations: one sink pair per destination, fanned out in
+ * parallel, each with its own bounded spool. `createHookRuntime` wires these from
+ * `exporter.destinations`; they are published for a host wiring its own runtime.
+ */
+export {
+  createDestinationFanout,
+  createExportDestinationSinks,
+  exporterPolicyForDestination,
+  spoolQueueNamesFor,
+  type ExportDestinationSinks,
+  type ExportDestinationsOptions,
+  type SkippedExportDestination,
+} from "../telemetry/export-destinations.js";
+export { isPermanentExportFailure } from "../telemetry/export-failure.js";

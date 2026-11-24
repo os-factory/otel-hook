@@ -88,6 +88,19 @@ describe("public surface", () => {
       "startOnlySpanAttributes",
       "MAX_RECOVERED_START_ATTRIBUTES",
       "SPAN_RECORD_VERSION",
+      // Multiple export destinations (#54): the config contract, `env:` header
+      // references, spool bounds, and the per-destination fanout. All additive.
+      "exportDestinationSchema",
+      "exportDestinationsSchema",
+      "spoolPolicySchema",
+      "DEFAULT_SPOOL_POLICY",
+      "DEFAULT_DESTINATION_NAME",
+      "resolveExportDestinations",
+      "resolveDestinationHeaders",
+      "describeExportDestinations",
+      "createExportDestinationSinks",
+      "createDestinationFanout",
+      "isPermanentExportFailure",
       "createHealthTracker",
       "summarizeHealth",
       "createHookRuntime",
@@ -250,6 +263,7 @@ describe("public surface", () => {
     expect(Object.isFrozen(library.SILENT_HOOK_RESPONSE)).toBe(true);
     expect(Object.isFrozen(library.RESERVED_RESOURCE_ATTRIBUTE_KEYS)).toBe(true);
     expect(Object.isFrozen(library.EMPTY_RESOURCE_ATTRIBUTES)).toBe(true);
+    expect(Object.isFrozen(library.DEFAULT_SPOOL_POLICY)).toBe(true);
   });
 
   it("describes every error code with a severity and a failure posture", () => {
