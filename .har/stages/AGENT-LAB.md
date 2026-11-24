@@ -78,3 +78,21 @@ API key at a temp directory. For Claude it never uses `--bare` (that flag skips
 hooks). Codex uses an isolated `CODEX_HOME`, `--dangerously-bypass-hook-trust`,
 and a custom `wire_api = "responses"` provider. Do not copy personal
 transcripts or credentials into this plugin.
+
+## E2E proof capture and evidence (issue #56)
+
+The lab's collector is the e2e proof receiver
+(`scripts/e2e-proof/otlp-receiver.mjs`): every OTLP request is written to
+`<labRoot>/otlp-capture/` (raw body plus decoded JSON, empty bodies recorded).
+The hook command carries a synthetic launcher profile (`--resource-attr
+session.id=agent-lab-<provider>-session`, `factory.work_unit.id=agent-lab`,
+`vcs.*`), and the report's `evidence` field (plus `<labRoot>/evidence.md`) is
+the output of `scripts/e2e-proof/check-evidence.mjs` for the same run. It is
+informational and does not change the lab's pass/fail. See
+`docs/e2e-proof.md` for what each check means and for what was observed when
+it was added (Claude Code passes every mechanical row; Codex exports no
+`session` span because it has no session-end hook).
+
+The profile is on the hook command rather than in the agent's environment
+because Claude Code 2.1.x was observed not to pass `OTEL_*` variables through
+to hook processes.

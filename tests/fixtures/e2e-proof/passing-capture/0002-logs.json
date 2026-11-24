@@ -1,0 +1,18 @@
+{
+  "format": "otel-hook.otlp-capture/v1",
+  "seq": 2,
+  "receivedAt": "2026-11-24T10:00:02.000Z",
+  "method": "POST",
+  "path": "/v1/logs",
+  "signal": "logs",
+  "contentType": "application/json",
+  "contentEncoding": "",
+  "encoding": "json",
+  "bytes": 1973,
+  "empty": false,
+  "responseStatus": 200,
+  "injectedFailure": false,
+  "headers": {
+    "content-type": "application/json"
+  }
+}
