@@ -80,6 +80,7 @@ export type CapturedRequest = {
 };
 
 export type Collector = {
+  readonly port: number;
   /** Conventional traces endpoint. */
   readonly url: string;
   /** Conventional logs endpoint, for pointing the logs signal somewhere explicitly. */
@@ -104,6 +105,8 @@ export type Collector = {
  */
 export const startCollector = async (
   respond: (request: CapturedRequest) => { readonly status: number } = () => ({ status: 200 }),
+  /** A fixed port, to bring a collector "back" where a previous one stopped. Default: any. */
+  options: { readonly port?: number } = {},
 ): Promise<Collector> => {
   const requests: CapturedRequest[] = [];
   const server: Server = createServer((req, res) => {
@@ -117,13 +120,14 @@ export const startCollector = async (
       res.end();
     });
   });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  await new Promise<void>((resolve) => server.listen(options.port ?? 0, "127.0.0.1", resolve));
   const address = server.address();
   if (address === null || typeof address === "string") {
     throw new Error("failed to bind the capturing collector");
   }
   const baseUrl = `http://127.0.0.1:${String(address.port)}`;
   return {
+    port: address.port,
     url: `${baseUrl}/v1/traces`,
     logsUrl: `${baseUrl}/v1/logs`,
     requests,

@@ -251,6 +251,9 @@ export const runHookCommand = async (command: CliRunCommand, io: CliIo): Promise
     providerNamespace: selection.namespace,
     ...(Object.keys(headers.traces).length === 0 ? {} : { headers: headers.traces }),
     ...(Object.keys(headers.logs).length === 0 ? {} : { logHeaders: headers.logs }),
+    // Only `env:` header references in `exporter.destinations` are resolved
+    // against it; nothing else in the runtime reads the environment.
+    headerEnvironment: io.env,
     clock,
     ids,
     logger,

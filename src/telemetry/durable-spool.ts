@@ -8,6 +8,9 @@ import {
   createSpoolQueue,
   type SpoolDrainResult,
   type SpoolEnqueueResult,
+  type SpoolOverflowPolicy,
+  type SpoolSendOutcome,
+  type SpoolStats,
 } from "./spool-queue.js";
 
 export type SerializedSpan = {
@@ -184,6 +187,17 @@ export type DurableSpoolOptions = StoreNamespace & {
   readonly logger?: Logger;
   /** Refuses new entries once this many are queued, rather than growing without bound. Default 500. */
   readonly maxSpoolFiles?: number;
+  /**
+   * Queue directory below the identity namespace. Default `spool`; each
+   * export destination other than `default` gets its own.
+   */
+  readonly queueName?: string;
+  /** Bound on total queued bytes. Unbounded when absent. */
+  readonly maxBytes?: number;
+  /** Batches older than this are dropped rather than sent. No age bound when absent. */
+  readonly maxAgeMillis?: number;
+  /** Default `refuse-new`, the original behavior. */
+  readonly overflow?: SpoolOverflowPolicy;
 };
 
 /**
@@ -202,10 +216,15 @@ export interface DurableSpool {
   enqueue(batch: SpoolBatch): Promise<SpoolEnqueueResult>;
   /** Sequential, bounded drain: stops after the first failed send, or after `maxBatches`. */
   drain(
-    send: (batch: SpoolBatch) => Promise<boolean>,
+    send: (batch: SpoolBatch) => Promise<SpoolSendOutcome>,
     options?: { readonly maxBatches?: number },
   ): Promise<SpoolDrainResult>;
   size(): Promise<number>;
+  /**
+   * Depth, bytes, and persisted drop counts. Optional so a host's own
+   * implementation of this interface keeps compiling; the file-backed one has it.
+   */
+  stats?(): Promise<SpoolStats>;
 }
 
 /** Default bound on queued trace batches, so the spool cannot grow without limit. */
@@ -219,6 +238,9 @@ export const createFileDurableSpool = (options: DurableSpoolOptions): DurableSpo
     clock: options.clock,
     ...(options.logger === undefined ? {} : { logger: options.logger }),
     maxFiles: options.maxSpoolFiles ?? DEFAULT_MAX_SPOOL_FILES,
-    queueName: "spool",
+    queueName: options.queueName ?? "spool",
+    ...(options.maxBytes === undefined ? {} : { maxBytes: options.maxBytes }),
+    ...(options.maxAgeMillis === undefined ? {} : { maxAgeMillis: options.maxAgeMillis }),
+    ...(options.overflow === undefined ? {} : { overflow: options.overflow }),
     validate: validateSpoolBatch,
   });

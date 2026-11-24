@@ -1,0 +1,333 @@
+import {
+  DEFAULT_DESTINATION_NAME,
+  effectiveSpoolPolicy,
+  hasConfiguredDestinations,
+  resolveDestinationHeaders,
+  resolveExportDestinations,
+  type ExportDestination,
+} from "../config/destinations.js";
+import type { ExporterPolicy } from "../config/schema.js";
+import type { DeliveryHealthSnapshot } from "../diagnostics/health.js";
+import { createHealthTracker } from "../diagnostics/health.js";
+import { errorInfoFromThrown, type OtelHookErrorInfo } from "../errors/index.js";
+import type { CanonicalEvent } from "../model/events.js";
+import type { Clock, Logger, TelemetryEmitResult } from "../runtime/ports.js";
+import { createFileDurableLogSpool, type DurableLogSpool } from "./durable-log-spool.js";
+import { createFileDurableSpool, type DurableSpool } from "./durable-spool.js";
+import type { LogContentPolicy } from "./log-records.js";
+import {
+  createOtlpLogSink,
+  resolveLogsEndpoint,
+  type OtlpLogTelemetrySink,
+} from "./otlp-log-sink.js";
+import { createOtlpTraceSink, type OtlpTelemetrySink } from "./otlp-sink.js";
+import type { SpanCorrelationResolver } from "./semconv.js";
+import { createSignalFanout, type SignalFanoutSink } from "./signal-fanout.js";
+
+/**
+ * Spool queue directories for one destination, below the identity namespace.
+ *
+ * `default` keeps the directories it has always had, so batches an earlier
+ * version queued are still drained after an upgrade. Every other destination
+ * queues under `destinations/<name>/`, so one destination's outage can never
+ * consume another's budget or be drained by another's sender.
+ */
+export const spoolQueueNamesFor = (
+  destination: string,
+): { readonly traces: string; readonly logs: string } =>
+  destination === DEFAULT_DESTINATION_NAME
+    ? { traces: "spool", logs: "spool-logs" }
+    : { traces: `destinations/${destination}/spool`, logs: `destinations/${destination}/spool-logs` };
+
+/**
+ * The exporter policy one destination's sinks are built from.
+ *
+ * Everything but where and how to send — timeout, batch sizes, service identity,
+ * resource attributes, log content policy — is shared, so every destination
+ * receives the same spans. The `default` destination gets the policy unchanged.
+ */
+export const exporterPolicyForDestination = (
+  exporter: ExporterPolicy,
+  destination: ExportDestination,
+): ExporterPolicy => {
+  if (destination.source === "exporter") {
+    return exporter;
+  }
+  const { destinations, endpoint, logs, ...shared } = exporter;
+  void destinations;
+  void endpoint;
+  const tracesEndpoint = destination.tracesEndpoint ?? destination.endpoint;
+  // An explicit logs URL wins; otherwise derive from `endpoint` (not from a
+  // traces-only override), and failing that let the sink derive from the traces URL.
+  const derivedLogs =
+    destination.logsEndpoint ??
+    (destination.endpoint === undefined
+      ? undefined
+      : (() => {
+          const derived = resolveLogsEndpoint({
+            ...exporter,
+            endpoint: destination.endpoint,
+            logs: { enabled: true, includeContent: false, maxBatchSize: logs.maxBatchSize },
+          });
+          return "endpoint" in derived ? derived.endpoint : undefined;
+        })());
+  return {
+    ...shared,
+    protocol: destination.protocol,
+    ...(tracesEndpoint === undefined ? {} : { endpoint: tracesEndpoint }),
+    headerNames: Object.keys(destination.headers).sort(),
+    logs: {
+      ...logs,
+      enabled: destination.signals.logs,
+      ...(derivedLogs === undefined ? {} : { endpoint: derivedLogs }),
+    },
+  };
+};
+
+/** The pair of sinks, and their spools, serving one destination. */
+export type ExportDestinationSinks = {
+  readonly name: string;
+  readonly traces: OtlpTelemetrySink;
+  readonly logs: OtlpLogTelemetrySink;
+  readonly spool?: DurableSpool;
+  readonly logSpool?: DurableLogSpool;
+};
+
+/** A destination left out of this invocation, and why — by name only. */
+export type SkippedExportDestination = {
+  readonly name: string;
+  readonly reason: "header-variable-missing";
+  /** Environment variable *names*; never a value. */
+  readonly missingVariables: readonly string[];
+};
+
+export type ExportDestinationsOptions = {
+  readonly exporter: ExporterPolicy;
+  /**
+   * Header values for the `default` destination's traces: `--header` over
+   * `OTEL_EXPORTER_OTLP_TRACES_HEADERS` over `OTEL_EXPORTER_OTLP_HEADERS`, as
+   * resolved by `resolveOtlpHeaders`.
+   */
+  readonly defaultHeaders?: Readonly<Record<string, string>>;
+  /**
+   * Header values for the `default` destination's logs, when they differ from
+   * its traces' (`OTEL_EXPORTER_OTLP_LOGS_HEADERS`). Defaults to {@link defaultHeaders}.
+   */
+  readonly defaultLogHeaders?: Readonly<Record<string, string>>;
+  /**
+   * The environment `env:` header references resolve against. Never read
+   * implicitly; without it, a destination whose headers reference a variable is
+   * skipped and reported.
+   */
+  readonly headerEnvironment?: Readonly<Record<string, string | undefined>>;
+  readonly providerId: string;
+  readonly installationId: string;
+  readonly clock: Clock;
+  readonly logger?: Logger;
+  /** Root of the spool trees. Absent, nothing is spooled. */
+  readonly spoolRootDir?: string;
+  /** Whether the logs signal gets a spool at all; it is only built when logs are on. */
+  readonly logContent: LogContentPolicy;
+  readonly correlate?: SpanCorrelationResolver;
+};
+
+/**
+ * A trace sink for a destination that does not take the traces signal.
+ *
+ * Contributes zero accepted and zero rejected — unlike a *disabled exporter*,
+ * which accepts everything — because the counts decide commit-or-retry and a
+ * signal that never tried must not make a real loss elsewhere look delivered.
+ */
+const createOptedOutTraceSink = (destination: string | undefined): OtlpTelemetrySink => {
+  const health = createHealthTracker(
+    "telemetry-sink",
+    destination === undefined ? {} : { destination },
+  );
+  return {
+    emit: (): Promise<TelemetryEmitResult> =>
+      Promise.resolve({ accepted: 0, rejected: 0, errors: [] }),
+    flush: (): Promise<void> => Promise.resolve(),
+    shutdown: (): Promise<void> => Promise.resolve(),
+    health: (): DeliveryHealthSnapshot => health.snapshot(),
+    drainSpool: (): Promise<{
+      readonly drained: number;
+      readonly remaining: number;
+      readonly failed: number;
+    }> => Promise.resolve({ drained: 0, remaining: 0, failed: 0 }),
+  };
+};
+
+/**
+ * Build one sink pair per enabled destination.
+ *
+ * With no `exporter.destinations`, this is exactly the single `default`
+ * destination the runtime has always built: the same policy, the same header
+ * values, the same spool directories.
+ */
+export const createExportDestinationSinks = (
+  options: ExportDestinationsOptions,
+): {
+  readonly destinations: readonly ExportDestinationSinks[];
+  readonly skipped: readonly SkippedExportDestination[];
+} => {
+  const labelled = hasConfiguredDestinations(options.exporter);
+  const spoolPolicy = effectiveSpoolPolicy(options.exporter);
+  const destinations: ExportDestinationSinks[] = [];
+  const skipped: SkippedExportDestination[] = [];
+
+  for (const destination of resolveExportDestinations(options.exporter)) {
+    let headers: Readonly<Record<string, string>> | undefined;
+    let logHeaders: Readonly<Record<string, string>> | undefined;
+    if (destination.source === "exporter") {
+      headers = options.defaultHeaders;
+      logHeaders = options.defaultLogHeaders ?? options.defaultHeaders;
+    } else {
+      const resolved = resolveDestinationHeaders(destination.headers, options.headerEnvironment);
+      if (resolved.missingVariables.length > 0) {
+        // Sending without the header would be refused at best, and at worst
+        // accepted into somebody else's unauthenticated tenant. So the destination
+        // sits this invocation out, and says which variable it is waiting for.
+        options.logger?.warn("export destination skipped: a header references an unset environment variable", {
+          "export.destination": destination.name,
+          "config.variables": [...resolved.missingVariables],
+        });
+        skipped.push({
+          name: destination.name,
+          reason: "header-variable-missing",
+          missingVariables: resolved.missingVariables,
+        });
+        continue;
+      }
+      headers = resolved.values;
+      logHeaders = resolved.values;
+    }
+
+    const label = labelled ? destination.name : undefined;
+    const policy = exporterPolicyForDestination(options.exporter, destination);
+    const queues = spoolQueueNamesFor(destination.name);
+    const bounds = {
+      maxSpoolFiles: spoolPolicy.maxBatches,
+      maxBytes: spoolPolicy.maxBytes,
+      maxAgeMillis: spoolPolicy.maxAgeMillis,
+      overflow: "drop-oldest" as const,
+    };
+    const shared = {
+      providerId: options.providerId,
+      installationId: options.installationId,
+      clock: options.clock,
+      ...(options.logger === undefined ? {} : { logger: options.logger }),
+    };
+    const spool =
+      options.spoolRootDir === undefined || !destination.signals.traces
+        ? undefined
+        : createFileDurableSpool({
+            rootDir: options.spoolRootDir,
+            ...shared,
+            ...bounds,
+            queueName: queues.traces,
+          });
+    // Only built when logs are on: a default installation must not create a
+    // directory for a signal it never emits.
+    const logSpool =
+      options.spoolRootDir === undefined || !destination.signals.logs
+        ? undefined
+        : createFileDurableLogSpool({
+            rootDir: options.spoolRootDir,
+            ...shared,
+            ...bounds,
+            queueName: queues.logs,
+          });
+
+    const sinkShared = {
+      exporter: policy,
+      ...shared,
+      ...(options.correlate === undefined ? {} : { correlate: options.correlate }),
+      ...(label === undefined ? {} : { destination: label }),
+    };
+    const traces = destination.signals.traces
+      ? createOtlpTraceSink({
+          ...sinkShared,
+          ...(headers === undefined || Object.keys(headers).length === 0 ? {} : { headers }),
+          ...(spool === undefined ? {} : { spool }),
+        })
+      : createOptedOutTraceSink(label);
+    const logs = createOtlpLogSink({
+      ...sinkShared,
+      ...(logHeaders === undefined || Object.keys(logHeaders).length === 0
+        ? {}
+        : { headers: logHeaders }),
+      ...(logSpool === undefined ? {} : { spool: logSpool }),
+      content: options.logContent,
+    });
+    destinations.push({
+      name: destination.name,
+      traces,
+      logs,
+      ...(spool === undefined ? {} : { spool }),
+      ...(logSpool === undefined ? {} : { logSpool }),
+    });
+  }
+  return { destinations, skipped };
+};
+
+/**
+ * One canonical batch, every destination, in parallel.
+ *
+ * Each destination is its own {@link createSignalFanout} (traces then logs, which
+ * must stay sequential so they share one correlation resolution); destinations run
+ * concurrently, each bounded by the exporter's own timeout, so a slow or dead
+ * destination costs at most that timeout and never another destination's delivery.
+ * A destination that throws is contained to a rejection of its own share.
+ *
+ * Counts are summed across destinations, which gives the durability decision the
+ * right inputs: everything delivered or spooled → `delivered`; nothing → `lost`
+ * and safe to retry; some → `partial`, terminal, because retrying would re-export
+ * to the destinations that already accepted.
+ *
+ * With one destination this returns that destination's fanout unchanged.
+ */
+export const createDestinationFanout = (
+  destinations: readonly ExportDestinationSinks[],
+): SignalFanoutSink => {
+  const fanouts = destinations.map((destination) => ({
+    name: destination.name,
+    sink: createSignalFanout({ traces: destination.traces, logs: destination.logs }),
+  }));
+  const only = fanouts.length === 1 ? fanouts[0] : undefined;
+  if (only !== undefined) {
+    return only.sink;
+  }
+
+  const emit = async (events: readonly CanonicalEvent[]): Promise<TelemetryEmitResult> => {
+    const results = await Promise.all(
+      fanouts.map((fanout) =>
+        fanout.sink.emit(events).catch(
+          (thrown: unknown): TelemetryEmitResult => ({
+            accepted: 0,
+            rejected: events.length,
+            errors: [errorInfoFromThrown(thrown, { code: "telemetry-export-failure", phase: "export" })],
+          }),
+        ),
+      ),
+    );
+    const errors: OtelHookErrorInfo[] = results.flatMap((result) => result.errors);
+    return {
+      accepted: results.reduce((sum, result) => sum + result.accepted, 0),
+      rejected: results.reduce((sum, result) => sum + result.rejected, 0),
+      errors,
+    };
+  };
+
+  const settleAll = async (run: (sink: SignalFanoutSink) => Promise<void>): Promise<void> => {
+    await Promise.all(fanouts.map((fanout) => run(fanout.sink).catch(() => undefined)));
+  };
+
+  return {
+    emit,
+    // Each destination drains its own spool in its flush; in parallel, so one
+    // unreachable destination's drain cannot use up the others' flush window.
+    flush: () => settleAll((sink) => sink.flush()),
+    shutdown: () => settleAll((sink) => sink.shutdown()),
+    health: (): readonly DeliveryHealthSnapshot[] => fanouts.flatMap((fanout) => fanout.sink.health()),
+  };
+};

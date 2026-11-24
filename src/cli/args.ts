@@ -790,7 +790,9 @@ Delivery deduplication (at most once per callback, across process restarts):
                              deduplicate only against --callback-id
 
 Exporter and runtime policy (never identity):
-  --config-file <path>       JSON configuration patch
+  --config-file <path>       JSON configuration patch; "exporter.destinations"
+                             sends to several OTLP endpoints in parallel, each
+                             with its own spool (header values may be "env:NAME")
   --endpoint <url>           OTLP HTTP/protobuf traces endpoint
   --protocol <p>             http/protobuf | http/json | none
   --service-name <name>      --service-namespace <ns>
@@ -831,7 +833,9 @@ Registration lifecycle (setup / diagnose / uninstall):
                              documented path; required for a provider whose
                              planner is verified but whose path is not
   --hook-command <cmd>       command to register
-                             (default "otel-hook run --provider <id>")
+                             (default "otel-hook run --provider <id>"); add
+                             --config-file <path> to it to use a config file,
+                             e.g. one with several export destinations
   --event <name>             register only these events; repeatable
   --matcher <m>              matcher for a newly created hook group
   --timeout-seconds <n>      per-hook timeout written into the config

@@ -2,6 +2,11 @@ import { z } from "zod";
 
 import { createErrorInfo, type OtelHookErrorInfo } from "../errors/index.js";
 import type { Attributes } from "../model/primitives.js";
+import {
+  describeExportDestinations,
+  effectiveSpoolPolicy,
+  hasConfiguredDestinations,
+} from "./destinations.js";
 import { describeResourceAttributeNames } from "./resource-attributes.js";
 import {
   DEFAULT_CONFIG,
@@ -69,8 +74,11 @@ const mergeLeaf = (
     }
     const childPath = path === "" ? key : `${path}.${key}`;
     const existing = target[key];
-    if (isPlainObject(value) && isPlainObject(existing)) {
-      const child: PlainRecord = { ...existing };
+    // An object with no counterpart yet (an optional section such as
+    // `exporter.spool`) is merged into an empty one, so its leaves get provenance
+    // of their own and a later layer can set one of them without restating the rest.
+    if (isPlainObject(value) && (isPlainObject(existing) || existing === undefined)) {
+      const child: PlainRecord = { ...(existing ?? {}) };
       mergeLeaf(child, value, source, provenance, childPath);
       target[key] = child;
       continue;
@@ -162,10 +170,35 @@ export const resolveConfig = (layers: readonly ConfigLayer[] = []): ConfigResolu
   if (parsed.data.privacy.contentMode === "raw" && !parsed.data.privacy.allowRawContent) {
     notes.push("privacy.contentMode=raw will be downgraded to omit: allowRawContent is false");
   }
-  if (parsed.data.exporter.enabled && parsed.data.exporter.protocol !== "none" && parsed.data.exporter.endpoint === undefined) {
+  const withDestinations = hasConfiguredDestinations(parsed.data.exporter);
+  if (
+    parsed.data.exporter.enabled &&
+    parsed.data.exporter.protocol !== "none" &&
+    parsed.data.exporter.endpoint === undefined &&
+    !withDestinations
+  ) {
     notes.push("exporter.enabled is true but no endpoint is configured");
   }
+  if (withDestinations) {
+    const enabled = (parsed.data.exporter.destinations ?? []).filter(
+      (destination) => destination.enabled !== false,
+    );
+    if (enabled.length === 0 && parsed.data.exporter.endpoint === undefined) {
+      notes.push("exporter.destinations is set but every destination is disabled");
+    }
+    if (!parsed.data.exporter.logs.enabled) {
+      const askingForLogs = enabled
+        .filter((destination) => destination.signals?.includes("logs") === true)
+        .map((destination) => destination.name);
+      if (askingForLogs.length > 0) {
+        notes.push(
+          `destination(s) ${askingForLogs.join(", ")} list the logs signal but exporter.logs.enabled is false, so only traces are sent`,
+        );
+      }
+    }
+  }
   if (
+    !withDestinations &&
     parsed.data.exporter.logs.enabled &&
     parsed.data.exporter.logs.endpoint === undefined &&
     parsed.data.exporter.endpoint === undefined
@@ -184,6 +217,41 @@ export const resolveConfig = (layers: readonly ConfigLayer[] = []): ConfigResolu
   }
 
   return { status: "ok", config: parsed.data, provenance, notes };
+};
+
+/**
+ * Destination attributes for the snapshot, present only when the list is in use,
+ * so a configuration without destinations snapshots exactly as it always has.
+ * Names, origins, and variable names only — never a header value.
+ */
+const describeDestinationAttributes = (config: OtelHookConfig): Attributes => {
+  const attributes: Record<string, string | boolean | number | string[]> = {};
+  if (config.exporter.spool !== undefined || hasConfiguredDestinations(config.exporter)) {
+    const spool = effectiveSpoolPolicy(config.exporter);
+    attributes["exporter.spool_max_bytes"] = spool.maxBytes;
+    attributes["exporter.spool_max_age_millis"] = spool.maxAgeMillis;
+    attributes["exporter.spool_max_batches"] = spool.maxBatches;
+  }
+  if (!hasConfiguredDestinations(config.exporter)) {
+    return attributes;
+  }
+  const destinations = describeExportDestinations(config.exporter);
+  attributes["exporter.destination_names"] = destinations.map((destination) => destination.name);
+  for (const destination of destinations) {
+    const prefix = `exporter.destination.${destination.name}`;
+    attributes[`${prefix}.enabled`] = destination.enabled;
+    attributes[`${prefix}.protocol`] = destination.protocol;
+    attributes[`${prefix}.signals`] = [...destination.signals];
+    if (destination.tracesEndpointOrigin !== undefined) {
+      attributes[`${prefix}.traces_endpoint_origin`] = destination.tracesEndpointOrigin;
+    }
+    if (destination.logsEndpointOrigin !== undefined) {
+      attributes[`${prefix}.logs_endpoint_origin`] = destination.logsEndpointOrigin;
+    }
+    attributes[`${prefix}.header_names`] = [...destination.headerNames];
+    attributes[`${prefix}.header_variables`] = [...destination.headerVariables];
+  }
+  return attributes;
 };
 
 /**
@@ -222,6 +290,7 @@ export const describeResolvedConfig = (config: OtelHookConfig): Attributes => {
     "exporter.resource_attribute_names": [
       ...describeResourceAttributeNames(config.exporter.resourceAttributes),
     ],
+    ...describeDestinationAttributes(config),
     "exporter.timeout_millis": config.exporter.timeoutMillis,
     "exporter.max_batch_size": config.exporter.maxBatchSize,
     "exporter.service_name": config.exporter.serviceName,

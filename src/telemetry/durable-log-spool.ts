@@ -7,6 +7,9 @@ import {
   type SpoolDrainResult,
   type SpoolEnqueueResult,
   type SpoolValidation,
+  type SpoolOverflowPolicy,
+  type SpoolSendOutcome,
+  type SpoolStats,
 } from "./spool-queue.js";
 
 /**
@@ -208,6 +211,17 @@ export type DurableLogSpoolOptions = StoreNamespace & {
   readonly logger?: Logger;
   /** Refuses new entries once this many are queued. Default 500. */
   readonly maxSpoolFiles?: number;
+  /**
+   * Queue directory below the identity namespace. Default `spool-logs`; each
+   * export destination other than `default` gets its own.
+   */
+  readonly queueName?: string;
+  /** Bound on total queued bytes. Unbounded when absent. */
+  readonly maxBytes?: number;
+  /** Batches older than this are dropped rather than sent. No age bound when absent. */
+  readonly maxAgeMillis?: number;
+  /** Default `refuse-new`, the original behavior. */
+  readonly overflow?: SpoolOverflowPolicy;
 };
 
 /**
@@ -224,10 +238,15 @@ export interface DurableLogSpool {
   enqueue(batch: LogSpoolBatch): Promise<SpoolEnqueueResult>;
   /** Sequential, bounded drain: stops after the first failed send, or after `maxBatches`. */
   drain(
-    send: (batch: LogSpoolBatch) => Promise<boolean>,
+    send: (batch: LogSpoolBatch) => Promise<SpoolSendOutcome>,
     options?: { readonly maxBatches?: number },
   ): Promise<SpoolDrainResult>;
   size(): Promise<number>;
+  /**
+   * Depth, bytes, and persisted drop counts. Optional so a host's own
+   * implementation of this interface keeps compiling; the file-backed one has it.
+   */
+  stats?(): Promise<SpoolStats>;
 }
 
 export const DEFAULT_MAX_LOG_SPOOL_FILES = 500;
@@ -240,6 +259,9 @@ export const createFileDurableLogSpool = (options: DurableLogSpoolOptions): Dura
     clock: options.clock,
     ...(options.logger === undefined ? {} : { logger: options.logger }),
     maxFiles: options.maxSpoolFiles ?? DEFAULT_MAX_LOG_SPOOL_FILES,
-    queueName: "spool-logs",
+    queueName: options.queueName ?? "spool-logs",
+    ...(options.maxBytes === undefined ? {} : { maxBytes: options.maxBytes }),
+    ...(options.maxAgeMillis === undefined ? {} : { maxAgeMillis: options.maxAgeMillis }),
+    ...(options.overflow === undefined ? {} : { overflow: options.overflow }),
     validate: validateLogSpoolBatch,
   });

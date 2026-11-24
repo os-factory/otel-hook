@@ -38,15 +38,17 @@ import { createFilesystemWorktreeLocator } from "../runtime/git-worktree.js";
 import type { Clock, IdGenerator, Logger, WorktreeLocator } from "../runtime/ports.js";
 import { createAsyncLock } from "../state/async-lock.js";
 import { createFilesystemStateStore, type FilesystemStateStore } from "../state/filesystem-store.js";
+import type { DurableLogSpool } from "../telemetry/durable-log-spool.js";
+import type { DurableSpool } from "../telemetry/durable-spool.js";
 import {
-  createFileDurableLogSpool,
-  type DurableLogSpool,
-} from "../telemetry/durable-log-spool.js";
-import { createFileDurableSpool, type DurableSpool } from "../telemetry/durable-spool.js";
+  createDestinationFanout,
+  createExportDestinationSinks,
+  type ExportDestinationSinks,
+  type SkippedExportDestination,
+} from "../telemetry/export-destinations.js";
 import { createOtlpLogSink, type OtlpLogTelemetrySink } from "../telemetry/otlp-log-sink.js";
 import { createOtlpTraceSink, type OtlpTelemetrySink } from "../telemetry/otlp-sink.js";
 import {
-  createSignalFanout,
   shareCorrelationPerBatch,
 } from "../telemetry/signal-fanout.js";
 
@@ -241,13 +243,21 @@ export interface HookRuntime {
   readonly hook: OtelHook;
   readonly config: OtelHookConfig;
   readonly stateStore: FilesystemStateStore;
-  /** The traces signal. Named `sink` because it is the one every installation has. */
+  /**
+   * The traces signal of the primary destination — `default`, or the first entry
+   * of `exporter.destinations` when there is no single-endpoint setting. Named
+   * `sink` because it is the one every installation has.
+   */
   readonly sink: OtlpTelemetrySink;
-  /** The logs signal. A no-op sink unless `exporter.logs.enabled` is set. */
+  /** The primary destination's logs signal. A no-op sink unless `exporter.logs.enabled` is set. */
   readonly logSink: OtlpLogTelemetrySink;
   readonly spool?: DurableSpool;
   /** Retry queue for the logs signal. Absent when spooling or logs are disabled. */
   readonly logSpool?: DurableLogSpool;
+  /** Every destination this runtime sends to, primary first. */
+  readonly destinations: readonly ExportDestinationSinks[];
+  /** Destinations left out of this invocation, by name, with the variables they lack. */
+  readonly skippedDestinations: readonly SkippedExportDestination[];
   readonly privacy: PrivacyService;
   readonly deduplicator: CallbackDeduplicator;
   readonly usageAccumulator: UsageAccumulator;
@@ -273,13 +283,22 @@ export type HookRuntimeOptions = {
   readonly installationId: string;
   /** State/spool namespace segment; the selected provider id, or a placeholder. */
   readonly providerNamespace: string;
-  /** Exporter header *values*, deliberately absent from the config snapshot. */
+  /**
+   * Header *values* for the `default` destination, deliberately absent from the
+   * config snapshot.
+   */
   readonly headers?: Readonly<Record<string, string>>;
   /**
    * Header values for the logs signal only, when they differ from the traces
    * signal's (`OTEL_EXPORTER_OTLP_LOGS_HEADERS`). Defaults to {@link headers}.
    */
   readonly logHeaders?: Readonly<Record<string, string>>;
+  /**
+   * Environment that `env:NAME` header references in `exporter.destinations`
+   * resolve against. Never read implicitly; without it, a destination whose
+   * headers reference a variable is skipped for the invocation and reported.
+   */
+  readonly headerEnvironment?: Readonly<Record<string, string | undefined>>;
   readonly clock?: Clock;
   readonly ids?: IdGenerator;
   readonly logger?: Logger;
@@ -485,31 +504,6 @@ export const createHookRuntime = (options: HookRuntimeOptions): HookRuntime => {
     lockTimeoutMillis: stateLockTimeoutMillis,
   });
 
-  const spool =
-    options.enableSpool === false
-      ? undefined
-      : createFileDurableSpool({
-          rootDir: options.stateRootDir,
-          providerId: options.providerNamespace,
-          installationId: options.installationId,
-          clock,
-          logger,
-        });
-
-  // A separate queue from the trace spool, so a logs outage cannot consume the
-  // capacity the primary signal's retries need. Only built when logs are on: a
-  // default installation must not create a directory for a signal it never emits.
-  const logSpool =
-    options.enableSpool === false || !options.config.exporter.logs.enabled
-      ? undefined
-      : createFileDurableLogSpool({
-          rootDir: options.stateRootDir,
-          providerId: options.providerNamespace,
-          installationId: options.installationId,
-          clock,
-          logger,
-        });
-
   const spanCorrelator = createSpanCorrelator({
     stateStore,
     clock,
@@ -517,36 +511,31 @@ export const createHookRuntime = (options: HookRuntimeOptions): HookRuntime => {
   });
 
   /**
-   * One correlation resolution per batch, shared by both signals.
+   * One correlation resolution per batch, shared by every sink of every
+   * destination.
    *
    * `correlateBatch` records the start edge and marks a scope published, so two
    * calls for one batch would have the second see the first's writes and report a
-   * start it just recorded as a duplicate — leaving the two signals pointing at
-   * different span ids for the same scope.
+   * start it just recorded as a duplicate — leaving the signals (and the
+   * destinations) pointing at different span ids for the same scope.
    */
   const correlate = shareCorrelationPerBatch((events) => spanCorrelator.correlateBatch(events));
 
-  const traceSink = createOtlpTraceSink({
+  // One sink pair per export destination. Without `exporter.destinations` this is
+  // the single `default` destination, built exactly as it always has been.
+  const exportDestinations = createExportDestinationSinks({
     exporter: options.config.exporter,
-    ...(options.headers === undefined ? {} : { headers: options.headers }),
+    ...(options.headers === undefined ? {} : { defaultHeaders: options.headers }),
+    ...(options.logHeaders === undefined ? {} : { defaultLogHeaders: options.logHeaders }),
+    ...(options.headerEnvironment === undefined
+      ? {}
+      : { headerEnvironment: options.headerEnvironment }),
     providerId: options.providerNamespace,
     installationId: options.installationId,
     clock,
     logger,
-    ...(spool === undefined ? {} : { spool }),
-    correlate,
-  });
-
-  const logHeaders = options.logHeaders ?? options.headers;
-  const logSink = createOtlpLogSink({
-    exporter: options.config.exporter,
-    ...(logHeaders === undefined ? {} : { headers: logHeaders }),
-    providerId: options.providerNamespace,
-    installationId: options.installationId,
-    clock,
-    logger,
-    ...(logSpool === undefined ? {} : { spool: logSpool }),
-    content: {
+    ...(options.enableSpool === false ? {} : { spoolRootDir: options.stateRootDir }),
+    logContent: {
       includeContent: options.config.exporter.logs.includeContent,
       // The pre-existing verbatim-content opt-in, passed through rather than
       // re-derived: `raw` disclosure in a log body is governed by the same flag it
@@ -556,7 +545,29 @@ export const createHookRuntime = (options: HookRuntimeOptions): HookRuntime => {
     correlate,
   });
 
-  const sink = createSignalFanout({ traces: traceSink, logs: logSink });
+  // The primary destination backs the single-destination accessors below: `default`
+  // when it is configured, otherwise the first entry of the list.
+  const primary = exportDestinations.destinations[0];
+  const traceSink =
+    primary?.traces ??
+    createOtlpTraceSink({
+      exporter: { ...options.config.exporter, enabled: false },
+      providerId: options.providerNamespace,
+      installationId: options.installationId,
+      clock,
+    });
+  const logSink =
+    primary?.logs ??
+    createOtlpLogSink({
+      exporter: { ...options.config.exporter, logs: { ...options.config.exporter.logs, enabled: false } },
+      providerId: options.providerNamespace,
+      installationId: options.installationId,
+      clock,
+    });
+  const spool = primary?.spool;
+  const logSpool = primary?.logSpool;
+
+  const sink = createDestinationFanout(exportDestinations.destinations);
 
   const hookDeps = {
     stateStore,
@@ -968,6 +979,8 @@ export const createHookRuntime = (options: HookRuntimeOptions): HookRuntime => {
     logSink,
     ...(spool === undefined ? {} : { spool }),
     ...(logSpool === undefined ? {} : { logSpool }),
+    destinations: exportDestinations.destinations,
+    skippedDestinations: exportDestinations.skipped,
     privacy,
     deduplicator,
     usageAccumulator,
