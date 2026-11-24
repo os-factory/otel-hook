@@ -1,3 +1,10 @@
+# [0.9.0](https://github.com/os-factory/otel-hook/compare/v0.8.0...v0.9.0) (2026-11-24)
+
+
+### Features
+
+* export to multiple OTLP destinations with a disk spool ([#59](https://github.com/os-factory/otel-hook/issues/59)) ([a8aac09](https://github.com/os-factory/otel-hook/commit/a8aac0903ffaf06b7b2fddb5664efbb788582450)), closes [#54](https://github.com/os-factory/otel-hook/issues/54)
+
 # [0.8.0](https://github.com/os-factory/otel-hook/compare/v0.7.0...v0.8.0) (2026-11-23)
 
 
