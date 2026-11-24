@@ -33,7 +33,9 @@
  *     [--fail-signal traces|logs|all]
  *
  * Prints one JSON line `{"event":"listening",...}` on stdout once bound, one
- * line per request on stderr, and writes summary.json on SIGINT/SIGTERM.
+ * line per request on stderr, and writes summary.json on SIGINT/SIGTERM, or
+ * when stdin closes if `--stop-on-stdin-close` is given (Windows has no
+ * catchable SIGTERM, so tests and launchers stop it that way).
  */
 
 import { createServer } from "node:http";
@@ -261,7 +263,8 @@ export const startOtlpReceiver = async (options = {}) => {
 // ---------------------------------------------------------------------------
 
 const USAGE = `usage: otlp-receiver.mjs --capture-dir <dir> [--host 127.0.0.1] [--port 0]
-                         [--fail-first N] [--fail-status 503] [--fail-signal traces|logs|all]`;
+                         [--fail-first N] [--fail-status 503] [--fail-signal traces|logs|all]
+                         [--stop-on-stdin-close]`;
 
 const parseArgs = (argv) => {
   const options = {};
@@ -299,6 +302,9 @@ const parseArgs = (argv) => {
         options.failSignal = signal;
         break;
       }
+      case "--stop-on-stdin-close":
+        options.stopOnStdinClose = true;
+        break;
       case "--help":
       case "-h":
         options.help = true;
@@ -327,8 +333,9 @@ if (isMain) {
     process.stderr.write(`--capture-dir is required\n${USAGE}\n`);
     process.exit(2);
   }
+  const { stopOnStdinClose, ...receiverOptions } = options;
   const receiver = await startOtlpReceiver({
-    ...options,
+    ...receiverOptions,
     log: (line) => process.stderr.write(`${line}\n`),
   });
   process.stdout.write(
@@ -352,4 +359,8 @@ if (isMain) {
   };
   process.on("SIGINT", () => void shutdown());
   process.on("SIGTERM", () => void shutdown());
+  if (stopOnStdinClose === true) {
+    process.stdin.on("end", () => void shutdown());
+    process.stdin.resume();
+  }
 }

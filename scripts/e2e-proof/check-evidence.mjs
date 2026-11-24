@@ -735,7 +735,8 @@ export const checkEvidence = (captures, options = {}) => {
   };
 };
 
-const escapeCell = (text) => String(text).replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
+const escapeCell = (text) =>
+  String(text).replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
 
 const STATUS_LABEL = Object.freeze({ pass: "PASS", fail: "FAIL", skip: "skip", manual: "manual" });
 

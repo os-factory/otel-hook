@@ -97,13 +97,15 @@ export type ReceiverProcess = {
   readonly tracesUrl: string;
   readonly logsUrl: string;
   readonly child: ChildProcessWithoutNullStreams;
-  /** SIGTERM, then resolve with the final `closed` line once the process exits. */
+  /** Close stdin, then resolve with the final `closed` line once the process exits. */
   stop(): Promise<Record<string, unknown>>;
 };
 
 export const startReceiverProcess = (args: readonly string[]): Promise<ReceiverProcess> =>
   new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [RECEIVER, ...args], {
+    // Stopped by closing stdin rather than SIGTERM: on Windows a signal kills the
+    // process outright, before it can write its summary.
+    const child = spawn(process.execPath, [RECEIVER, "--stop-on-stdin-close", ...args], {
       cwd: REPO_ROOT,
       env: { PATH: process.env.PATH ?? "" },
     });
@@ -125,7 +127,7 @@ export const startReceiverProcess = (args: readonly string[]): Promise<ReceiverP
           ...line,
           child,
           stop: async (): Promise<Record<string, unknown>> => {
-            child.kill("SIGTERM");
+            child.stdin.end();
             await exited;
             const last = stdout.trim().split("\n").at(-1) ?? "{}";
             return JSON.parse(last) as Record<string, unknown>;
