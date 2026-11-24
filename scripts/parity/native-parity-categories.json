@@ -1,0 +1,1645 @@
+{
+  "$comment": "Category evidence for scripts/parity/native-telemetry-parity.mjs. Matchers select normalized capture items (see otlp-capture.mjs): signal, name (string or list), namePattern, hasAttributes, attributes (value or list of accepted values), notAttributes, statusError, minSeverity. A category with no matchers on a side is reported as '-' (not mapped). 'documented' mirrors docs/native-telemetry-parity.md; statuses: covered, partial, derivable, impossible, unverified, not-native.",
+  "version": 1,
+  "asOf": "2026-11-24",
+  "statuses": [
+    "covered",
+    "partial",
+    "derivable",
+    "impossible",
+    "unverified",
+    "not-native"
+  ],
+  "categories": [
+    {
+      "id": "token.input",
+      "title": "Token usage: input"
+    },
+    {
+      "id": "token.output",
+      "title": "Token usage: output"
+    },
+    {
+      "id": "token.cache_read",
+      "title": "Token usage: cache read"
+    },
+    {
+      "id": "token.cache_write",
+      "title": "Token usage: cache write"
+    },
+    {
+      "id": "cost",
+      "title": "Reported cost"
+    },
+    {
+      "id": "model",
+      "title": "Model"
+    },
+    {
+      "id": "api.requests",
+      "title": "API request count"
+    },
+    {
+      "id": "api.latency",
+      "title": "API request latency"
+    },
+    {
+      "id": "errors",
+      "title": "Errors"
+    },
+    {
+      "id": "retries",
+      "title": "Retries"
+    },
+    {
+      "id": "tool.calls",
+      "title": "Tool calls"
+    },
+    {
+      "id": "tool.decision",
+      "title": "Tool call decision"
+    },
+    {
+      "id": "tool.duration",
+      "title": "Tool call duration"
+    },
+    {
+      "id": "tool.result",
+      "title": "Tool call result"
+    },
+    {
+      "id": "prompts",
+      "title": "Prompts"
+    },
+    {
+      "id": "turns",
+      "title": "Turns"
+    },
+    {
+      "id": "compaction",
+      "title": "Compaction"
+    },
+    {
+      "id": "session.start",
+      "title": "Session start"
+    },
+    {
+      "id": "session.end",
+      "title": "Session end"
+    },
+    {
+      "id": "lines_of_code",
+      "title": "Lines of code changed"
+    },
+    {
+      "id": "commits",
+      "title": "Commits created"
+    },
+    {
+      "id": "pull_requests",
+      "title": "Pull requests created"
+    },
+    {
+      "id": "active_time",
+      "title": "Active time"
+    },
+    {
+      "id": "subagents",
+      "title": "Subagents"
+    }
+  ],
+  "otelHook": {
+    "token.input": [
+      {
+        "hasAttributes": [
+          "gen_ai.usage.input_tokens"
+        ]
+      }
+    ],
+    "token.output": [
+      {
+        "hasAttributes": [
+          "gen_ai.usage.output_tokens"
+        ]
+      }
+    ],
+    "token.cache_read": [
+      {
+        "hasAttributes": [
+          "gen_ai.usage.cache_read.input_tokens"
+        ]
+      }
+    ],
+    "token.cache_write": [
+      {
+        "hasAttributes": [
+          "gen_ai.usage.cache_creation.input_tokens"
+        ]
+      }
+    ],
+    "cost": [],
+    "model": [
+      {
+        "hasAttributes": [
+          "gen_ai.request.model"
+        ],
+        "notAttributes": {
+          "gen_ai.request.model": "unknown"
+        }
+      },
+      {
+        "hasAttributes": [
+          "gen_ai.response.model"
+        ],
+        "notAttributes": {
+          "gen_ai.response.model": "unknown"
+        }
+      }
+    ],
+    "api.requests": [],
+    "api.latency": [],
+    "errors": [
+      {
+        "signal": "span",
+        "statusError": true
+      },
+      {
+        "signal": "log",
+        "minSeverity": 17
+      },
+      {
+        "signal": "log",
+        "name": "otelhook.error.raised"
+      }
+    ],
+    "retries": [],
+    "tool.calls": [
+      {
+        "signal": "span",
+        "namePattern": "^tool "
+      },
+      {
+        "signal": "log",
+        "name": [
+          "otelhook.tool.start",
+          "otelhook.tool.end"
+        ]
+      }
+    ],
+    "tool.decision": [
+      {
+        "hasAttributes": [
+          "otelhook.tool.permission_decision"
+        ]
+      }
+    ],
+    "tool.duration": [
+      {
+        "signal": "span",
+        "namePattern": "^tool ",
+        "attributes": {
+          "otelhook.span.paired": true
+        }
+      }
+    ],
+    "tool.result": [
+      {
+        "signal": "span",
+        "namePattern": "^tool ",
+        "hasAttributes": [
+          "otelhook.outcome"
+        ]
+      },
+      {
+        "signal": "log",
+        "name": "otelhook.tool.end",
+        "hasAttributes": [
+          "otelhook.outcome"
+        ]
+      }
+    ],
+    "prompts": [
+      {
+        "signal": "span",
+        "name": "prompt"
+      },
+      {
+        "signal": "log",
+        "name": "otelhook.prompt.submitted"
+      }
+    ],
+    "turns": [
+      {
+        "signal": "span",
+        "namePattern": "^generation"
+      },
+      {
+        "signal": "log",
+        "name": [
+          "otelhook.generation.start",
+          "otelhook.generation.end"
+        ]
+      }
+    ],
+    "compaction": [
+      {
+        "signal": "span",
+        "name": "compaction"
+      },
+      {
+        "signal": "log",
+        "name": "otelhook.compaction.performed"
+      }
+    ],
+    "session.start": [
+      {
+        "signal": "span",
+        "name": "session"
+      },
+      {
+        "signal": "log",
+        "name": "otelhook.session.start"
+      }
+    ],
+    "session.end": [
+      {
+        "signal": "span",
+        "name": "session",
+        "hasAttributes": [
+          "otelhook.outcome"
+        ]
+      },
+      {
+        "signal": "log",
+        "name": "otelhook.session.end"
+      }
+    ],
+    "lines_of_code": [],
+    "commits": [],
+    "pull_requests": [],
+    "active_time": [],
+    "subagents": [
+      {
+        "signal": "span",
+        "name": "subagent"
+      },
+      {
+        "signal": "log",
+        "name": [
+          "otelhook.subagent.start",
+          "otelhook.subagent.end"
+        ]
+      },
+      {
+        "signal": "span",
+        "namePattern": "^tool ",
+        "attributes": {
+          "otelhook.tool.kind": "delegate"
+        }
+      }
+    ]
+  },
+  "providers": {
+    "claude-code": {
+      "nativeVersionDocumented": "2.1.331 (latest on npm on 2026-11-24; the monitoring page names no version)",
+      "sources": [
+        "https://code.claude.com/docs/en/monitoring-usage"
+      ],
+      "native": {
+        "token.input": [
+          {
+            "signal": "metric",
+            "name": "claude_code.token.usage",
+            "attributes": {
+              "type": "input"
+            }
+          },
+          {
+            "signal": "log",
+            "name": [
+              "claude_code.api_request",
+              "api_request"
+            ],
+            "hasAttributes": [
+              "input_tokens"
+            ]
+          }
+        ],
+        "token.output": [
+          {
+            "signal": "metric",
+            "name": "claude_code.token.usage",
+            "attributes": {
+              "type": "output"
+            }
+          },
+          {
+            "signal": "log",
+            "name": [
+              "claude_code.api_request",
+              "api_request"
+            ],
+            "hasAttributes": [
+              "output_tokens"
+            ]
+          }
+        ],
+        "token.cache_read": [
+          {
+            "signal": "metric",
+            "name": "claude_code.token.usage",
+            "attributes": {
+              "type": "cacheRead"
+            }
+          },
+          {
+            "signal": "log",
+            "name": [
+              "claude_code.api_request",
+              "api_request"
+            ],
+            "hasAttributes": [
+              "cache_read_tokens"
+            ]
+          }
+        ],
+        "token.cache_write": [
+          {
+            "signal": "metric",
+            "name": "claude_code.token.usage",
+            "attributes": {
+              "type": "cacheCreation"
+            }
+          },
+          {
+            "signal": "log",
+            "name": [
+              "claude_code.api_request",
+              "api_request"
+            ],
+            "hasAttributes": [
+              "cache_creation_tokens"
+            ]
+          }
+        ],
+        "cost": [
+          {
+            "signal": "metric",
+            "name": "claude_code.cost.usage"
+          },
+          {
+            "signal": "log",
+            "name": [
+              "claude_code.api_request",
+              "api_request"
+            ],
+            "hasAttributes": [
+              "cost_usd"
+            ]
+          }
+        ],
+        "model": [
+          {
+            "signal": "metric",
+            "name": [
+              "claude_code.token.usage",
+              "claude_code.cost.usage"
+            ],
+            "hasAttributes": [
+              "model"
+            ]
+          },
+          {
+            "signal": "log",
+            "name": [
+              "claude_code.api_request",
+              "api_request"
+            ],
+            "hasAttributes": [
+              "model"
+            ]
+          }
+        ],
+        "api.requests": [
+          {
+            "signal": "log",
+            "name": [
+              "claude_code.api_request",
+              "api_request"
+            ]
+          },
+          {
+            "signal": "span",
+            "name": "claude_code.llm_request"
+          }
+        ],
+        "api.latency": [
+          {
+            "signal": "log",
+            "name": [
+              "claude_code.api_request",
+              "api_request"
+            ],
+            "hasAttributes": [
+              "duration_ms"
+            ]
+          },
+          {
+            "signal": "span",
+            "name": "claude_code.llm_request"
+          }
+        ],
+        "errors": [
+          {
+            "signal": "log",
+            "name": [
+              "claude_code.api_error",
+              "api_error",
+              "claude_code.internal_error",
+              "internal_error"
+            ]
+          }
+        ],
+        "retries": [
+          {
+            "signal": "log",
+            "name": [
+              "claude_code.api_error",
+              "api_error"
+            ],
+            "hasAttributes": [
+              "attempt"
+            ]
+          },
+          {
+            "signal": "log",
+            "name": [
+              "claude_code.api_retries_exhausted",
+              "api_retries_exhausted"
+            ]
+          }
+        ],
+        "tool.calls": [
+          {
+            "signal": "log",
+            "name": [
+              "claude_code.tool_result",
+              "tool_result"
+            ]
+          },
+          {
+            "signal": "span",
+            "name": "claude_code.tool"
+          }
+        ],
+        "tool.decision": [
+          {
+            "signal": "log",
+            "name": [
+              "claude_code.tool_decision",
+              "tool_decision"
+            ]
+          },
+          {
+            "signal": "metric",
+            "name": "claude_code.code_edit_tool.decision"
+          }
+        ],
+        "tool.duration": [
+          {
+            "signal": "log",
+            "name": [
+              "claude_code.tool_result",
+              "tool_result"
+            ],
+            "hasAttributes": [
+              "duration_ms"
+            ]
+          },
+          {
+            "signal": "span",
+            "name": "claude_code.tool.execution"
+          }
+        ],
+        "tool.result": [
+          {
+            "signal": "log",
+            "name": [
+              "claude_code.tool_result",
+              "tool_result"
+            ],
+            "hasAttributes": [
+              "success"
+            ]
+          }
+        ],
+        "prompts": [
+          {
+            "signal": "log",
+            "name": [
+              "claude_code.user_prompt",
+              "user_prompt"
+            ]
+          }
+        ],
+        "turns": [
+          {
+            "signal": "span",
+            "name": "claude_code.interaction"
+          },
+          {
+            "signal": "log",
+            "name": [
+              "claude_code.assistant_response",
+              "assistant_response"
+            ]
+          }
+        ],
+        "compaction": [
+          {
+            "signal": "log",
+            "name": [
+              "claude_code.compaction",
+              "compaction"
+            ]
+          }
+        ],
+        "session.start": [
+          {
+            "signal": "metric",
+            "name": "claude_code.session.count"
+          }
+        ],
+        "session.end": [],
+        "lines_of_code": [
+          {
+            "signal": "metric",
+            "name": "claude_code.lines_of_code.count"
+          }
+        ],
+        "commits": [
+          {
+            "signal": "metric",
+            "name": "claude_code.commit.count"
+          }
+        ],
+        "pull_requests": [
+          {
+            "signal": "metric",
+            "name": "claude_code.pull_request.count"
+          }
+        ],
+        "active_time": [
+          {
+            "signal": "metric",
+            "name": "claude_code.active_time.total"
+          }
+        ],
+        "subagents": [
+          {
+            "signal": "log",
+            "name": [
+              "claude_code.subagent_completed",
+              "subagent_completed"
+            ]
+          }
+        ]
+      },
+      "documented": {
+        "token.input": {
+          "status": "impossible",
+          "note": "no Claude Code hook carries a token counter (docs/claude-code-usage-contract.md); the adapter may not read the transcript"
+        },
+        "token.output": {
+          "status": "impossible",
+          "note": "as token.input"
+        },
+        "token.cache_read": {
+          "status": "impossible",
+          "note": "as token.input"
+        },
+        "token.cache_write": {
+          "status": "impossible",
+          "note": "as token.input"
+        },
+        "cost": {
+          "status": "impossible",
+          "note": "no tokens and no cost in any hook; otel-hook exports no cost attribute"
+        },
+        "model": {
+          "status": "partial",
+          "note": "session.start log carries gen_ai.request.model from SessionStart.model; per-turn generation model is 'unknown'"
+        },
+        "api.requests": {
+          "status": "impossible",
+          "note": "hooks fire per turn (Stop), not per API request"
+        },
+        "api.latency": {
+          "status": "impossible",
+          "note": "as api.requests"
+        },
+        "errors": {
+          "status": "partial",
+          "note": "StopFailure -> generation outcome + stop_reason, PostToolUseFailure -> tool error; no HTTP status, no api_error"
+        },
+        "retries": {
+          "status": "impossible",
+          "note": "no hook reports API attempts"
+        },
+        "tool.calls": {
+          "status": "covered"
+        },
+        "tool.decision": {
+          "status": "derivable",
+          "note": "PermissionRequest is ignored today; a PermissionRequest without a later PostToolUse implies denied/aborted. Decision source is impossible"
+        },
+        "tool.duration": {
+          "status": "partial",
+          "note": "span duration is PreToolUse-to-PostToolUse hook time, which includes permission wait"
+        },
+        "tool.result": {
+          "status": "covered",
+          "note": "ok/error from PostToolUse vs PostToolUseFailure; sizes only as content byte_length on logs"
+        },
+        "prompts": {
+          "status": "covered",
+          "note": "length and salted hash; text only with content opt-in"
+        },
+        "turns": {
+          "status": "partial",
+          "note": "one generation span per Stop; no per-turn model or tokens"
+        },
+        "compaction": {
+          "status": "partial",
+          "note": "PostCompact trigger; no pre/post tokens, success or duration"
+        },
+        "session.start": {
+          "status": "covered",
+          "note": "session.start log; session span only once SessionEnd arrives"
+        },
+        "session.end": {
+          "status": "not-native",
+          "note": "otel-hook-only: SessionEnd with reason"
+        },
+        "lines_of_code": {
+          "status": "derivable",
+          "note": "count lines from Edit/Write/MultiEdit tool input or structuredPatch in PostToolUse"
+        },
+        "commits": {
+          "status": "derivable",
+          "note": "successful Bash PostToolUse running git commit (heuristic)"
+        },
+        "pull_requests": {
+          "status": "derivable",
+          "note": "successful Bash PostToolUse running gh pr create (heuristic)"
+        },
+        "active_time": {
+          "status": "derivable",
+          "note": "CLI time from prompt-to-Stop intervals; user (keyboard) time is impossible"
+        },
+        "subagents": {
+          "status": "partial",
+          "note": "SubagentStart/SubagentStop spans with type; no tokens or tool counts"
+        }
+      }
+    },
+    "codex": {
+      "nativeVersionDocumented": "0.172.0 (latest GitHub release on 2026-11-24; docs name no version)",
+      "sources": [
+        "https://learn.chatgpt.com/docs/config-file/config-advanced",
+        "https://learn.chatgpt.com/docs/config-file/config-reference",
+        "https://github.com/openai/codex/tree/main/codex-rs/otel (source, for exact field names)"
+      ],
+      "native": {
+        "token.input": [
+          {
+            "signal": "log",
+            "name": "codex.sse_event",
+            "hasAttributes": [
+              "input_token_count"
+            ]
+          },
+          {
+            "signal": "metric",
+            "name": "codex.turn.token_usage"
+          }
+        ],
+        "token.output": [
+          {
+            "signal": "log",
+            "name": "codex.sse_event",
+            "hasAttributes": [
+              "output_token_count"
+            ]
+          },
+          {
+            "signal": "metric",
+            "name": "codex.turn.token_usage"
+          }
+        ],
+        "token.cache_read": [
+          {
+            "signal": "log",
+            "name": "codex.sse_event",
+            "hasAttributes": [
+              "cached_token_count"
+            ]
+          }
+        ],
+        "token.cache_write": [
+          {
+            "signal": "log",
+            "name": "codex.sse_event",
+            "hasAttributes": [
+              "cache_write_token_count"
+            ]
+          }
+        ],
+        "cost": [
+          {
+            "signal": "log",
+            "name": "codex.turn_cost"
+          },
+          {
+            "signal": "metric",
+            "name": "codex.turn.cost_microusd"
+          }
+        ],
+        "model": [
+          {
+            "signal": "log",
+            "namePattern": "^codex\\.",
+            "hasAttributes": [
+              "model"
+            ]
+          }
+        ],
+        "api.requests": [
+          {
+            "signal": "log",
+            "name": "codex.api_request"
+          },
+          {
+            "signal": "metric",
+            "name": "codex.api_request"
+          }
+        ],
+        "api.latency": [
+          {
+            "signal": "log",
+            "name": "codex.api_request",
+            "hasAttributes": [
+              "duration_ms"
+            ]
+          },
+          {
+            "signal": "metric",
+            "name": "codex.api_request.duration_ms"
+          }
+        ],
+        "errors": [
+          {
+            "signal": "log",
+            "name": "codex.api_request",
+            "hasAttributes": [
+              "error.message"
+            ]
+          }
+        ],
+        "retries": [
+          {
+            "signal": "log",
+            "name": "codex.api_request",
+            "hasAttributes": [
+              "attempt"
+            ]
+          }
+        ],
+        "tool.calls": [
+          {
+            "signal": "log",
+            "name": "codex.tool_result"
+          },
+          {
+            "signal": "metric",
+            "name": "codex.tool.call"
+          }
+        ],
+        "tool.decision": [
+          {
+            "signal": "log",
+            "name": "codex.tool_decision"
+          }
+        ],
+        "tool.duration": [
+          {
+            "signal": "log",
+            "name": "codex.tool_result",
+            "hasAttributes": [
+              "duration_ms"
+            ]
+          },
+          {
+            "signal": "metric",
+            "name": "codex.tool.call.duration_ms"
+          }
+        ],
+        "tool.result": [
+          {
+            "signal": "log",
+            "name": "codex.tool_result",
+            "hasAttributes": [
+              "success"
+            ]
+          }
+        ],
+        "prompts": [
+          {
+            "signal": "log",
+            "name": "codex.user_prompt"
+          }
+        ],
+        "turns": [
+          {
+            "signal": "log",
+            "name": [
+              "codex.agent_response",
+              "codex.turn_ttft"
+            ]
+          }
+        ],
+        "compaction": [],
+        "session.start": [
+          {
+            "signal": "log",
+            "name": "codex.conversation_starts"
+          },
+          {
+            "signal": "metric",
+            "name": "codex.thread.started"
+          }
+        ],
+        "session.end": [],
+        "lines_of_code": [],
+        "commits": [],
+        "pull_requests": [],
+        "active_time": [],
+        "subagents": [
+          {
+            "signal": "metric",
+            "name": "codex.multi_agent.spawned"
+          },
+          {
+            "signal": "log",
+            "name": "codex.agent_response",
+            "attributes": {
+              "agent.type": "subagent"
+            }
+          }
+        ]
+      },
+      "documented": {
+        "token.input": {
+          "status": "partial",
+          "note": "Stop carries the session-wide cumulative total per turn; native reports per API response"
+        },
+        "token.output": {
+          "status": "partial",
+          "note": "as token.input; reasoning tokens are exported too"
+        },
+        "token.cache_read": {
+          "status": "partial",
+          "note": "as token.input"
+        },
+        "token.cache_write": {
+          "status": "impossible",
+          "note": "Codex hook usage has no cache-write counter"
+        },
+        "cost": {
+          "status": "derivable",
+          "note": "native is an estimate (usage.estimated_usd); the same estimate can be computed from tokens and a price table"
+        },
+        "model": {
+          "status": "covered",
+          "note": "SessionStart and Stop model"
+        },
+        "api.requests": {
+          "status": "impossible",
+          "note": "hooks fire per turn, not per request"
+        },
+        "api.latency": {
+          "status": "impossible",
+          "note": "as api.requests"
+        },
+        "errors": {
+          "status": "partial",
+          "note": "tool errors and Stop stop_reason; no HTTP status or error message"
+        },
+        "retries": {
+          "status": "impossible",
+          "note": "no hook reports attempts"
+        },
+        "tool.calls": {
+          "status": "covered"
+        },
+        "tool.decision": {
+          "status": "partial",
+          "note": "permission_decision on PostToolUse; no decision source"
+        },
+        "tool.duration": {
+          "status": "partial",
+          "note": "payload duration_ms is parsed but not exported; span duration is hook-to-hook time"
+        },
+        "tool.result": {
+          "status": "covered"
+        },
+        "prompts": {
+          "status": "covered"
+        },
+        "turns": {
+          "status": "covered",
+          "note": "one generation per turn_id"
+        },
+        "compaction": {
+          "status": "not-native",
+          "note": "otel-hook-only: PreCompact/PostCompact"
+        },
+        "session.start": {
+          "status": "covered",
+          "note": "session.start log only: Codex has no session end, so no session span is exported"
+        },
+        "session.end": {
+          "status": "not-native",
+          "note": "neither side; Codex has no SessionEnd hook"
+        },
+        "lines_of_code": {
+          "status": "not-native",
+          "note": "derivable from apply_patch input if wanted"
+        },
+        "commits": {
+          "status": "not-native"
+        },
+        "pull_requests": {
+          "status": "not-native"
+        },
+        "active_time": {
+          "status": "not-native"
+        },
+        "subagents": {
+          "status": "covered",
+          "note": "SubagentStart/SubagentStop spans"
+        }
+      }
+    },
+    "gemini-cli": {
+      "nativeVersionDocumented": "0.71.1 (latest on npm on 2026-11-24; docs/cli/telemetry.md on main names no version)",
+      "sources": [
+        "https://github.com/google-gemini/gemini-cli/blob/main/docs/cli/telemetry.md"
+      ],
+      "native": {
+        "token.input": [
+          {
+            "signal": "metric",
+            "name": "gemini_cli.token.usage",
+            "attributes": {
+              "type": "input"
+            }
+          },
+          {
+            "signal": "metric",
+            "name": "gen_ai.client.token.usage",
+            "attributes": {
+              "gen_ai.token.type": "input"
+            }
+          }
+        ],
+        "token.output": [
+          {
+            "signal": "metric",
+            "name": "gemini_cli.token.usage",
+            "attributes": {
+              "type": "output"
+            }
+          },
+          {
+            "signal": "metric",
+            "name": "gen_ai.client.token.usage",
+            "attributes": {
+              "gen_ai.token.type": "output"
+            }
+          }
+        ],
+        "token.cache_read": [
+          {
+            "signal": "metric",
+            "name": "gemini_cli.token.usage",
+            "attributes": {
+              "type": "cache"
+            }
+          }
+        ],
+        "token.cache_write": [],
+        "cost": [],
+        "model": [
+          {
+            "signal": "log",
+            "name": "gemini_cli.api_response",
+            "hasAttributes": [
+              "model"
+            ]
+          },
+          {
+            "signal": "metric",
+            "name": "gemini_cli.api.request.count",
+            "hasAttributes": [
+              "model"
+            ]
+          }
+        ],
+        "api.requests": [
+          {
+            "signal": "metric",
+            "name": "gemini_cli.api.request.count"
+          },
+          {
+            "signal": "log",
+            "name": "gemini_cli.api_request"
+          }
+        ],
+        "api.latency": [
+          {
+            "signal": "metric",
+            "name": "gemini_cli.api.request.latency"
+          },
+          {
+            "signal": "log",
+            "name": "gemini_cli.api_response",
+            "hasAttributes": [
+              "duration_ms"
+            ]
+          }
+        ],
+        "errors": [
+          {
+            "signal": "log",
+            "name": "gemini_cli.api_error"
+          }
+        ],
+        "retries": [
+          {
+            "signal": "log",
+            "name": [
+              "gemini_cli.chat.content_retry",
+              "gemini_cli.chat.content_retry_failure"
+            ]
+          },
+          {
+            "signal": "metric",
+            "name": "gemini_cli.chat.content_retry.count"
+          }
+        ],
+        "tool.calls": [
+          {
+            "signal": "log",
+            "name": "gemini_cli.tool_call"
+          },
+          {
+            "signal": "metric",
+            "name": "gemini_cli.tool.call.count"
+          }
+        ],
+        "tool.decision": [
+          {
+            "signal": "log",
+            "name": "gemini_cli.tool_call",
+            "hasAttributes": [
+              "decision"
+            ]
+          }
+        ],
+        "tool.duration": [
+          {
+            "signal": "log",
+            "name": "gemini_cli.tool_call",
+            "hasAttributes": [
+              "duration_ms"
+            ]
+          },
+          {
+            "signal": "metric",
+            "name": "gemini_cli.tool.call.latency"
+          }
+        ],
+        "tool.result": [
+          {
+            "signal": "log",
+            "name": "gemini_cli.tool_call",
+            "hasAttributes": [
+              "success"
+            ]
+          }
+        ],
+        "prompts": [
+          {
+            "signal": "log",
+            "name": "gemini_cli.user_prompt"
+          }
+        ],
+        "turns": [
+          {
+            "signal": "metric",
+            "name": "gemini_cli.agent.turns"
+          },
+          {
+            "signal": "log",
+            "name": "gemini_cli.conversation_finished"
+          }
+        ],
+        "compaction": [
+          {
+            "signal": "log",
+            "name": "gemini_cli.chat_compression"
+          },
+          {
+            "signal": "metric",
+            "name": "gemini_cli.chat_compression"
+          }
+        ],
+        "session.start": [
+          {
+            "signal": "log",
+            "name": "gemini_cli.config"
+          },
+          {
+            "signal": "metric",
+            "name": "gemini_cli.session.count"
+          }
+        ],
+        "session.end": [
+          {
+            "signal": "log",
+            "name": "gemini_cli.conversation_finished"
+          }
+        ],
+        "lines_of_code": [
+          {
+            "signal": "metric",
+            "name": "gemini_cli.lines.changed"
+          }
+        ],
+        "commits": [],
+        "pull_requests": [],
+        "active_time": [],
+        "subagents": [
+          {
+            "signal": "log",
+            "name": [
+              "gemini_cli.agent.start",
+              "gemini_cli.agent.finish"
+            ]
+          },
+          {
+            "signal": "metric",
+            "name": "gemini_cli.agent.run.count"
+          }
+        ]
+      },
+      "otelHook": {
+        "api.requests": [
+          {
+            "signal": "span",
+            "namePattern": "^generation"
+          }
+        ],
+        "api.latency": [
+          {
+            "signal": "span",
+            "namePattern": "^generation"
+          }
+        ]
+      },
+      "documented": {
+        "token.input": {
+          "status": "covered",
+          "note": "AfterModel usageMetadata per model call (cumulative within a streamed response)"
+        },
+        "token.output": {
+          "status": "covered",
+          "note": "as token.input"
+        },
+        "token.cache_read": {
+          "status": "impossible",
+          "note": "the CLI's hook translator strips cachedContentTokenCount today (src/providers/gemini/usage.ts)"
+        },
+        "token.cache_write": {
+          "status": "not-native"
+        },
+        "cost": {
+          "status": "not-native"
+        },
+        "model": {
+          "status": "covered",
+          "note": "llm_request.model on generation spans"
+        },
+        "api.requests": {
+          "status": "partial",
+          "note": "one generation span per BeforeModel/AfterModel pair; no status code"
+        },
+        "api.latency": {
+          "status": "partial",
+          "note": "hook-to-hook time around the model call"
+        },
+        "errors": {
+          "status": "partial",
+          "note": "tool errors and finishReason; no API error event"
+        },
+        "retries": {
+          "status": "impossible",
+          "note": "no hook reports content retries"
+        },
+        "tool.calls": {
+          "status": "covered"
+        },
+        "tool.decision": {
+          "status": "unverified",
+          "note": "no decision field is known on BeforeTool/AfterTool"
+        },
+        "tool.duration": {
+          "status": "partial",
+          "note": "hook-to-hook time"
+        },
+        "tool.result": {
+          "status": "covered",
+          "note": "error presence in tool_response"
+        },
+        "prompts": {
+          "status": "covered",
+          "note": "BeforeAgent"
+        },
+        "turns": {
+          "status": "derivable",
+          "note": "AfterAgent marks turn completion but is ignored today"
+        },
+        "compaction": {
+          "status": "partial",
+          "note": "PreCompress trigger; no tokens before/after"
+        },
+        "session.start": {
+          "status": "covered"
+        },
+        "session.end": {
+          "status": "covered"
+        },
+        "lines_of_code": {
+          "status": "derivable",
+          "note": "from write_file/replace tool input"
+        },
+        "commits": {
+          "status": "not-native"
+        },
+        "pull_requests": {
+          "status": "not-native"
+        },
+        "active_time": {
+          "status": "not-native"
+        },
+        "subagents": {
+          "status": "partial",
+          "note": "invoke_agent tool calls are delegate tool spans; no agent lifecycle"
+        }
+      }
+    },
+    "cursor": {
+      "nativeVersionDocumented": "server-side Enterprise export, scope cursor.telemetry 0.1.0; not tied to an IDE or CLI version",
+      "sources": [
+        "https://cursor.com/docs/enterprise/opentelemetry-export",
+        "https://cursor.com/docs/enterprise/opentelemetry-export/wire"
+      ],
+      "native": {
+        "token.input": [
+          {
+            "signal": "metric",
+            "name": "cursor.token.usage",
+            "attributes": {
+              "cursor.token.type": "input"
+            }
+          }
+        ],
+        "token.output": [
+          {
+            "signal": "metric",
+            "name": "cursor.token.usage",
+            "attributes": {
+              "cursor.token.type": "output"
+            }
+          }
+        ],
+        "token.cache_read": [
+          {
+            "signal": "metric",
+            "name": "cursor.token.usage",
+            "attributes": {
+              "cursor.token.type": "cache_read"
+            }
+          }
+        ],
+        "token.cache_write": [
+          {
+            "signal": "metric",
+            "name": "cursor.token.usage",
+            "attributes": {
+              "cursor.token.type": "cache_creation"
+            }
+          }
+        ],
+        "cost": [
+          {
+            "signal": "metric",
+            "name": "cursor.cost.usage"
+          }
+        ],
+        "model": [
+          {
+            "signal": "metric",
+            "name": "cursor.token.usage",
+            "hasAttributes": [
+              "cursor.model.name"
+            ]
+          }
+        ],
+        "api.requests": [
+          {
+            "signal": "log",
+            "name": "cursor.api.request"
+          }
+        ],
+        "api.latency": [],
+        "errors": [
+          {
+            "signal": "log",
+            "name": "cursor.api.error"
+          }
+        ],
+        "retries": [],
+        "tool.calls": [
+          {
+            "signal": "metric",
+            "name": "cursor.tool.calls"
+          }
+        ],
+        "tool.decision": [],
+        "tool.duration": [],
+        "tool.result": [
+          {
+            "signal": "metric",
+            "name": "cursor.tool.calls",
+            "hasAttributes": [
+              "cursor.tool.status"
+            ]
+          }
+        ],
+        "prompts": [
+          {
+            "signal": "log",
+            "name": "conversation.user_message"
+          }
+        ],
+        "turns": [
+          {
+            "signal": "log",
+            "name": "conversation.assistant_message"
+          }
+        ],
+        "compaction": [],
+        "session.start": [],
+        "session.end": [],
+        "lines_of_code": [
+          {
+            "signal": "log",
+            "name": "cursor.cloud_agent.commit",
+            "hasAttributes": [
+              "cursor.commit.lines_added"
+            ]
+          }
+        ],
+        "commits": [
+          {
+            "signal": "log",
+            "name": "cursor.cloud_agent.commit"
+          }
+        ],
+        "pull_requests": [
+          {
+            "signal": "log",
+            "name": "cursor.cloud_agent.pull_request"
+          }
+        ],
+        "active_time": [],
+        "subagents": []
+      },
+      "documented": {
+        "token.input": {
+          "status": "covered",
+          "note": "stop usage per generation (delta)"
+        },
+        "token.output": {
+          "status": "covered"
+        },
+        "token.cache_read": {
+          "status": "covered"
+        },
+        "token.cache_write": {
+          "status": "derivable",
+          "note": "cache_write_tokens is reported by the hook but dropped until its accounting is confirmed"
+        },
+        "cost": {
+          "status": "derivable",
+          "note": "native is a best-effort estimate; computable from tokens and a price table"
+        },
+        "model": {
+          "status": "covered"
+        },
+        "api.requests": {
+          "status": "impossible",
+          "note": "hooks fire per generation, not per request"
+        },
+        "api.latency": {
+          "status": "not-native"
+        },
+        "errors": {
+          "status": "partial",
+          "note": "tool failures and stop status; no API error event"
+        },
+        "retries": {
+          "status": "not-native"
+        },
+        "tool.calls": {
+          "status": "covered"
+        },
+        "tool.decision": {
+          "status": "not-native",
+          "note": "otel-hook adds permission_denied from postToolUseFailure"
+        },
+        "tool.duration": {
+          "status": "not-native",
+          "note": "otel-hook adds hook-to-hook span duration"
+        },
+        "tool.result": {
+          "status": "covered"
+        },
+        "prompts": {
+          "status": "covered",
+          "note": "native only with team content opt-in"
+        },
+        "turns": {
+          "status": "covered",
+          "note": "one generation per generation_id"
+        },
+        "compaction": {
+          "status": "not-native",
+          "note": "otel-hook-only: preCompact"
+        },
+        "session.start": {
+          "status": "not-native",
+          "note": "otel-hook-only"
+        },
+        "session.end": {
+          "status": "not-native",
+          "note": "otel-hook-only"
+        },
+        "lines_of_code": {
+          "status": "derivable",
+          "note": "native counts cloud-agent commits only; local edits derivable from afterFileEdit"
+        },
+        "commits": {
+          "status": "derivable",
+          "note": "native: cloud agents only; local: from shell commands (heuristic)"
+        },
+        "pull_requests": {
+          "status": "derivable",
+          "note": "as commits"
+        },
+        "active_time": {
+          "status": "not-native"
+        },
+        "subagents": {
+          "status": "not-native",
+          "note": "native excludes Task subagents; the hook pair carries no id to pair on"
+        }
+      }
+    },
+    "antigravity": {
+      "nativeVersionDocumented": "none: no native OpenTelemetry exporter is documented (feature request google-antigravity/antigravity-cli#366 is open)",
+      "sources": [
+        "https://docs.cloud.google.com/gemini/enterprise/docs/ai-developer-tools-metrics",
+        "https://github.com/google-antigravity/antigravity-cli/issues/366"
+      ],
+      "native": {},
+      "documented": {
+        "token.input": {
+          "status": "not-native"
+        },
+        "token.output": {
+          "status": "not-native"
+        },
+        "token.cache_read": {
+          "status": "not-native"
+        },
+        "token.cache_write": {
+          "status": "not-native"
+        },
+        "cost": {
+          "status": "not-native"
+        },
+        "model": {
+          "status": "not-native"
+        },
+        "api.requests": {
+          "status": "not-native"
+        },
+        "api.latency": {
+          "status": "not-native"
+        },
+        "errors": {
+          "status": "not-native"
+        },
+        "retries": {
+          "status": "not-native"
+        },
+        "tool.calls": {
+          "status": "not-native",
+          "note": "otel-hook-only (experimental adapter): PreToolUse/PostToolUse"
+        },
+        "tool.decision": {
+          "status": "not-native"
+        },
+        "tool.duration": {
+          "status": "not-native"
+        },
+        "tool.result": {
+          "status": "not-native",
+          "note": "otel-hook-only (experimental adapter): PreToolUse/PostToolUse"
+        },
+        "prompts": {
+          "status": "not-native"
+        },
+        "turns": {
+          "status": "not-native"
+        },
+        "compaction": {
+          "status": "not-native"
+        },
+        "session.start": {
+          "status": "not-native"
+        },
+        "session.end": {
+          "status": "not-native"
+        },
+        "lines_of_code": {
+          "status": "not-native"
+        },
+        "commits": {
+          "status": "not-native"
+        },
+        "pull_requests": {
+          "status": "not-native"
+        },
+        "active_time": {
+          "status": "not-native"
+        },
+        "subagents": {
+          "status": "not-native"
+        }
+      }
+    }
+  },
+  "personalData": {
+    "attributeKeys": [
+      "user.email",
+      "user.account_uuid",
+      "user.account_id",
+      "user.id",
+      "organization.id",
+      "enduser.id",
+      "installation.id",
+      "cursor.user.email",
+      "cursor.user.account_id",
+      "cursor.user.id",
+      "cursor.team.id",
+      "host.name",
+      "host.id"
+    ],
+    "keyPatterns": [
+      "email",
+      "account[._]?(id|uuid)",
+      "(^|[._])org(anization)?[._]?id$",
+      "(^|[._])user[._]?(id|name)$"
+    ],
+    "valuePatterns": [
+      {
+        "name": "an email address",
+        "pattern": "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$"
+      }
+    ]
+  }
+}
