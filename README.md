@@ -441,6 +441,8 @@ the remaining gap, and it is a *location* gap rather than a shape one: `setup`
 requires `--settings-file`. `PROVIDER_REGISTRATION_SUPPORT` carries the reason and
 the `evidenceBlocker` per provider;
 [docs/registration-evidence.md](docs/registration-evidence.md) is the long form.
+End-to-end proof runs per provider (a real session, a disk OTLP receiver, and an
+evidence checker) follow [docs/e2e-proof.md](docs/e2e-proof.md).
 
 ## Canonical model
 

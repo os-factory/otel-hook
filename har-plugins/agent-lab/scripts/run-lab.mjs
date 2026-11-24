@@ -12,6 +12,12 @@
  *   AGENT_LAB=0        skip (exit 0)
  *   AGENT_LAB_KEEP=1   keep the temp lab directory
  *   AGENT_LAB_PROVIDER override --provider
+ *
+ * Every OTLP request is also written to <labRoot>/otlp-capture by the e2e proof
+ * receiver, and the hooks run with a synthetic launcher profile (`--resource-attr`
+ * on the hook command), so the report carries the e2e proof evidence check
+ * (scripts/e2e-proof/check-evidence.mjs) for the same run. That check is
+ * informational: it does not change the lab's pass/fail.
  */
 
 import { spawn } from "node:child_process";
@@ -20,6 +26,7 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { checkEvidence, loadCapture, renderMarkdown } from "../../../scripts/e2e-proof/check-evidence.mjs";
 import { assertLab } from "./assert.mjs";
 import { startLabCollector } from "./collector.mjs";
 import { decodeAllExportedLogRecords, decodeAllExportedSpans } from "./otlp-decode.mjs";
@@ -151,6 +158,8 @@ const main = async () => {
   const hooksJsonl = path.join(labRoot, "hooks.jsonl");
   const mockLog = path.join(labRoot, "mock-requests.jsonl");
   const reportPath = path.join(labRoot, "report.json");
+  const captureDir = path.join(labRoot, "otlp-capture");
+  const launcherSessionId = `agent-lab-${provider.id}-session`;
 
   await mkdir(homeDir, { recursive: true });
   await mkdir(configDir, { recursive: true });
@@ -162,7 +171,7 @@ const main = async () => {
     await provider.prepareWorkspace({ workspace, scenario, labRoot });
   }
 
-  const collector = await startLabCollector();
+  const collector = await startLabCollector({ captureDir });
   const mock = await provider.startMock({ scenario, widgetPath, logPath: mockLog });
   log(`==> ${provider.id} mock at ${mock.url}`);
   log(`==> OTLP collector traces ${collector.tracesUrl}`);
@@ -193,6 +202,17 @@ const main = async () => {
     "15000",
     "--flush-timeout-ms",
     "5000",
+    // A synthetic launcher profile (Factory Commits telemetry profile), so the
+    // evidence check sees what a HAR 2.0 slot would put on the resource. On the
+    // hook command, not in the agent's environment: Claude Code 2.1.x was
+    // observed not to pass OTEL_* variables through to hook processes.
+    ...[
+      `session.id=${launcherSessionId}`,
+      "factory.work_unit.id=agent-lab",
+      "factory.producer.name=otel-hook-agent-lab",
+      "vcs.repository.url.full=https://example.invalid/agent-lab.git",
+      "vcs.ref.head.name=agent-lab",
+    ].flatMap((attribute) => ["--resource-attr", quote(attribute)]),
   ].join(" ");
 
   log("==> otel-hook setup");
@@ -294,6 +314,29 @@ const main = async () => {
     agentResult,
     agentExitCode: agent.code,
   });
+  await collector.close();
+  let evidence;
+  try {
+    evidence = checkEvidence([await loadCapture(captureDir)], {
+      provider: provider.id,
+      sessionId: launcherSessionId,
+      workUnitId: "agent-lab",
+      expectTools: [scenario.toolName],
+      ...(scenario.canonicalStopUsage === undefined
+        ? {}
+        : {
+            expectUsage: {
+              input: scenario.canonicalStopUsage.inputTokens,
+              output: scenario.canonicalStopUsage.outputTokens,
+              cache_read: scenario.canonicalStopUsage.cachedInputTokens,
+            },
+          }),
+      forbid: [labRoot, scenario.secret],
+    });
+    await writeFile(path.join(labRoot, "evidence.md"), renderMarkdown(evidence));
+  } catch (error) {
+    evidence = { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
   const report = {
     status: assertion.ok ? "pass" : "fail",
     provider: provider.id,
@@ -304,11 +347,12 @@ const main = async () => {
     setup: { code: setup.code, stdout: setup.stdout },
     agent: { code: agent.code, stderrTail: agent.stderr.slice(-4000) },
     assertion,
+    captureDir,
+    evidence,
   };
   await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`);
 
   await mock.close();
-  await collector.close();
 
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
   log(`==> lab directory ${labRoot}`);
