@@ -84,12 +84,9 @@ describe("auto-detection refuses cross-provider overlap", () => {
     }
 
     const antigravity = detect({
-      hookEventName: "PreToolUse",
       conversationId: "ses-antigravity",
       workspacePaths: ["/workspace/demo"],
-      stepIdx: 1,
-      invocationNum: 0,
-      toolName: "run_command",
+      modelName: "example-model",
     });
     expect(antigravity.status).toBe("resolved");
     if (antigravity.status === "resolved") {

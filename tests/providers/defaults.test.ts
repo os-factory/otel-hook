@@ -93,7 +93,7 @@ describe("default provider registry", () => {
 
     const antigravity = catalog.find((entry) => entry.id === "antigravity");
     // The experimental adapter claims only what it can honestly observe.
-    expect(antigravity?.lifecycleEvents).toEqual(["tool.start", "tool.end"]);
+    expect(antigravity?.lifecycleEvents).toEqual(["session.start", "tool.end"]);
   });
 
   it("declares only lifecycle events the canonical model defines", () => {

@@ -1,6 +1,7 @@
 import { ANTIGRAVITY_PROVIDER_ID } from "../providers/antigravity/adapter.js";
-import { ANTIGRAVITY_HOOK_EVENT_NAMES } from "../providers/antigravity/payload.js";
+import { type AntigravityHookEventName } from "../providers/antigravity/payload.js";
 import {
+  ANTIGRAVITY_REGISTRABLE_HOOK_EVENTS,
   mergeAntigravityHookRegistration,
   readAntigravityHookRegistrations,
   removeAntigravityHookRegistration,
@@ -44,11 +45,12 @@ import type {
 /**
  * One uniform interface over planners whose *document shapes differ*.
  *
- * Four providers, three shapes: Claude Code, the Codex CLI, and the Gemini CLI
+ * Five providers, four shapes: Claude Code, the Codex CLI, and the Gemini CLI
  * share the nested matcher-group document (with Gemini adding a `name` field),
- * while Antigravity's hook file is a flat list per event. Keeping the shape
- * knowledge inside each provider's planner and adapting only the *result* here
- * is what lets `setup`, `diagnose`, and `uninstall` be written once.
+ * Cursor's hook file is a flat list per event, and Antigravity's is a map of
+ * hook names (tool events nested, the other events bare handlers). Keeping the
+ * shape knowledge inside each provider's planner and adapting only the
+ * *result* here is what lets `setup`, `diagnose`, and `uninstall` be written once.
  *
  * Nothing in this module reads or writes a file; `lifecycle.ts` does that.
  */
@@ -288,8 +290,8 @@ const flatHookConflicts = (existing: unknown): readonly HookDocumentConflict[] =
   return conflicts;
 };
 
-const asAntigravityEvents = (events: readonly string[]): readonly (typeof ANTIGRAVITY_HOOK_EVENT_NAMES)[number][] =>
-  events as readonly (typeof ANTIGRAVITY_HOOK_EVENT_NAMES)[number][];
+const asAntigravityEvents = (events: readonly string[]): readonly AntigravityHookEventName[] =>
+  events as readonly AntigravityHookEventName[];
 
 /** Event keys actually present in a flat document, for a removal with no `--event`. */
 const documentEventNames = (existing: unknown): readonly string[] =>
@@ -298,56 +300,36 @@ const documentEventNames = (existing: unknown): readonly string[] =>
 const PLANNERS: readonly ProviderRegistrationPlanner[] = Object.freeze([
   Object.freeze({
     providerId: ANTIGRAVITY_PROVIDER_ID,
-    defaultEvents: ANTIGRAVITY_HOOK_EVENT_NAMES,
+    defaultEvents: ANTIGRAVITY_REGISTRABLE_HOOK_EVENTS,
     merge: (input: RegistrationPlanInput): NestedHookDocumentResult => {
-      const conflicts = flatHookConflicts(input.existing);
-      if (conflicts.length > 0) {
-        return {
-          document: isPlainObject(input.existing) ? input.existing : {},
-          changed: false,
-          changes: [],
-          conflicts,
-        };
-      }
-      const events = input.events ?? ANTIGRAVITY_HOOK_EVENT_NAMES;
-      return adaptFlatResult(
-        readAntigravityHookRegistrations,
-        input.existing,
-        events,
-        input.identifies,
-        mergeAntigravityHookRegistration({
-          ...(input.existing === undefined ? {} : { existing: input.existing }),
-          command: input.command,
-          events: asAntigravityEvents(events),
-          ...(input.matcher === undefined ? {} : { matcher: input.matcher }),
-          identifies: input.identifies,
-        }),
-        false,
-      );
+      const events = input.events ?? ANTIGRAVITY_REGISTRABLE_HOOK_EVENTS;
+      const merged = mergeAntigravityHookRegistration({
+        ...(input.existing === undefined ? {} : { existing: input.existing }),
+        command: input.command,
+        events: asAntigravityEvents(events),
+        ...(input.matcher === undefined ? {} : { matcher: input.matcher }),
+        ...(input.timeoutSeconds === undefined ? {} : { timeoutSeconds: input.timeoutSeconds }),
+        identifies: input.identifies,
+      });
+      return {
+        document: merged.config,
+        changed: merged.changed,
+        changes: merged.changes,
+        conflicts: merged.conflicts,
+      };
     },
     remove: (input: RegistrationRemovalInput): NestedHookDocumentResult => {
-      const conflicts = flatHookConflicts(input.existing);
-      if (conflicts.length > 0) {
-        return {
-          document: isPlainObject(input.existing) ? input.existing : {},
-          changed: false,
-          changes: [],
-          conflicts,
-        };
-      }
-      const events = input.events ?? documentEventNames(input.existing);
-      return adaptFlatResult(
-        readAntigravityHookRegistrations,
-        input.existing,
-        events,
-        input.identifies,
-        removeAntigravityHookRegistration({
-          ...(input.existing === undefined ? {} : { existing: input.existing }),
-          ...(input.events === undefined ? {} : { events: asAntigravityEvents(input.events) }),
-          identifies: input.identifies,
-        }),
-        true,
-      );
+      const removed = removeAntigravityHookRegistration({
+        ...(input.existing === undefined ? {} : { existing: input.existing }),
+        ...(input.events === undefined ? {} : { events: asAntigravityEvents(input.events) }),
+        identifies: input.identifies,
+      });
+      return {
+        document: removed.config,
+        changed: removed.changed,
+        changes: removed.changes,
+        conflicts: removed.conflicts,
+      };
     },
     read: readAntigravityHookRegistrations,
   }),

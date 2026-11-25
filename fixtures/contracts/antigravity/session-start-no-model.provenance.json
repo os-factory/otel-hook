@@ -1,0 +1,11 @@
+{
+  "fixture": "session-start-no-model.json",
+  "sourceContract": "Antigravity SessionStart stdin without modelName. A public CLI PreToolUse capture omitted it (antigravity-cli issue 49); the field is therefore optional",
+  "provider": "antigravity",
+  "capturedDate": "2026-11-02",
+  "author": "otel-hook antigravity provider owner (agent)",
+  "sanitization": "No captured payload. Ids, model name, paths, tool arguments, and error text are placeholders under /workspace/example-repo. Secret-shaped strings, where present, are fabricated.",
+  "licenseBasis": "Original synthetic authorship. Field names follow antigravity.google/docs/hooks (read 2026-11-02). Every value is invented; no transcript, path, or credential is copied.",
+  "sha256": "6f9766bb2ece4d1bc5a922401b12460a029908e79990b44c1cf3d84712e465e3",
+  "notes": "Synthetic values. The issue is cited for the key set only; none of its paths or text are copied."
+}

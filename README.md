@@ -37,7 +37,7 @@ indistinguishable in the data.
 | `codex`       | OpenAI Codex CLI   | stable       | silent          | cumulative[^1]    | `setup` (global and project) |
 | `cursor`      | Cursor             | stable       | provider JSON   | delta             | `setup` (global and project) |
 | `gemini-cli`  | Gemini CLI         | stable       | silent          | cumulative        | `setup` (global and project) |
-| `antigravity` | Google Antigravity | experimental | silent          | delta             | `setup --settings-file`      |
+| `antigravity` | Google Antigravity | experimental | provider JSON   | delta             | `setup` (global and project) |
 
 [^1]: Codex's counters are cumulative over the **whole session**, not per turn:
     every usage-bearing hook stamps the rollout's running `total_token_usage`.
@@ -47,10 +47,15 @@ indistinguishable in the data.
     `usage temporality  cumulative (series: session-lifetime)`; see
     [docs/usage-semantics.md](docs/usage-semantics.md#which-series-a-cumulative-report-continues).
 
-`antigravity` is registered but marked `experimental`: parts of its field and
-lifecycle mapping are reconstructions pending confirmation against real captures.
-Selecting it logs a warning to stderr, `providers` reports its open promotion
-gates, and `--no-experimental` excludes it entirely.
+`antigravity` is registered but marked `experimental`. The published hooks
+reference (read 2026-11-02) is implemented where stdin makes an event unique:
+`SessionStart` becomes `session.start`, and `PostToolUse` becomes `tool.end`
+only when the `error` string is present. Usage, session end, generation, and
+subagent lifecycle are exclusions, not pending guesses. Two gates stay open —
+there is no captured transcript in this repository, and stdin does not separate
+`PreToolUse` from a `PostToolUse` that omits `error` (nor the invocation pair).
+Selecting it logs a warning to stderr, `providers` reports those gates, and
+`--no-experimental` excludes it entirely.
 
 ## CLI
 
@@ -68,8 +73,11 @@ otel-hook --version
 
 Reads **exactly one** JSON value from stdin, bounded by `--max-input-bytes`
 (default 1 MiB). Writes to stdout **only** what the selected provider's protocol
-requires — for four of the five providers, nothing at all. Every diagnostic goes
-to stderr as one JSON object per line.
+requires — for three of the five providers, nothing at all. Cursor and
+Antigravity both read a JSON body from stdout; Antigravity fail-closes a bad
+`PreToolUse` response, so the hook answers `{"decision":"allow"}` when the
+edge might be that event and `{}` when it is `SessionStart` or a confirmed
+`PostToolUse`. Every diagnostic goes to stderr as one JSON object per line.
 
 **`run` always exits 0.** Unreadable stdin, malformed JSON, an unknown provider,
 an ambiguous detection, conflicting identity, an unreachable collector, an
@@ -103,8 +111,11 @@ Provider selection:
   `exact` and by the Codex adapter at `strong`. Confidence is self-reported per
   adapter and is *not* comparable across providers, so taking the highest score
   would file one agent's telemetry under another's id. Cursor payloads, whose
-  `hook_event_name` values are camelCase (`preToolUse`, `beforeSubmitPrompt`), and
-  Antigravity's camelCase envelope both auto-detect cleanly.
+  `hook_event_name` values are camelCase (`preToolUse`, `beforeSubmitPrompt`),
+  auto-detect cleanly. Antigravity's stdin is also camelCase, and it does not
+  carry an event name: a payload is recognized from `conversationId` plus a
+  documented shape (`workspacePaths`, `toolCall`/`stepIdx`, `invocationNum`, or
+  `fullyIdle`). A reconstructed `hookEventName` is not evidence.
 
 Invocation identity — immutable, per invocation, never from the environment
 ([ADR 0001](docs/adr/0001-invocation-identity-isolation.md)):
@@ -436,10 +447,13 @@ Planners exist for `claude-code`, `codex`, `cursor`, `gemini-cli`, and
 `{ version: 1, hooks: { "<event>": [{ command }] } }` — and its default event set
 deliberately omits `beforeShellExecution`/`afterShellExecution` and the MCP pair,
 because one shell call fires those *and* `preToolUse`/`postToolUse`, and only the
-generic pair carries a `tool_use_id` to correlate the two edges. `antigravity` is
-the remaining gap, and it is a *location* gap rather than a shape one: `setup`
-requires `--settings-file`. `PROVIDER_REGISTRATION_SUPPORT` carries the reason and
-the `evidenceBlocker` per provider;
+generic pair carries a `tool_use_id` to correlate the two edges. Antigravity's
+file is a map of hook names: tool events are matcher groups, and `SessionStart`,
+`PreInvocation`, `PostInvocation`, and `Stop` are bare handler lists. The
+documented paths are `.agents/hooks.json` (project) and
+`~/.gemini/config/hooks.json` (global). The default registration is
+`SessionStart` and `PostToolUse`, the events stdin can turn into telemetry.
+`PROVIDER_REGISTRATION_SUPPORT` carries the reason per provider;
 [docs/registration-evidence.md](docs/registration-evidence.md) is the long form.
 End-to-end proof runs per provider (a real session, a disk OTLP receiver, and an
 evidence checker) follow [docs/e2e-proof.md](docs/e2e-proof.md).
@@ -1126,12 +1140,13 @@ fixing one means updating that test rather than discovering a silent change.
      `session_id` on resume and clear, so keying on it would suppress every restart
      after the first. `--callback-id` is the only deduplication available for this
      provider.
-   - **Antigravity** — `Stop` only. The invocation and tool edges are identified
-     from `invocationNum` and `stepIdx`, both on the verified field list. `Stop` can
-     fire twice per invocation (idle, then fully idle), and the only field separating
-     those firings (`fullyIdle`) is an unconfirmed reconstruction — so keying it on
-     `invocationNum` would suppress the second, *real* firing rather than a
-     redelivery.
+   - **Antigravity** — `SessionStart`, an unlabeled tool payload, and both
+     invocation edges. `Stop` is identified from `executionNum` and `fullyIdle`
+     together, so an idle stop and a not-yet-idle stop stay distinct.
+     `PostToolUse` is identified from `stepIdx` only when the `error` string is
+     present; without it the payload is the same shape as `PreToolUse`, and
+     claiming either id would suppress the other edge. `PreInvocation` and
+     `PostInvocation` share `invocationNum`, so that counter is not an identity.
 
    A process killed between claiming a callback and completing it leaves an
    uncommitted claim; a later delivery reclaims it once `staleClaimMillis`
@@ -1216,12 +1231,18 @@ fixing one means updating that test rather than discovering a silent change.
    captured IDE runs and in neither CLI run, while `sessionEnd` fired in both CLI
    runs and in neither IDE run — from the same `hooks.json`. See
    [docs/registration-evidence.md](docs/registration-evidence.md).
-8. **Antigravity is experimental (release blocker for that provider).** It maps
-   only `tool.start`/`tool.end`; `PreInvocation`, `PostInvocation`, and `Stop` are
-   ignored rather than mapped to invented session or generation identities. Its
-   open promotion gates are printed by `otel-hook providers`. Its hook-file
-   *shape* is recorded but no install *path* has been verified, so `setup`
-   requires an explicit `--settings-file` and `diagnose` does not sweep it.
+8. **Antigravity is experimental (release blocker for that provider).** The
+   published hooks reference is implemented where a payload belongs to one
+   event: `session.start` from `SessionStart`, and `tool.end` from `PostToolUse`
+   only when `error` is present. There is no usage field to map, `Stop` is not
+   a session or generation end, the invocation pair shares one stdin shape, and
+   `invoke_subagent` is a tool rather than a subagent lifecycle. Those are
+   exclusions, each covered by a test. Two gates stay open and are printed by
+   `otel-hook providers`: this repository has no captured Antigravity
+   transcript (the fixtures are synthetic reconstructions of the reference, and
+   their provenance says so), and stdin still does not separate the unlabeled
+   tool and invocation edges. `setup` writes the documented project and global
+   paths.
 9. **No Python parity is claimed for Codex or Gemini CLI.** The pinned
     `opentelemetry-hooks==0.14.0` reference rewrites Gemini's `BeforeTool` into
     Claude Code's `PreToolUse` (`DIVERGENCE-007`), and reads Codex's

@@ -1,0 +1,11 @@
+{
+  "fixture": "post-tool-use-null-tool.json",
+  "sourceContract": "Antigravity tool step with toolCall null. A secondary agy 1.1.21 note reports PostToolUse doing this on non-tool steps; the official reference does not",
+  "provider": "antigravity",
+  "capturedDate": "2026-11-02",
+  "author": "otel-hook antigravity provider owner (agent)",
+  "sanitization": "No captured payload. Ids, model name, paths, tool arguments, and error text are placeholders under /workspace/example-repo. Secret-shaped strings, where present, are fabricated.",
+  "licenseBasis": "Original synthetic authorship. Field names follow antigravity.google/docs/hooks (read 2026-11-02). Every value is invented; no transcript, path, or credential is copied.",
+  "sha256": "fb88ffa8a6a82ab9fbb17bfbd6bbcf00a6e8215f567c83cca8d68a5994a4c9d4",
+  "notes": "Synthetic. Null is not given a tool name. No lifecycle event is invented for it."
+}

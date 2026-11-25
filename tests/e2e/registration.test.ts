@@ -77,21 +77,31 @@ const readJson = async (filePath: string): Promise<Record<string, unknown>> =>
   JSON.parse(await readFile(filePath, "utf8")) as Record<string, unknown>;
 
 /**
- * Every managed command in a hook document, across both shapes this tool writes:
- * the nested matcher-group form (Claude Code, Codex, Gemini CLI) and the flat
- * one-entry-per-event form (Cursor, Antigravity).
+ * Every managed command in a hook document, across the shapes this tool writes:
+ * the nested matcher-group form (Claude Code, Codex, Gemini CLI), Cursor's flat
+ * list, and Antigravity's named-hook map.
  */
-const commandsIn = (document: Record<string, unknown>): readonly string[] => {
-  const hooks = (document.hooks ?? {}) as Record<string, readonly Record<string, unknown>[]>;
-  return Object.values(hooks).flatMap((entries) =>
-    entries.flatMap((entry) => {
-      const nested = entry.hooks;
-      if (Array.isArray(nested)) {
-        return (nested as readonly { command: string }[]).map((hook) => hook.command);
+const commandsIn = (document: unknown): readonly string[] => {
+  const found: string[] = [];
+  const visit = (value: unknown): void => {
+    if (Array.isArray(value)) {
+      for (const entry of value) {
+        visit(entry);
       }
-      return typeof entry.command === "string" ? [entry.command] : [];
-    }),
-  );
+      return;
+    }
+    if (typeof value === "object" && value !== null) {
+      const record = value as Record<string, unknown>;
+      if (typeof record.command === "string") {
+        found.push(record.command);
+      }
+      for (const child of Object.values(record)) {
+        visit(child);
+      }
+    }
+  };
+  visit(document);
+  return found;
 };
 
 const VERIFIED_PROVIDERS = [
@@ -132,7 +142,8 @@ describe("otel-hook setup: every verified planner", () => {
         expect(removed.report.outcomes[0]?.status).toBe("applied");
         expect(await readFile(expectedPath, "utf8")).toBe("{}\n");
       }
-    });
+      // Setup, a second setup, and uninstall, in both scopes: six CLI processes.
+    }, 20_000);
   }
 
   it("upgrades a registration an older version wrote, without duplicating it", async () => {
@@ -248,9 +259,21 @@ describe("otel-hook diagnose", () => {
     const result = await runRegistration(["diagnose"], roots);
 
     expect(result.code).toBe(0);
-    // Exactly the providers this tool can locate on its own, in both scopes.
-    expect(result.report.outcomes).toHaveLength(VERIFIED_PROVIDERS.length * 2);
+    // VERIFIED_PROVIDERS lists the four providers whose two scopes share one
+    // relative path. Antigravity is also located (project .agents/hooks.json,
+    // global .gemini/config/hooks.json), so diagnose sweeps two more outcomes.
+    expect(result.report.outcomes).toHaveLength((VERIFIED_PROVIDERS.length + 1) * 2);
     expect(result.report.outcomes.every((outcome) => outcome.status === "absent")).toBe(true);
+    const antigravityPaths = result.report.outcomes
+      .filter((outcome) => outcome.providerId === "antigravity")
+      .map((outcome) => outcome.configPath)
+      .sort();
+    expect(antigravityPaths).toEqual(
+      [
+        path.join(roots.home, ".gemini", "config", "hooks.json"),
+        path.join(roots.project, ".agents", "hooks.json"),
+      ].sort(),
+    );
     await expect(readFile(path.join(roots.home, ".claude"), "utf8")).rejects.toThrow();
   });
 
@@ -353,12 +376,21 @@ describe("otel-hook setup: cursor's own document shape", () => {
   });
 });
 
-describe("otel-hook setup: providers this repository will not guess for", () => {
-  it("refuses antigravity without a path, and accepts one the caller supplies", async () => {
+describe("otel-hook setup: Antigravity paths", () => {
+  it("writes the documented project file and still accepts an explicit path", async () => {
     const roots = await withRoots();
-    const refused = await runRegistration(["setup", "--provider", "antigravity"], roots);
-    expect(refused.code).toBe(1);
-    expect(refused.report.outcomes[0]?.problems.join(" ")).toContain("--settings-file");
+    const project = await runRegistration(["setup", "--provider", "antigravity", "--scope", "project"], roots);
+    expect(project.code).toBe(0);
+    const projectFile = path.join(roots.project, ".agents", "hooks.json");
+    expect(project.report.outcomes[0]?.configPath).toBe(projectFile);
+    expect(commandsIn(await readJson(projectFile))).toContain("otel-hook run --provider antigravity");
+    const named = (await readJson(projectFile))["otel-hook"] as Record<string, unknown>;
+    expect(named.SessionStart).toEqual([
+      { type: "command", command: "otel-hook run --provider antigravity" },
+    ]);
+    expect(named.PostToolUse).toEqual([
+      { matcher: "*", hooks: [{ type: "command", command: "otel-hook run --provider antigravity" }] },
+    ]);
 
     const hookFile = path.join(roots.project, "runner", "hooks.json");
     const accepted = await runRegistration(
@@ -366,9 +398,7 @@ describe("otel-hook setup: providers this repository will not guess for", () => 
       roots,
     );
     expect(accepted.code).toBe(0);
-    expect(Object.keys((await readJson(hookFile)).hooks as Record<string, unknown>)).toContain(
-      "PreToolUse",
-    );
+    expect((await readJson(hookFile))["otel-hook"]).toBeDefined();
   });
 
   it("prints a human-readable report without --json", async () => {

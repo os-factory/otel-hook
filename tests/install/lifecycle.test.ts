@@ -265,24 +265,28 @@ describe("setup", () => {
     expect(Object.keys(written.hooks)).not.toContain("afterMCPExecution");
   });
 
-  it("refuses antigravity without an explicit path, because none is verified", async () => {
+  it("registers antigravity at the documented project and global paths", async () => {
     const roots = await scratch();
-    const outcome = only(await run(roots, { providerIds: ["antigravity"] }));
+    const project = only(await run(roots, { providerIds: ["antigravity"], scopes: ["project"] }));
+    const global = only(await run(roots, { providerIds: ["antigravity"], scopes: ["global"] }));
 
-    expect(outcome.status).toBe("unsupported");
-    expect(outcome.problems[0]).toContain("--settings-file");
+    expect(project.status).toBe("applied");
+    expect(project.configPath).toBe(path.join(roots.project, ".agents", "hooks.json"));
+    expect(global.configPath).toBe(path.join(roots.home, ".gemini", "config", "hooks.json"));
+    const written = await readJson(project.configPath ?? "");
+    expect(written["otel-hook"]).toMatchObject({
+      SessionStart: [{ type: "command", command: "otel-hook run --provider antigravity" }],
+    });
   });
 
-  it("registers antigravity into a path the caller vouches for", async () => {
+  it("still registers antigravity into a path the caller vouches for", async () => {
     const roots = await scratch();
     const hookFile = path.join(roots.project, "runner", "hooks.json");
     const outcome = only(await run(roots, { providerIds: ["antigravity"], configFile: hookFile }));
 
     expect(outcome.status).toBe("applied");
     expect(outcome.evidence).toContain("--settings-file");
-    expect(Object.keys((await readJson(hookFile)).hooks as Record<string, unknown>)).toContain(
-      "PreToolUse",
-    );
+    expect((await readJson(hookFile))["otel-hook"]).toBeDefined();
   });
 });
 

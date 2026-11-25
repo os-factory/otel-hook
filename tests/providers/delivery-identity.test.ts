@@ -510,36 +510,69 @@ describe("delivery identity: Gemini CLI", () => {
 });
 
 describe("delivery identity: Antigravity", () => {
-  const base = { conversationId: "conv-ag", workspacePaths: ["/workspace/demo"], invocationNum: 2 };
+  const base = {
+    conversationId: "conv-ag",
+    workspacePaths: ["/workspace/demo"],
+    modelName: "example-model",
+  };
 
-  it("identifies a tool step from the two verified counters", () => {
+  it("identifies PostToolUse from stepIdx only once error shows which edge it is", () => {
     expect(
       claimFor("antigravity", {
         ...base,
-        hookEventName: "PreToolUse",
         stepIdx: 3,
-        toolName: "run_command",
-        toolInput: { command: "antigravity secret" },
+        error: "exit status 1",
+        toolCall: { name: "run_command", args: { CommandLine: "antigravity secret" } },
       }).claim?.components,
-    ).toEqual(["2", "3"]);
+    ).toEqual(["3"]);
   });
 
-  it("identifies the invocation edges from invocationNum, which is on the verified list", () => {
-    // `invocationNum` is present on every Antigravity payload and is one of the
-    // fields the integration task named as verified. A counter named for the
-    // invocation it numbers repeats on a redelivery and advances on a genuine
-    // second invocation, which is the same argument the tool pair rests on.
-    for (const hookEventName of ["PreInvocation", "PostInvocation"]) {
-      const claim = claimFor("antigravity", { ...base, hookEventName, agentVersion: "1.2.3" }).claim;
-      expect(claim?.components, hookEventName).toEqual(["2"]);
-      expect(claim?.evidence.join(" "), hookEventName).toContain("invocationNum");
-    }
+  it("does not identify an unlabeled tool or invocation payload", () => {
+    expect(
+      claimFor("antigravity", {
+        ...base,
+        stepIdx: 3,
+        toolCall: { name: "run_command", args: { CommandLine: "pwd" } },
+      }).claim,
+    ).toBeUndefined();
+    expect(
+      claimFor("antigravity", { ...base, invocationNum: 2, initialNumSteps: 4 }).claim,
+    ).toBeUndefined();
   });
 
-  it("keeps the two invocation edges distinct from each other and from the tool edges", () => {
+  it("identifies Stop from executionNum and fullyIdle, and keeps the two idle states apart", () => {
     const ids = createDeterministicIdGenerator();
-    const identityOf = (payload: Record<string, unknown>): string => {
-      const claim = claimFor("antigravity", payload).claim;
+    const idOf = (fullyIdle: boolean): string => {
+      const claim = claimFor("antigravity", {
+        ...base,
+        executionNum: 1,
+        terminationReason: "model_stop",
+        fullyIdle,
+      }).claim;
+      if (claim === undefined) {
+        throw new Error("expected a Stop claim");
+      }
+      return resolveDeliveryIdentity({
+        ids,
+        providerId: "antigravity",
+        installationId: "install-1",
+        claim,
+      }).callbackId;
+    };
+
+    expect(idOf(false)).not.toBe(idOf(true));
+    expect(idOf(true)).toBe(idOf(true));
+  });
+
+  it("separates two PostToolUse steps in one conversation", () => {
+    const ids = createDeterministicIdGenerator();
+    const at = (stepIdx: number): string => {
+      const claim = claimFor("antigravity", {
+        ...base,
+        stepIdx,
+        error: "",
+        toolCall: { name: "view_file", args: {} },
+      }).claim;
       if (claim === undefined) {
         throw new Error("expected a claim");
       }
@@ -551,48 +584,8 @@ describe("delivery identity: Antigravity", () => {
       }).callbackId;
     };
 
-    const callbackIds = new Set([
-      identityOf({ ...base, hookEventName: "PreInvocation" }),
-      identityOf({ ...base, hookEventName: "PostInvocation" }),
-      identityOf({ ...base, hookEventName: "PreToolUse", stepIdx: 0, toolName: "run_command" }),
-      identityOf({ ...base, hookEventName: "PostToolUse", stepIdx: 0, toolName: "run_command" }),
-    ]);
-    expect(callbackIds.size).toBe(4);
-  });
-
-  it("separates two invocations in one conversation", () => {
-    const ids = createDeterministicIdGenerator();
-    const claimAt = (invocationNum: number): ProviderDeliveryClaim => {
-      const claim = claimFor("antigravity", {
-        ...base,
-        invocationNum,
-        hookEventName: "PreInvocation",
-      }).claim;
-      if (claim === undefined) {
-        throw new Error("expected a claim");
-      }
-      return claim;
-    };
-    const at = (invocationNum: number): string =>
-      resolveDeliveryIdentity({
-        ids,
-        providerId: "antigravity",
-        installationId: "install-1",
-        claim: claimAt(invocationNum),
-      }).callbackId;
-
     expect(at(2)).not.toBe(at(3));
-    // A redelivery repeats the counter, so it must recompute the same identity.
     expect(at(2)).toBe(at(2));
-  });
-
-  it("refuses Stop, whose only separating field is an unconfirmed reconstruction", () => {
-    // `invocationNum` would *look* like an identity here and would be worse than
-    // none: Stop can fire twice per invocation (idle, then fully idle), so keying on
-    // it would suppress the second, real firing.
-    expect(
-      claimFor("antigravity", { ...base, hookEventName: "Stop", fullyIdle: true }).claim,
-    ).toBeUndefined();
   });
 });
 
@@ -618,7 +611,7 @@ describe("delivery identity: per-callback gap diagnostics", () => {
       "postToolUseFailure",
     ],
     "gemini-cli": [],
-    antigravity: ["PreInvocation", "PostInvocation", "PreToolUse", "PostToolUse"],
+    antigravity: ["Stop"],
   };
 
   const eventNamesFor = async (providerId: string): Promise<readonly string[]> => {
