@@ -3,14 +3,15 @@
  * Local OTLP/HTTP receiver that writes every request to disk.
  *
  * Test helper for the end-to-end proof runs (issue #56, docs/e2e-proof.md) and
- * the agent live lab. It is not a collector: it accepts OTLP/HTTP traces and logs
- * in either encoding (protobuf or JSON), answers, and records what arrived. It
+ * the agent live lab. It is not a collector: it accepts OTLP/HTTP traces, logs and
+ * metrics in either encoding (protobuf or JSON), answers, and records what arrived. It
  * never forwards anything anywhere.
  *
  * Capture directory layout (one pair per request, numbered in arrival order):
  *
  *   0001-traces.body   the raw request body, byte for byte (0 bytes if empty)
  *   0001-traces.json   metadata + decoded records (see `requestRecord` below)
+ *   0002-metrics.body  `/v1/metrics` requests; `.json` holds one decoded entry per data point
  *   ...
  *   summary.json       written on close: counts per signal, empty bodies, statuses
  *
@@ -30,7 +31,7 @@
  * CLI:
  *   node scripts/e2e-proof/otlp-receiver.mjs --capture-dir <dir>
  *     [--host 127.0.0.1] [--port 4318] [--fail-first N] [--fail-status 503]
- *     [--fail-signal traces|logs|all]
+ *     [--fail-signal traces|logs|metrics|all]
  *
  * Prints one JSON line `{"event":"listening",...}` on stdout once bound, one
  * line per request on stderr, and writes summary.json on SIGINT/SIGTERM, or
@@ -99,7 +100,7 @@ const pad = (seq) => String(seq).padStart(4, "0");
  * @param {number} [options.port] port (default 0: ephemeral)
  * @param {number} [options.failFirst] answer the first N matching requests with `failStatus`
  * @param {number} [options.failStatus] status for injected failures (default 503)
- * @param {"traces"|"logs"|"all"} [options.failSignal] which requests count toward `failFirst`
+ * @param {"traces"|"logs"|"metrics"|"all"} [options.failSignal] which requests count toward `failFirst`
  * @param {(line: string) => void} [options.log] per-request log sink
  */
 export const startOtlpReceiver = async (options = {}) => {
@@ -175,6 +176,7 @@ export const startOtlpReceiver = async (options = {}) => {
         counts: {
           spans: decoded?.spans.length ?? 0,
           logs: decoded?.logs.length ?? 0,
+          metrics: decoded?.metrics.length ?? 0,
         },
         ...(decodeError === undefined ? {} : { decodeError }),
         decoded: decoded ?? null,
@@ -190,13 +192,13 @@ export const startOtlpReceiver = async (options = {}) => {
 
       log(
         `otlp-receiver: #${String(seq)} ${req.method ?? ""} ${requestPath} ${String(body.length)}B` +
-          `${body.length === 0 ? " EMPTY" : ""} spans=${String(record.counts.spans)} logs=${String(record.counts.logs)}` +
+          `${body.length === 0 ? " EMPTY" : ""} spans=${String(record.counts.spans)} logs=${String(record.counts.logs)} metrics=${String(record.counts.metrics)}` +
           ` -> ${String(status)}${injected ? " (injected)" : ""}${decodeError === undefined ? "" : ` decode-error: ${decodeError}`}`,
       );
 
       const json = isJsonContentType(contentType);
       res.writeHead(status, { "content-type": json ? "application/json" : "application/x-protobuf" });
-      // An empty ExportTrace/LogsServiceResponse: `{}` in JSON, zero bytes in protobuf.
+      // An empty ExportTrace/Logs/MetricsServiceResponse: `{}` in JSON, zero bytes in protobuf.
       res.end(json && status === 200 ? "{}" : undefined);
     });
   });
@@ -215,11 +217,12 @@ export const startOtlpReceiver = async (options = {}) => {
   const summary = () => {
     const bySignal = {};
     for (const request of requests) {
-      const entry = (bySignal[request.signal] ??= { requests: 0, empty: 0, spans: 0, logs: 0 });
+      const entry = (bySignal[request.signal] ??= { requests: 0, empty: 0, spans: 0, logs: 0, metrics: 0 });
       entry.requests += 1;
       entry.empty += request.empty ? 1 : 0;
       entry.spans += request.counts.spans;
       entry.logs += request.counts.logs;
+      entry.metrics += request.counts.metrics;
     }
     return {
       format: CAPTURE_FORMAT,
@@ -235,6 +238,7 @@ export const startOtlpReceiver = async (options = {}) => {
     endpoint: origin,
     tracesUrl: `${origin}/v1/traces`,
     logsUrl: `${origin}/v1/logs`,
+    metricsUrl: `${origin}/v1/metrics`,
     captureDir,
     /** In-memory copy of every request: metadata plus `body` (decompressed) and `rawBody`. */
     requests,
@@ -263,7 +267,7 @@ export const startOtlpReceiver = async (options = {}) => {
 // ---------------------------------------------------------------------------
 
 const USAGE = `usage: otlp-receiver.mjs --capture-dir <dir> [--host 127.0.0.1] [--port 0]
-                         [--fail-first N] [--fail-status 503] [--fail-signal traces|logs|all]
+                         [--fail-first N] [--fail-status 503] [--fail-signal traces|logs|metrics|all]
                          [--stop-on-stdin-close]`;
 
 const parseArgs = (argv) => {
@@ -296,8 +300,8 @@ const parseArgs = (argv) => {
         break;
       case "--fail-signal": {
         const signal = need();
-        if (!["traces", "logs", "all"].includes(signal)) {
-          throw new Error("--fail-signal expects traces, logs or all");
+        if (!["traces", "logs", "metrics", "all"].includes(signal)) {
+          throw new Error("--fail-signal expects traces, logs, metrics or all");
         }
         options.failSignal = signal;
         break;
@@ -344,6 +348,7 @@ if (isMain) {
       endpoint: receiver.endpoint,
       tracesUrl: receiver.tracesUrl,
       logsUrl: receiver.logsUrl,
+      metricsUrl: receiver.metricsUrl,
       captureDir: receiver.captureDir,
     })}\n`,
   );

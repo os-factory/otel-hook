@@ -50,6 +50,37 @@ export const DEFAULT_LOGS_POLICY: LogsPolicy = Object.freeze({
 });
 
 /**
+ * Policy for hook-derived metrics (issue #69).
+ *
+ * Off by default, like logs: an upgrade must not start a new stream to a
+ * collector nobody sized for it. `enabled` governs the `default` destination
+ * (the single-endpoint settings); an `exporter.destinations[]` entry receives
+ * metrics when its `signals` list names `metrics`. Metrics carry no content, so
+ * listing the signal is the whole opt-in.
+ *
+ * - `temporality`: `cumulative` (default) exports running totals per series,
+ *   kept in the state store across hook processes, so a receiver that merges
+ *   counters by keeping the largest value stays correct. `delta` exports what one
+ *   callback observed and keeps no state.
+ * - `includeSessionId`: put `session.id` on every data point (default true). Turn
+ *   it off where per-session series are too many for the backend.
+ */
+export const metricsPolicySchema = z.strictObject({
+  enabled: z.boolean(),
+  /** Full URL. Absent, derived from `endpoint` (`/v1/traces` becomes `/v1/metrics`). */
+  endpoint: z.string().url().max(2048).optional(),
+  temporality: z.enum(["cumulative", "delta"]),
+  includeSessionId: z.boolean(),
+});
+export type MetricsPolicy = z.infer<typeof metricsPolicySchema>;
+
+export const DEFAULT_METRICS_POLICY: MetricsPolicy = Object.freeze({
+  enabled: false,
+  temporality: "cumulative",
+  includeSessionId: true,
+});
+
+/**
  * Runtime exporter policy.
  *
  * This describes *where and how* telemetry goes. It deliberately contains no
@@ -86,6 +117,11 @@ export const exporterPolicySchema = z.strictObject({
    * a second top-level section would invite two of each to drift apart.
    */
   logs: logsPolicySchema,
+  /**
+   * Hook-derived metrics. Optional so an `ExporterPolicy` built by hand before
+   * metrics existed stays valid; absent reads as {@link DEFAULT_METRICS_POLICY}.
+   */
+  metrics: metricsPolicySchema.optional(),
   /**
    * Additional OTLP destinations, each sent every batch in parallel.
    *
@@ -158,10 +194,11 @@ export const otelHookConfigPatchSchema = z.strictObject({
   // merging happens per leaf, so a layer must be able to set `logs.enabled` alone
   // without also restating the endpoint and the batch size.
   exporter: exporterPolicySchema
-    .omit({ logs: true, spool: true })
+    .omit({ logs: true, metrics: true, spool: true })
     .partial()
     .extend({
       logs: logsPolicySchema.partial().optional(),
+      metrics: metricsPolicySchema.partial().optional(),
       spool: spoolPolicySchema.partial().optional(),
     })
     .optional(),
@@ -192,6 +229,7 @@ export const DEFAULT_EXPORTER_POLICY: ExporterPolicy = Object.freeze({
   serviceName: "coding-agent",
   resourceAttributes: EMPTY_RESOURCE_ATTRIBUTES,
   logs: DEFAULT_LOGS_POLICY,
+  metrics: DEFAULT_METRICS_POLICY,
 });
 
 export const DEFAULT_DETECTION_POLICY: DetectionPolicy = Object.freeze({
@@ -223,3 +261,9 @@ export const readsClaudeTranscriptUsage = (config: OtelHookConfig): boolean =>
 
 /** Content mode is re-exported for callers building patches. */
 export { contentModeSchema };
+
+/** The metrics policy in force, defaults filled in. */
+export const effectiveMetricsPolicy = (exporter: ExporterPolicy): MetricsPolicy => ({
+  ...DEFAULT_METRICS_POLICY,
+  ...(exporter.metrics ?? {}),
+});

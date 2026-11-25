@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { makeTempDir, startReceiverProcess, type ReceiverProcess } from "./harness.js";
+import { SYNTHETIC_START, jsonMetricsBody, passingMetricPoints, protobufMetricsBody } from "./otlp-metrics.js";
 
 /**
  * The disk receiver used by the e2e proof runs (scripts/e2e-proof/otlp-receiver.mjs),
@@ -40,8 +41,24 @@ type Meta = {
   injectedFailure: boolean;
   encoding: string;
   headers: Record<string, string>;
-  counts: { spans: number; logs: number };
-  decoded: { spans: { name: string; attributes: Record<string, unknown> }[]; logs: { attributes: Record<string, unknown> }[] } | null;
+  counts: { spans: number; logs: number; metrics: number };
+  decoded: {
+    spans: { name: string; attributes: Record<string, unknown> }[];
+    logs: { attributes: Record<string, unknown> }[];
+    metrics: {
+      name: string;
+      type: string;
+      temporality: string;
+      monotonic: boolean;
+      value?: number;
+      histogram?: { count: number; sum?: number; bucketCounts: number[]; explicitBounds: number[] };
+      startTimeUnixNanos: string;
+      timeUnixNanos: string;
+      attributes: Record<string, unknown>;
+      resourceAttributes: Record<string, unknown>;
+      scopeName: string;
+    }[];
+  } | null;
 };
 
 const readMeta = async (captureDir: string, stem: string): Promise<Meta> =>
@@ -128,7 +145,7 @@ describe("otlp-receiver: writes every OTLP request to disk", () => {
 
     const second = await readMeta(captureDir, "0002-traces");
     expect(second).toMatchObject({ seq: 2, empty: false, responseStatus: 200, injectedFailure: false, encoding: "json" });
-    expect(second.counts).toEqual({ spans: 1, logs: 0 });
+    expect(second.counts).toEqual({ spans: 1, logs: 0, metrics: 0 });
     expect(second.decoded?.spans[0]?.name).toBe("tool Read");
     expect(second.decoded?.spans[0]?.attributes["gen_ai.usage.input_tokens"]).toBe(12);
     expect(second.headers.authorization).toBe("<redacted:Basic>");
@@ -145,6 +162,50 @@ describe("otlp-receiver: writes every OTLP request to disk", () => {
     }
     const summary = JSON.parse(await readFile(path.join(captureDir, "summary.json"), "utf8")) as Record<string, unknown>;
     expect(summary).toMatchObject({ requests: 3, emptyRequests: [1], bySignal: { traces: { requests: 2, empty: 1, spans: 1 } } });
+  }, 30_000);
+
+  it("classifies /v1/metrics and decodes both encodings into one data point per entry", async () => {
+    const { receiver, captureDir } = await withReceiver(["--fail-first", "1", "--fail-signal", "metrics"]);
+    const points = passingMetricPoints("cumulative", SYNTHETIC_START + 5);
+    const post = (url: string, contentType: string, body: Uint8Array): Promise<Response> =>
+      fetch(url, { method: "POST", headers: { "content-type": contentType }, body: Buffer.from(body) });
+
+    expect((await post(receiver.tracesUrl, "application/x-protobuf", new Uint8Array(0))).status).toBe(200);
+    expect((await post(`${receiver.endpoint}/v1/metrics`, "application/x-protobuf", protobufMetricsBody(points))).status).toBe(503);
+    expect((await post(`${receiver.endpoint}/v1/metrics`, "application/x-protobuf", protobufMetricsBody(points))).status).toBe(200);
+    expect((await post(`${receiver.endpoint}/v1/metrics`, "application/json", jsonMetricsBody(points))).status).toBe(200);
+
+    const closed = await receiver.stop();
+    expect(closed).toMatchObject({ requests: 4, injectedFailures: [2] });
+
+    const files = (await readdir(captureDir)).sort();
+    expect(files).toContain("0002-metrics.body");
+    expect(files).toContain("0004-metrics.json");
+
+    const protobuf = await readMeta(captureDir, "0003-metrics");
+    const json = await readMeta(captureDir, "0004-metrics");
+    expect(protobuf).toMatchObject({ signal: "metrics", encoding: "protobuf", responseStatus: 200 });
+    expect(protobuf.counts).toEqual({ spans: 0, logs: 0, metrics: points.length });
+    // The two encodings decode to the same points.
+    expect(json.decoded?.metrics).toEqual(protobuf.decoded?.metrics);
+
+    const metrics = protobuf.decoded?.metrics ?? [];
+    const input = metrics.find((point) => point.name === "gen_ai.client.token.usage" && point.attributes["gen_ai.token.type"] === "input");
+    expect(input).toMatchObject({
+      type: "histogram",
+      temporality: "cumulative",
+      monotonic: false,
+      histogram: { count: 1, sum: 200 },
+      startTimeUnixNanos: `${String(SYNTHETIC_START)}000000000`,
+      timeUnixNanos: `${String(SYNTHETIC_START + 5)}000000000`,
+      resourceAttributes: { "session.id": "har-synthetic-session-0002" },
+      scopeName: "@osfactory/otel-hook",
+    });
+    const tools = metrics.find((point) => point.name === "otelhook.tool.calls");
+    expect(tools).toMatchObject({ type: "sum", temporality: "cumulative", monotonic: true, value: 1, attributes: { "gen_ai.tool.name": "shell" } });
+
+    const summary = JSON.parse(await readFile(path.join(captureDir, "summary.json"), "utf8")) as Record<string, unknown>;
+    expect(summary).toMatchObject({ bySignal: { metrics: { requests: 3, empty: 0, metrics: points.length * 3 } } });
   }, 30_000);
 
   it("limits injected failures to one signal when asked", async () => {

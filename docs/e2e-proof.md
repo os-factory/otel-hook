@@ -15,7 +15,7 @@ What is in this repository:
 |---|---|---|
 | Disk receiver | `scripts/e2e-proof/otlp-receiver.mjs` | Local OTLP/HTTP endpoint that writes every request to disk |
 | Evidence checker | `scripts/e2e-proof/check-evidence.mjs` | Checks the matrix rows that can be decided from a capture; prints JSON and a markdown snippet |
-| Decoder | `scripts/e2e-proof/otlp-decode.mjs` | OTLP traces and logs, protobuf and JSON, shared with the agent lab |
+| Decoder | `scripts/e2e-proof/otlp-decode.mjs` | OTLP traces, logs and metrics, protobuf and JSON, shared with the agent lab |
 | Agent lab | `har-plugins/agent-lab/` | Offline run of a real agent CLI against a mocked model API; writes a capture and runs the checker on it |
 | Tests | `tests/e2e-proof/` | Receiver, checker (synthetic capture in `tests/fixtures/e2e-proof/`), and a miniature proof run through the built CLI |
 
@@ -68,7 +68,7 @@ Run all of them for every provider run:
    # one line per request on stderr; Ctrl-C writes summary.json
    ```
 
-   Add `--fail-first 1 --fail-signal traces` (or `logs`) for the spool replay
+   Add `--fail-first 1 --fail-signal traces` (or `logs`, `metrics`) for the spool replay
    row: the first matching request gets a 503, and the checker then proves that
    its records arrived in a later request. Use a separate run for this. A
    rejected first request changes what the first run's other rows see.
@@ -161,6 +161,7 @@ node scripts/e2e-proof/check-evidence.mjs proof/<provider>/capture \
   --work-unit-id otel-hook-56 \
   --expect-tool <tool the task used, e.g. Read> \
   --expect-usage input=<n>,output=<n>,cache_read=<n> \
+  --expect-metrics \
   --forbid "$PWD" --forbid "$HOME" --forbid "$(git config user.email)" \
   --forbid "<the sandbox checkout's absolute path>" \
   --json-out proof/<provider>/evidence.json \
@@ -175,6 +176,13 @@ node scripts/e2e-proof/check-evidence.mjs proof/<provider>/capture \
 - `--require-attr <key>` (repeatable) replaces the default list of profile keys
   that every record must carry: `factory.work_unit.id`,
   `vcs.repository.url.full` and `vcs.ref.head.name`.
+- `--expect-metrics` says the run must export metrics. Without it, a capture
+  with no `/v1/metrics` request skips the `metrics` check. A capture with at
+  least one metrics request is always checked.
+- `--expect-metric <name>` (repeatable) replaces the default list of metrics
+  that must be delivered: `gen_ai.client.token.usage`,
+  `gen_ai.client.operation.duration`, `otelhook.sessions` and
+  `otelhook.tool.calls`. It also implies `--expect-metrics`.
 - Each request is re-decoded from its raw `.body` file. The decoded copy in
   the metadata file is only there for people to read.
 - The output never contains a forbidden value, an email address or a full local
@@ -184,12 +192,20 @@ node scripts/e2e-proof/check-evidence.mjs proof/<provider>/capture \
 
 For each request, in arrival order:
 
-- `NNNN-<traces|logs|unknown>.body`: the raw request body, byte for byte.
+- `NNNN-<traces|logs|metrics|unknown>.body`: the raw request body, byte for byte.
   It is 0 bytes when the request was empty.
 - `NNNN-<signal>.json`: `seq`, `receivedAt`, `path`, `contentType`,
   `encoding`, `bytes`, `empty`, `responseStatus`, `injectedFailure`, header
   names, the scheme of `Authorization` (never its value), record counts, and
-  the decoded spans or log records.
+  the decoded spans, log records or metric data points.
+
+A `/v1/metrics` request decodes to one entry per data point: `name`, `unit`,
+`type` (`sum`, `gauge`, `histogram` or `exponential_histogram`),
+`temporality` (`cumulative`, `delta` or `unspecified`), `monotonic`, then
+`value` for a sum or gauge, or `histogram` (`count`, `sum`, `min`, `max`,
+`bucketCounts`, `explicitBounds`) for a histogram. Each entry also has
+`startTimeUnixNanos`, `timeUnixNanos`, `attributes`, `resourceAttributes`,
+`scopeName` and `scopeVersion`. Its count is `counts.metrics`.
 
 On exit, the receiver also writes `summary.json` (counts per signal, empty
 bodies, statuses).
@@ -213,6 +229,7 @@ Every cell is pending until a provider comment links its evidence.
 | Tool spans | pending | pending | pending | pending | pending | `tool-spans` (mechanical) |
 | Token usage (delta vs cumulative correct) | pending | pending | pending | pending | pending | `token-usage` (mechanical; needs `--expect-usage` for the cross-check) |
 | Logs signal | pending | pending | pending | pending | pending | `logs-signal` (mechanical) |
+| Metrics (token, duration, session, tool calls) | pending | pending | pending | pending | pending | `metrics` (mechanical, with `--expect-metrics`; `--expect-usage` cross-checks the token histogram) |
 | `OTEL_EXPORTER_OTLP_*_HEADERS` auth to Langfuse | pending | pending | pending | pending | pending | **manual**: the trace is in Langfuse. `headers-auth` only shows the header reached the receiver |
 | Multiple destinations + spool replay | pending | pending | pending | pending | pending | `multi-destination` (two captures; needs #54) + `spool-replay` (a `--fail-first` run) |
 | Privacy: no `factory.local.*`, no paths, no account identity | pending | pending | pending | pending | pending | `privacy` (mechanical, every destination, delivered and rejected requests) + a glance at Langfuse |
@@ -236,9 +253,10 @@ any span with `otelhook.usage.partial=true` holds one request only, so compare
 | `tool-spans` | At least one span has `gen_ai.tool.name`, and every `--expect-tool` has one. Unpaired tool spans are reported. |
 | `token-usage` | Usage is present. Every usage record has `otelhook.usage.temporality` set to `delta` or `cumulative`, and its counters are non-negative integers. A cumulative series never decreases, unless `otelhook.usage.reset_detected` is set. With `--expect-usage`, the session totals from generation spans equal the agent's own totals: deltas are summed, and a cumulative session counts its largest total once. If both deltas and running totals are present, the deltas never exceed the running total. |
 | `logs-signal` | At least one delivered log record has `otelhook.event.type`. Event types are reported, and so is how many records share a trace id with a span. |
-| `spool-replay` | Every record from a rejected (non-2xx) request arrives later in a successful request. The check is skipped when nothing was rejected, or when only empty bodies were. |
-| `multi-destination` | Given two or more capture directories, each received the same set of delivered records. The check is skipped with one capture directory. |
-| `privacy` | Across every request of every capture, delivered or rejected: no `factory.local.*` key and no `factory.local.` bytes; no attribute value, log body or span name that is an absolute path; no home-directory path in the raw bytes; no email address (except `git@`-style service users); no `user.*` or `enduser.*` identity key; no credentials inside a URL; no `--forbid` value. |
+| `metrics` | At least one delivered metrics request decodes, and every expected metric has a point (see `--expect-metric`). Known metrics have their contract type and unit, and counters are monotonic sums. Sums and histograms have a `cumulative` or `delta` temporality. A cumulative series (name, point attributes, resource `session.id`) never goes down within one start time, ordered by the point's time. A newer start time is a reset: it is allowed and reported. The same point sent twice is counted once; sent twice with different values, it fails. With `--expect-usage`, the `gen_ai.client.token.usage` totals per `gen_ai.token.type` equal the agent's own totals. A cumulative series counts the last running total of each start time; delta points are summed. `reasoning` has no token type, so it is not compared. With `--expect-tool`, `otelhook.tool.calls` has a series for that tool. With `--session-id`, the report says how many points carry it, on the point or the resource. Point counts, types and temporality are reported per metric. The check is skipped when the capture holds no metrics request, unless `--expect-metrics` or `--expect-metric` is given. |
+| `spool-replay` | Every record from a rejected (non-2xx) request arrives later in a successful request. A rejected metric point counts as replayed when the same point arrives later, or, for a cumulative series, a later snapshot with the same start time does. The check is skipped when nothing was rejected, or when only empty bodies were. |
+| `multi-destination` | Given two or more capture directories, each received the same set of delivered records and the same set of metric data points (name, attributes, resource `session.id`, times and value). The check is skipped with one capture directory. |
+| `privacy` | Across every request of every capture, delivered or rejected, spans, log records and metric points alike: no `factory.local.*` key and no `factory.local.` bytes; no attribute value, log body, span name or metric name that is an absolute path; no home-directory path in the raw bytes; no email address (except `git@`-style service users); no `user.*` (`email`, `name`, `id`, `account_uuid`, ...), `enduser.*` or `organization.id` identity key; no credentials inside a URL; no `--forbid` value. |
 | `headers-auth` | Manual. Reports which `Authorization` schemes reached the receiver. |
 | `trace-proof` | Manual. Lists the session trace ids to match against the proof. |
 
@@ -268,9 +286,15 @@ AGENT_LAB_KEEP=1 npm run lab:claude    # or lab:codex
 # <labRoot>/otlp-capture/ is the capture, <labRoot>/evidence.md the checker's snippet
 ```
 
-The lab puts a synthetic launcher profile on the hook command. Its report
-includes the checker's result (informational: the lab's own pass/fail is
-unchanged). When this page was written:
+The lab puts a synthetic launcher profile on the hook command. It also turns
+on metrics (`--metrics`) for the default destination, and adds a second
+destination that lists only `traces` (`<labRoot>/otlp-capture-traces-only/`).
+The lab fails when the metrics destination misses one of the four metrics, when a
+metric point lacks the launcher's `session.id` or carries account identity, or
+when the traces-only destination receives a metric or no traces. Its report has a
+`metrics` section (token totals, counters, durations, requests per destination)
+and the checker's result, run with `--expect-metrics`. The rest of the checker
+result is informational. When this page was written:
 
 - **Claude Code 2.1.331**: every mechanical row passed. The usage totals
   matched the scenario's frozen numbers.
@@ -279,6 +303,10 @@ unchanged). When this page was written:
   generation span carries `cumulative` usage, and the totals matched Codex's
   own report. Decide in #18 whether the session row is "not supported" for
   Codex, or needs another closing edge.
+- **Metrics (#69)**, with Claude Code 2.1.332 and Codex 0.163.0: the `metrics`
+  check passed for both. The token histogram totals matched each agent's own
+  totals (Codex reports a running total; the metric holds the per-turn
+  difference). The traces-only destination received traces and no metrics.
 
 Only Claude Code and Codex have lab drivers. Cursor, Gemini CLI and
 Antigravity each need a driver under `har-plugins/agent-lab/scripts/providers/`
@@ -315,6 +343,7 @@ Post one comment per provider on #56 and edit it in place.
 | Tool spans | ☐ | checker `tool-spans` |
 | Token usage (delta vs cumulative correct) | ☐ | checker `token-usage` with `--expect-usage` |
 | Logs signal | ☐ | checker `logs-signal` |
+| Metrics (token, duration, session, tool calls) | ☐ | checker `metrics` with `--expect-metrics` and `--expect-usage` |
 | `OTEL_EXPORTER_OTLP_*_HEADERS` auth to Langfuse | ☐ | Langfuse link; how the variable reached the hook |
 | Multiple destinations + spool replay | ☐ | checker `multi-destination` (two captures) + `spool-replay` (`--fail-first` run) |
 | Privacy: no `factory.local.*`, no paths, no account identity | ☐ | checker `privacy` (forbidden: cwd, home, git email, sandbox path) |

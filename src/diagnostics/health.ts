@@ -14,6 +14,7 @@ export type DeliverySubsystem =
   | "state-store"
   | "telemetry-sink"
   | "telemetry-log-sink"
+  | "telemetry-metric-sink"
   | "lifecycle";
 
 /**

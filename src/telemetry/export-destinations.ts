@@ -6,13 +6,15 @@ import {
   resolveExportDestinations,
   type ExportDestination,
 } from "../config/destinations.js";
-import type { ExporterPolicy } from "../config/schema.js";
+import { siblingSignalEndpoint } from "../config/otlp-endpoint.js";
+import { effectiveMetricsPolicy, type ExporterPolicy } from "../config/schema.js";
 import type { DeliveryHealthSnapshot } from "../diagnostics/health.js";
 import { createHealthTracker } from "../diagnostics/health.js";
 import { errorInfoFromThrown, type OtelHookErrorInfo } from "../errors/index.js";
 import type { CanonicalEvent } from "../model/events.js";
 import type { Clock, Logger, TelemetryEmitResult } from "../runtime/ports.js";
 import { createFileDurableLogSpool, type DurableLogSpool } from "./durable-log-spool.js";
+import { createFileDurableMetricSpool, type DurableMetricSpool } from "./durable-metric-spool.js";
 import { createFileDurableSpool, type DurableSpool } from "./durable-spool.js";
 import type { LogContentPolicy } from "./log-records.js";
 import {
@@ -20,6 +22,11 @@ import {
   resolveLogsEndpoint,
   type OtlpLogTelemetrySink,
 } from "./otlp-log-sink.js";
+import {
+  createDisabledOtlpMetricSink,
+  createOtlpMetricSink,
+  type OtlpMetricTelemetrySink,
+} from "./otlp-metric-sink.js";
 import { createOtlpTraceSink, type OtlpTelemetrySink } from "./otlp-sink.js";
 import type { SpanCorrelationResolver } from "./semconv.js";
 import { createSignalFanout, type SignalFanoutSink } from "./signal-fanout.js";
@@ -34,10 +41,14 @@ import { createSignalFanout, type SignalFanoutSink } from "./signal-fanout.js";
  */
 export const spoolQueueNamesFor = (
   destination: string,
-): { readonly traces: string; readonly logs: string } =>
+): { readonly traces: string; readonly logs: string; readonly metrics: string } =>
   destination === DEFAULT_DESTINATION_NAME
-    ? { traces: "spool", logs: "spool-logs" }
-    : { traces: `destinations/${destination}/spool`, logs: `destinations/${destination}/spool-logs` };
+    ? { traces: "spool", logs: "spool-logs", metrics: "spool-metrics" }
+    : {
+        traces: `destinations/${destination}/spool`,
+        logs: `destinations/${destination}/spool-logs`,
+        metrics: `destinations/${destination}/spool-metrics`,
+      };
 
 /**
  * The exporter policy one destination's sinks are built from.
@@ -71,8 +82,16 @@ export const exporterPolicyForDestination = (
           });
           return "endpoint" in derived ? derived.endpoint : undefined;
         })());
+  const { metrics: sharedMetrics, ...rest } = shared;
+  // Like logs: an explicit metrics URL wins; otherwise derive from `endpoint`, and
+  // failing that let the sink derive from the traces URL.
+  const derivedMetrics =
+    destination.metricsEndpoint ??
+    (destination.endpoint === undefined
+      ? undefined
+      : siblingSignalEndpoint(destination.endpoint, "metrics"));
   return {
-    ...shared,
+    ...rest,
     protocol: destination.protocol,
     ...(tracesEndpoint === undefined ? {} : { endpoint: tracesEndpoint }),
     headerNames: Object.keys(destination.headers).sort(),
@@ -80,6 +99,11 @@ export const exporterPolicyForDestination = (
       ...logs,
       enabled: destination.signals.logs,
       ...(derivedLogs === undefined ? {} : { endpoint: derivedLogs }),
+    },
+    metrics: {
+      ...effectiveMetricsPolicy({ ...exporter, metrics: sharedMetrics }),
+      enabled: destination.signals.metrics,
+      ...(derivedMetrics === undefined ? {} : { endpoint: derivedMetrics }),
     },
   };
 };
@@ -91,6 +115,9 @@ export type ExportDestinationSinks = {
   readonly logs: OtlpLogTelemetrySink;
   readonly spool?: DurableSpool;
   readonly logSpool?: DurableLogSpool;
+  /** Hook-derived metrics; a disabled sink unless this destination takes `metrics`. */
+  readonly metrics: OtlpMetricTelemetrySink;
+  readonly metricSpool?: DurableMetricSpool;
 };
 
 /** A destination left out of this invocation, and why — by name only. */
@@ -238,6 +265,16 @@ export const createExportDestinationSinks = (
             queueName: queues.logs,
           });
 
+    const metricSpool =
+      options.spoolRootDir === undefined || !destination.signals.metrics
+        ? undefined
+        : createFileDurableMetricSpool({
+            rootDir: options.spoolRootDir,
+            ...shared,
+            ...bounds,
+            queueName: queues.metrics,
+          });
+
     const sinkShared = {
       exporter: policy,
       ...shared,
@@ -259,12 +296,23 @@ export const createExportDestinationSinks = (
       ...(logSpool === undefined ? {} : { spool: logSpool }),
       content: options.logContent,
     });
+    const metrics = destination.signals.metrics
+      ? createOtlpMetricSink({
+          exporter: policy,
+          ...shared,
+          ...(label === undefined ? {} : { destination: label }),
+          ...(headers === undefined || Object.keys(headers).length === 0 ? {} : { headers }),
+          ...(metricSpool === undefined ? {} : { spool: metricSpool }),
+        })
+      : createDisabledOtlpMetricSink(label);
     destinations.push({
       name: destination.name,
       traces,
       logs,
+      metrics,
       ...(spool === undefined ? {} : { spool }),
       ...(logSpool === undefined ? {} : { logSpool }),
+      ...(metricSpool === undefined ? {} : { metricSpool }),
     });
   }
   return { destinations, skipped };

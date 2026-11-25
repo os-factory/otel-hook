@@ -135,3 +135,21 @@ export const rollupEpochScanPrefix = (sessionId?: string): string =>
   sessionId === undefined
     ? `${LIFECYCLE_PREFIX}:epoch:`
     : `${LIFECYCLE_PREFIX}:epoch:${encodeSegment(sessionId)}:`;
+
+/**
+ * Metric series state (issue #69): one record per series, under the provider
+ * session it belongs to so the janitor can sweep a session's series with the rest
+ * of its state. The scope segment is `s=<sessionId>` for a per-session series and
+ * `all` for one that spans sessions (`session.id` switched off); the `s=` prefix
+ * keeps the two from ever colliding, whatever a provider names its sessions.
+ *
+ * `seriesDigest` is a digest of the instrument and its attributes, never the
+ * attributes themselves.
+ */
+export const metricSeriesKey = (sessionScope: string, seriesDigest: string): string =>
+  `${metricSeriesScanPrefix(sessionScope)}${encodeSegment(seriesDigest)}`;
+
+export const metricSeriesScanPrefix = (sessionScope?: string): string =>
+  sessionScope === undefined
+    ? `${LIFECYCLE_PREFIX}:metric:v1:`
+    : `${LIFECYCLE_PREFIX}:metric:v1:${encodeSegment(sessionScope)}:`;

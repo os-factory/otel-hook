@@ -106,3 +106,44 @@ export {
   type SkippedExportDestination,
 } from "../telemetry/export-destinations.js";
 export { isPermanentExportFailure } from "../telemetry/export-failure.js";
+
+/**
+ * Hook-derived metrics (issue #69): the pure derivation from canonical events,
+ * the OTLP metric sink, and its spool. `createHookRuntime` wires these from
+ * `exporter.metrics` and each destination's `signals`.
+ */
+export {
+  aggregateDeltaPoints,
+  deriveMetricObservations,
+  METRIC_COST_USAGE,
+  METRIC_INSTRUMENTS,
+  METRIC_OPERATION_DURATION,
+  METRIC_SESSIONS,
+  METRIC_TOKEN_USAGE,
+  METRIC_TOOL_CALLS,
+  OPERATION_DURATION_BUCKETS,
+  TOKEN_USAGE_BUCKETS,
+  type DeriveMetricObservationsInput,
+  type MetricInstrument,
+  type MetricInstrumentName,
+  type MetricObservation,
+  type MetricPoint,
+  type MetricsTemporality,
+  type TokenType,
+} from "../telemetry/metric-model.js";
+export {
+  createOtlpMetricSink,
+  describeMetricsDeliverability,
+  resolveMetricsEndpoint,
+  type MetricExportResult,
+  type MetricsDeliverability,
+  type OtlpMetricSinkOptions,
+  type OtlpMetricTelemetrySink,
+} from "../telemetry/otlp-metric-sink.js";
+export {
+  createFileDurableMetricSpool,
+  validateMetricSpoolBatch,
+  type DurableMetricSpool,
+  type DurableMetricSpoolOptions,
+  type MetricSpoolBatch,
+} from "../telemetry/durable-metric-spool.js";

@@ -45,7 +45,7 @@ const HEADER_NAME_PATTERN = /^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,128}$/;
 const ENV_VARIABLE_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
 const MAX_HEADER_VALUE_LENGTH = 8_192;
 
-export const exportSignalSchema = z.enum(["traces", "logs"]);
+export const exportSignalSchema = z.enum(["traces", "logs", "metrics"]);
 export type ExportSignal = z.infer<typeof exportSignalSchema>;
 
 const headerValueSchema = z
@@ -85,6 +85,8 @@ export const exportDestinationSchema = z
     tracesEndpoint: endpointSchema.optional(),
     /** Per-signal override of the derived logs URL. */
     logsEndpoint: endpointSchema.optional(),
+    /** Per-signal override of the derived metrics URL (`/v1/traces` becomes `/v1/metrics`). */
+    metricsEndpoint: endpointSchema.optional(),
     /** Defaults to `exporter.protocol`. */
     protocol: z.enum(["http/protobuf", "http/json", "none"]).optional(),
     /**
@@ -100,20 +102,25 @@ export const exportDestinationSchema = z
       )
       .optional(),
     /**
-     * Which signals this destination receives. Default: both. The logs signal is
-     * still governed by `exporter.logs.enabled`, which stays the one opt-in for a
-     * second stream leaving the host.
+     * Which signals this destination receives. Default: traces and logs. The logs
+     * signal is still governed by `exporter.logs.enabled`, which stays the one
+     * opt-in for content-bearing records leaving the host. `metrics` is never on by
+     * default: a destination receives hook-derived metrics only when it lists them.
      */
-    signals: z.array(exportSignalSchema).min(1).max(2).readonly().optional(),
+    signals: z.array(exportSignalSchema).min(1).max(3).readonly().optional(),
   })
   .refine(
     (destination) =>
       destination.endpoint !== undefined ||
       destination.tracesEndpoint !== undefined ||
-      destination.logsEndpoint !== undefined,
-    "a destination needs an endpoint, or a tracesEndpoint / logsEndpoint",
+      destination.logsEndpoint !== undefined ||
+      destination.metricsEndpoint !== undefined,
+    "a destination needs an endpoint, or a tracesEndpoint / logsEndpoint / metricsEndpoint",
   );
 export type ExportDestinationConfig = z.infer<typeof exportDestinationSchema>;
+
+/** Signals a destination receives when it does not list any: never metrics. */
+export const DEFAULT_DESTINATION_SIGNALS: readonly ExportSignal[] = Object.freeze(["traces", "logs"]);
 
 export const exportDestinationsSchema = z
   .array(exportDestinationSchema)
@@ -190,7 +197,8 @@ export type ExportDestination = {
   readonly endpoint?: string;
   readonly tracesEndpoint?: string;
   readonly logsEndpoint?: string;
-  readonly signals: { readonly traces: boolean; readonly logs: boolean };
+  readonly metricsEndpoint?: string;
+  readonly signals: { readonly traces: boolean; readonly logs: boolean; readonly metrics: boolean };
   readonly headers: Readonly<Record<string, string>>;
 };
 
@@ -200,7 +208,8 @@ const legacyDestination = (exporter: ExporterPolicy): ExportDestination => ({
   protocol: exporter.protocol,
   ...(exporter.endpoint === undefined ? {} : { endpoint: exporter.endpoint }),
   ...(exporter.logs.endpoint === undefined ? {} : { logsEndpoint: exporter.logs.endpoint }),
-  signals: { traces: true, logs: exporter.logs.enabled },
+  ...(exporter.metrics?.endpoint === undefined ? {} : { metricsEndpoint: exporter.metrics.endpoint }),
+  signals: { traces: true, logs: exporter.logs.enabled, metrics: exporter.metrics?.enabled === true },
   headers: {},
 });
 
@@ -224,14 +233,18 @@ export const resolveExportDestinations = (
     return [legacyDestination(exporter)];
   }
   const resolved: ExportDestination[] = [];
-  if (exporter.endpoint !== undefined || exporter.logs.endpoint !== undefined) {
+  if (
+    exporter.endpoint !== undefined ||
+    exporter.logs.endpoint !== undefined ||
+    exporter.metrics?.endpoint !== undefined
+  ) {
     resolved.push(legacyDestination(exporter));
   }
   for (const destination of exporter.destinations ?? []) {
     if (destination.enabled === false) {
       continue;
     }
-    const signals = destination.signals ?? exportSignalSchema.options;
+    const signals: readonly ExportSignal[] = destination.signals ?? DEFAULT_DESTINATION_SIGNALS;
     resolved.push({
       name: destination.name,
       source: "destinations",
@@ -241,9 +254,13 @@ export const resolveExportDestinations = (
         ? {}
         : { tracesEndpoint: destination.tracesEndpoint }),
       ...(destination.logsEndpoint === undefined ? {} : { logsEndpoint: destination.logsEndpoint }),
+      ...(destination.metricsEndpoint === undefined
+        ? {}
+        : { metricsEndpoint: destination.metricsEndpoint }),
       signals: {
         traces: signals.includes("traces"),
         logs: exporter.logs.enabled && signals.includes("logs"),
+        metrics: signals.includes("metrics"),
       },
       headers: { ...(destination.headers ?? {}) },
     });
@@ -308,6 +325,7 @@ export type DestinationDescription = {
   readonly signals: readonly ExportSignal[];
   readonly tracesEndpointOrigin?: string;
   readonly logsEndpointOrigin?: string;
+  readonly metricsEndpointOrigin?: string;
   readonly headerNames: readonly string[];
   /** Environment variables this destination's headers reference. */
   readonly headerVariables: readonly string[];
@@ -336,6 +354,9 @@ export const describeExportDestinations = (
     const logsOrigin = endpointOrigin(
       destination.logsEndpoint ?? destination.endpoint ?? destination.tracesEndpoint,
     );
+    const metricsOrigin = endpointOrigin(
+      destination.metricsEndpoint ?? destination.endpoint ?? destination.tracesEndpoint,
+    );
     const variables = Object.values(destination.headers)
       .map(parseHeaderValueReference)
       .flatMap((reference) => (reference.kind === "env" ? [reference.variable] : []));
@@ -350,6 +371,9 @@ export const describeExportDestinations = (
       ...(logsOrigin === undefined || !destination.signals.logs
         ? {}
         : { logsEndpointOrigin: logsOrigin }),
+      ...(metricsOrigin === undefined || !destination.signals.metrics
+        ? {}
+        : { metricsEndpointOrigin: metricsOrigin }),
       headerNames:
         destination.source === "exporter"
           ? [...exporter.headerNames].sort()
@@ -369,7 +393,7 @@ export const describeExportDestinations = (
           source: "destinations",
           protocol: destination.protocol ?? exporter.protocol,
           ...(destination.endpoint === undefined ? {} : { endpoint: destination.endpoint }),
-          signals: { traces: false, logs: false },
+          signals: { traces: false, logs: false, metrics: false },
           headers: { ...(destination.headers ?? {}) },
         },
         false,

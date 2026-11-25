@@ -2,9 +2,10 @@
  * OTLP/HTTP request decoder for the e2e proof receiver, the evidence checker and
  * the agent live lab (protobuf part ported from tests/helpers/otlp.ts).
  *
- * Decodes `ExportTraceServiceRequest` and `ExportLogsServiceRequest` bodies in
- * both OTLP/HTTP encodings (protobuf and JSON) into one plain shape, so a check
- * never depends on which encoding an exporter chose. Test tooling only; not part
+ * Decodes `ExportTraceServiceRequest`, `ExportLogsServiceRequest` and
+ * `ExportMetricsServiceRequest` bodies in both OTLP/HTTP encodings (protobuf and
+ * JSON) into one plain shape, so a check never depends on which encoding an
+ * exporter chose. Test tooling only; not part
  * of the published package.
  */
 const readVarint = (buffer, start) => {
@@ -252,6 +253,175 @@ export const decodeAllExportedLogRecords = (
 ) => bodies.flatMap((body) => decodeExportedLogRecords(body));
 
 // ---------------------------------------------------------------------------
+// Metrics (opentelemetry/proto/metrics/v1/metrics.proto)
+// ---------------------------------------------------------------------------
+
+/** `AggregationTemporality` enum values, by number and by OTLP/JSON name. */
+const TEMPORALITY = Object.freeze({
+  0: "unspecified",
+  1: "delta",
+  2: "cumulative",
+  AGGREGATION_TEMPORALITY_UNSPECIFIED: "unspecified",
+  AGGREGATION_TEMPORALITY_DELTA: "delta",
+  AGGREGATION_TEMPORALITY_CUMULATIVE: "cumulative",
+});
+
+const temporalityOf = (value) => TEMPORALITY[String(value ?? 0)] ?? "unspecified";
+
+const readDouble = (raw) => (raw === undefined ? undefined : raw.readDoubleLE(0));
+
+/** A repeated fixed64/double field, packed (one length-delimited run) or not. */
+const repeatedFixed64 = (fields, number) => {
+  const values = [];
+  for (const field of fields.filter((entry) => entry.number === number)) {
+    if (field.fixed64 !== undefined) {
+      values.push(field.fixed64);
+    } else if (field.bytes !== undefined) {
+      for (let offset = 0; offset + 8 <= field.bytes.length; offset += 8) {
+        values.push(field.bytes.subarray(offset, offset + 8));
+      }
+    }
+  }
+  return values;
+};
+
+const firstFixed64Bytes = (fields, number) => fields.find((field) => field.number === number)?.fixed64;
+
+/**
+ * One flat entry per data point. Number points (sum, gauge) carry `value`;
+ * histogram points carry `histogram` = { count, sum, min, max, bucketCounts,
+ * explicitBounds } (`sum`, `min`, `max` are undefined when not sent). Times are
+ * bigint nanoseconds, as for log records.
+ */
+const metricPoint = (metric, point) => ({
+  name: metric.name,
+  description: metric.description,
+  unit: metric.unit,
+  type: metric.type,
+  temporality: metric.temporality,
+  monotonic: metric.monotonic,
+  value: point.value,
+  histogram: point.histogram,
+  startTimeUnixNanos: point.startTimeUnixNanos,
+  timeUnixNanos: point.timeUnixNanos,
+  attributes: point.attributes,
+  resourceAttributes: metric.resourceAttributes,
+  scopeName: metric.scopeName,
+  scopeVersion: metric.scopeVersion,
+});
+
+const decodeNumberPoint = (buffer) => {
+  // NumberDataPoint: 2 start_time_unix_nano, 3 time_unix_nano, 4 as_double,
+  // 6 as_int (sfixed64), 7 attributes.
+  const fields = readFields(buffer);
+  const asDouble = readDouble(firstFixed64Bytes(fields, 4));
+  const asInt = firstFixed64Bytes(fields, 6);
+  return {
+    value: asInt !== undefined ? Number(asInt.readBigInt64LE(0)) : asDouble ?? 0,
+    histogram: undefined,
+    startTimeUnixNanos: firstFixed64Raw(fields, 2) ?? 0n,
+    timeUnixNanos: firstFixed64Raw(fields, 3) ?? 0n,
+    attributes: decodeKeyValues(fields, 7),
+  };
+};
+
+const decodeHistogramPoint = (buffer) => {
+  // HistogramDataPoint: 2 start, 3 time, 4 count (fixed64), 5 sum, 6 bucket_counts,
+  // 7 explicit_bounds, 9 attributes, 11 min, 12 max.
+  const fields = readFields(buffer);
+  return {
+    value: undefined,
+    histogram: {
+      count: Number(firstFixed64Raw(fields, 4) ?? 0n),
+      sum: readDouble(firstFixed64Bytes(fields, 5)),
+      min: readDouble(firstFixed64Bytes(fields, 11)),
+      max: readDouble(firstFixed64Bytes(fields, 12)),
+      bucketCounts: repeatedFixed64(fields, 6).map((raw) => Number(raw.readBigUInt64LE(0))),
+      explicitBounds: repeatedFixed64(fields, 7).map((raw) => raw.readDoubleLE(0)),
+    },
+    startTimeUnixNanos: firstFixed64Raw(fields, 2) ?? 0n,
+    timeUnixNanos: firstFixed64Raw(fields, 3) ?? 0n,
+    attributes: decodeKeyValues(fields, 9),
+  };
+};
+
+const decodeExponentialHistogramPoint = (buffer) => {
+  // ExponentialHistogramDataPoint: 1 attributes, 2 start, 3 time, 4 count, 5 sum,
+  // 12 min, 13 max. Buckets are not decoded.
+  const fields = readFields(buffer);
+  return {
+    value: undefined,
+    histogram: {
+      count: Number(firstFixed64Raw(fields, 4) ?? 0n),
+      sum: readDouble(firstFixed64Bytes(fields, 5)),
+      min: readDouble(firstFixed64Bytes(fields, 12)),
+      max: readDouble(firstFixed64Bytes(fields, 13)),
+      bucketCounts: [],
+      explicitBounds: [],
+    },
+    startTimeUnixNanos: firstFixed64Raw(fields, 2) ?? 0n,
+    timeUnixNanos: firstFixed64Raw(fields, 3) ?? 0n,
+    attributes: decodeKeyValues(fields, 1),
+  };
+};
+
+/** Metric field number of each data kind, its type name, and its point decoder. */
+const METRIC_KINDS = [
+  { field: 5, type: "gauge", decode: decodeNumberPoint },
+  { field: 7, type: "sum", decode: decodeNumberPoint },
+  { field: 9, type: "histogram", decode: decodeHistogramPoint },
+  { field: 10, type: "exponential_histogram", decode: decodeExponentialHistogramPoint },
+];
+
+/** Every metric data point in one captured `ExportMetricsServiceRequest` body. */
+export const decodeExportedMetrics = (body) => {
+  const points = [];
+  // ExportMetricsServiceRequest.resource_metrics is field 1; ResourceMetrics.resource
+  // is 1 and .scope_metrics is 2; ScopeMetrics.scope is 1 and .metrics is 2.
+  for (const resourceMetrics of submessages(readFields(body), 1)) {
+    const resourceFields = readFields(resourceMetrics);
+    const resourceBytes = firstBytes(resourceFields, 1);
+    const resourceAttributes =
+      resourceBytes === undefined ? {} : decodeKeyValues(readFields(resourceBytes), 1);
+    for (const scopeMetrics of submessages(resourceFields, 2)) {
+      const scopeFields = readFields(scopeMetrics);
+      const scope = decodeScope(firstBytes(scopeFields, 1));
+      for (const metricBytes of submessages(scopeFields, 2)) {
+        // Metric: 1 name, 2 description, 3 unit, then one data field (see METRIC_KINDS).
+        const metricFields = readFields(metricBytes);
+        const kind = METRIC_KINDS.find((entry) => firstBytes(metricFields, entry.field) !== undefined);
+        if (kind === undefined) {
+          continue;
+        }
+        // Gauge: 1 data_points. Sum: 1 data_points, 2 temporality, 3 is_monotonic.
+        // (Exponential) histogram: 1 data_points, 2 temporality.
+        const dataFields = readFields(firstBytes(metricFields, kind.field) ?? Buffer.alloc(0));
+        const metric = {
+          name: (firstBytes(metricFields, 1) ?? Buffer.alloc(0)).toString("utf8"),
+          description: (firstBytes(metricFields, 2) ?? Buffer.alloc(0)).toString("utf8"),
+          unit: (firstBytes(metricFields, 3) ?? Buffer.alloc(0)).toString("utf8"),
+          type: kind.type,
+          temporality: kind.type === "gauge" ? "unspecified" : temporalityOf(firstVarint(dataFields, 2)),
+          monotonic: kind.type === "sum" ? (firstVarint(dataFields, 3) ?? 0n) !== 0n : false,
+          resourceAttributes,
+          scopeName: scope.name,
+          scopeVersion: scope.version,
+        };
+        for (const point of submessages(dataFields, 1)) {
+          points.push(metricPoint(metric, kind.decode(point)));
+        }
+      }
+    }
+  }
+  return points;
+};
+
+/** Every metric data point across a sequence of captured request bodies, in arrival order. */
+export const decodeAllExportedMetrics = (
+  bodies,
+) => bodies.flatMap((body) => decodeExportedMetrics(body));
+
+// ---------------------------------------------------------------------------
 // OTLP/JSON (https://opentelemetry.io/docs/specs/otlp/#json-protobuf-encoding)
 // ---------------------------------------------------------------------------
 
@@ -364,7 +534,84 @@ export const decodeJsonExportedLogRecords = (request) => {
   return records;
 };
 
-/** `traces`, `logs`, or `unknown`, from an OTLP/HTTP request path (any prefix). */
+const jsonNumber = (value) => {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+};
+
+const jsonNumberPoint = (point) => ({
+  value: jsonNumber(point?.asInt) ?? jsonNumber(point?.asDouble) ?? 0,
+  histogram: undefined,
+  startTimeUnixNanos: jsonNanos(point?.startTimeUnixNano),
+  timeUnixNanos: jsonNanos(point?.timeUnixNano),
+  attributes: jsonKeyValues(point?.attributes),
+});
+
+const jsonHistogramPoint = (point) => ({
+  value: undefined,
+  histogram: {
+    count: jsonNumber(point?.count) ?? 0,
+    sum: jsonNumber(point?.sum),
+    min: jsonNumber(point?.min),
+    max: jsonNumber(point?.max),
+    bucketCounts: asArray(point?.bucketCounts).map((count) => jsonNumber(count) ?? 0),
+    explicitBounds: asArray(point?.explicitBounds).map((bound) => jsonNumber(bound) ?? 0),
+  },
+  startTimeUnixNanos: jsonNanos(point?.startTimeUnixNano),
+  timeUnixNanos: jsonNanos(point?.timeUnixNano),
+  attributes: jsonKeyValues(point?.attributes),
+});
+
+const JSON_METRIC_KINDS = [
+  { key: "gauge", type: "gauge", decode: jsonNumberPoint },
+  { key: "sum", type: "sum", decode: jsonNumberPoint },
+  { key: "histogram", type: "histogram", decode: jsonHistogramPoint },
+  { key: "exponentialHistogram", type: "exponential_histogram", decode: jsonHistogramPoint },
+];
+
+/** Every metric data point in one parsed OTLP/JSON `ExportMetricsServiceRequest`. */
+export const decodeJsonExportedMetrics = (request) => {
+  const points = [];
+  for (const resourceMetrics of asArray(request?.resourceMetrics)) {
+    const resourceAttributes = jsonKeyValues(resourceMetrics?.resource?.attributes);
+    for (const scopeMetrics of asArray(resourceMetrics?.scopeMetrics)) {
+      const scopeName = typeof scopeMetrics?.scope?.name === "string" ? scopeMetrics.scope.name : "";
+      const scopeVersion = typeof scopeMetrics?.scope?.version === "string" ? scopeMetrics.scope.version : "";
+      for (const entry of asArray(scopeMetrics?.metrics)) {
+        const kind = JSON_METRIC_KINDS.find((candidate) => entry?.[candidate.key] !== undefined && entry?.[candidate.key] !== null);
+        if (kind === undefined) {
+          continue;
+        }
+        const data = entry[kind.key];
+        const metric = {
+          name: typeof entry.name === "string" ? entry.name : "",
+          description: typeof entry.description === "string" ? entry.description : "",
+          unit: typeof entry.unit === "string" ? entry.unit : "",
+          type: kind.type,
+          temporality: kind.type === "gauge" ? "unspecified" : temporalityOf(data.aggregationTemporality),
+          monotonic: kind.type === "sum" ? data.isMonotonic === true : false,
+          resourceAttributes,
+          scopeName,
+          scopeVersion,
+        };
+        for (const point of asArray(data.dataPoints)) {
+          const decoded = kind.decode(point);
+          if (kind.type === "exponential_histogram") {
+            decoded.histogram.bucketCounts = [];
+            decoded.histogram.explicitBounds = [];
+          }
+          points.push(metricPoint(metric, decoded));
+        }
+      }
+    }
+  }
+  return points;
+};
+
+/** `traces`, `logs`, `metrics`, or `unknown`, from an OTLP/HTTP request path (any prefix). */
 export const signalOfPath = (requestPath) => {
   const pathname = String(requestPath ?? "").split("?")[0] ?? "";
   if (pathname.endsWith("/v1/traces")) {
@@ -372,6 +619,9 @@ export const signalOfPath = (requestPath) => {
   }
   if (pathname.endsWith("/v1/logs")) {
     return "logs";
+  }
+  if (pathname.endsWith("/v1/metrics")) {
+    return "metrics";
   }
   return "unknown";
 };
@@ -382,25 +632,33 @@ export const isJsonContentType = (contentType) => /\bjson\b/i.test(String(conten
 /**
  * Decode one OTLP/HTTP request body of either encoding.
  *
- * Returns `{ spans, logs }` (one of them empty, by signal). An empty body decodes
- * to no records rather than throwing: an exporter that posted nothing is evidence
+ * Returns `{ spans, logs, metrics }` (only the signal's own list is filled;
+ * `metrics` holds one entry per data point). An empty body decodes to no
+ * records rather than throwing: an exporter that posted nothing is evidence
  * worth recording, not a decoder error.
  */
 export const decodeOtlpRequest = ({ signal, contentType, body }) => {
   const bytes = Buffer.isBuffer(body) ? body : Buffer.from(body ?? "");
+  const none = { spans: [], logs: [], metrics: [] };
   if (bytes.length === 0 || signal === "unknown") {
-    return { spans: [], logs: [] };
+    return none;
   }
   if (isJsonContentType(contentType)) {
     const parsed = JSON.parse(bytes.toString("utf8"));
-    return signal === "traces"
-      ? { spans: decodeJsonExportedSpans(parsed), logs: [] }
-      : { spans: [], logs: decodeJsonExportedLogRecords(parsed) };
+    if (signal === "traces") {
+      return { ...none, spans: decodeJsonExportedSpans(parsed) };
+    }
+    return signal === "logs"
+      ? { ...none, logs: decodeJsonExportedLogRecords(parsed) }
+      : { ...none, metrics: decodeJsonExportedMetrics(parsed) };
   }
-  return signal === "traces"
-    ? { spans: decodeExportedSpans(bytes), logs: [] }
-    : { spans: [], logs: decodeExportedLogRecords(bytes) };
+  if (signal === "traces") {
+    return { ...none, spans: decodeExportedSpans(bytes) };
+  }
+  return signal === "logs"
+    ? { ...none, logs: decodeExportedLogRecords(bytes) }
+    : { ...none, metrics: decodeExportedMetrics(bytes) };
 };
 
-/** `JSON.stringify` replacer for decoded records (log timestamps are bigint). */
+/** `JSON.stringify` replacer for decoded records (log and metric timestamps are bigint). */
 export const jsonSafe = (_key, value) => (typeof value === "bigint" ? value.toString() : value);

@@ -22,12 +22,20 @@ export const OTLP_ENDPOINT_VARIABLES = Object.freeze({
   generic: "OTEL_EXPORTER_OTLP_ENDPOINT",
   traces: "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
   logs: "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+  metrics: "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
 });
 
 export const OTLP_TRACES_PATH = "/v1/traces";
 export const OTLP_LOGS_PATH = "/v1/logs";
+export const OTLP_METRICS_PATH = "/v1/metrics";
 
-export type OtlpSignal = "traces" | "logs";
+export type OtlpSignal = "traces" | "logs" | "metrics";
+
+const SIGNAL_PATHS: Readonly<Record<OtlpSignal, string>> = Object.freeze({
+  traces: OTLP_TRACES_PATH,
+  logs: OTLP_LOGS_PATH,
+  metrics: OTLP_METRICS_PATH,
+});
 
 /**
  * Strip trailing slashes, by scan rather than by regex.
@@ -59,7 +67,24 @@ export const otlpSignalEndpointFromBase = (base: string, signal: OtlpSignal): st
   if (trimmed.endsWith(OTLP_TRACES_PATH)) {
     return signal === "traces"
       ? trimmed
-      : `${trimmed.slice(0, trimmed.length - OTLP_TRACES_PATH.length)}${OTLP_LOGS_PATH}`;
+      : `${trimmed.slice(0, trimmed.length - OTLP_TRACES_PATH.length)}${SIGNAL_PATHS[signal]}`;
   }
-  return `${trimmed}${signal === "traces" ? OTLP_TRACES_PATH : OTLP_LOGS_PATH}`;
+  return `${trimmed}${SIGNAL_PATHS[signal]}`;
+};
+
+/**
+ * A sibling signal's URL derived from a traces URL: a trailing `/v1/traces` (or
+ * the target signal's own path) is swapped for the target path, and any other URL
+ * is treated as a base and has the path appended. The rule logs have always used.
+ */
+export const siblingSignalEndpoint = (tracesEndpoint: string, signal: OtlpSignal): string => {
+  const trimmed = withoutTrailingSlashes(tracesEndpoint);
+  const target = SIGNAL_PATHS[signal];
+  if (trimmed.endsWith(target)) {
+    return trimmed;
+  }
+  if (trimmed.endsWith(OTLP_TRACES_PATH)) {
+    return `${trimmed.slice(0, trimmed.length - OTLP_TRACES_PATH.length)}${target}`;
+  }
+  return `${trimmed}${target}`;
 };
