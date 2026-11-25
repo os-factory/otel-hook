@@ -1,3 +1,10 @@
+# [0.10.0](https://github.com/os-factory/otel-hook/compare/v0.9.0...v0.10.0) (2026-11-25)
+
+
+### Features
+
+* **claude:** name the model and sum turn token usage on generations ([#67](https://github.com/os-factory/otel-hook/issues/67)) ([3ac019c](https://github.com/os-factory/otel-hook/commit/3ac019c65acfb7be40f7c4bb9c33ff056c4ca025)), closes [#64](https://github.com/os-factory/otel-hook/issues/64)
+
 # [0.9.0](https://github.com/os-factory/otel-hook/compare/v0.8.0...v0.9.0) (2026-11-24)
 
 
