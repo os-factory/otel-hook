@@ -49,15 +49,27 @@ describe("otel-hook CLI: non-hook commands", () => {
   it("lists every provider with its capabilities and maturity as JSON", async () => {
     const result = await runCliProcess(["providers", "--json"]);
     expect(result.code).toBe(0);
-    const listing = JSON.parse(result.stdout) as readonly {
-      id: string;
-      maturity: string;
-      lifecycleEvents: readonly string[];
-      requiresHookResponse: boolean;
-      registrationSupported: boolean;
-      registrationNote: string;
-      deliveryIdentifier: string;
-    }[];
+    const manifest = JSON.parse(result.stdout) as {
+      manifestVersion: number;
+      exportSignals: { traces: string; logs: string; metrics: string };
+      providers: readonly {
+        id: string;
+        maturity: string;
+        lifecycleEvents: readonly string[];
+        requiresHookResponse: boolean;
+        registrationSupported: boolean;
+        registrationNote: string;
+        deliveryIdentifier: string;
+        logSignals: readonly string[];
+      }[];
+    };
+    expect(manifest.manifestVersion).toBe(1);
+    expect(manifest.exportSignals).toEqual({
+      traces: "otlp-http-protobuf",
+      logs: "otlp-http-protobuf",
+      metrics: "unsupported",
+    });
+    const listing = manifest.providers;
 
     expect(listing.map((entry) => entry.id)).toEqual([
       "antigravity",
@@ -107,8 +119,8 @@ describe("otel-hook CLI: non-hook commands", () => {
 
   it("excludes the experimental adapter on request", async () => {
     const result = await runCliProcess(["providers", "--json", "--no-experimental"]);
-    const listing = JSON.parse(result.stdout) as readonly { id: string }[];
-    expect(listing.map((entry) => entry.id)).not.toContain("antigravity");
+    const manifest = JSON.parse(result.stdout) as { providers: readonly { id: string }[] };
+    expect(manifest.providers.map((entry) => entry.id)).not.toContain("antigravity");
   });
 
   it("reports health as JSON and fails when the exporter is unconfigured", async () => {
