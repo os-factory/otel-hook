@@ -385,7 +385,7 @@ lower-level orchestrator without the filesystem and lifecycle wiring, use
 | `@osfactory/otel-hook`             | Everything below, re-exported                                                 |
 | `@osfactory/otel-hook/model`       | Canonical events, identity, usage, content facts, extensions                   |
 | `@osfactory/otel-hook/providers`   | Adapter contract, event factory, registry, the five adapters, default factory  |
-| `@osfactory/otel-hook/privacy`     | Privacy policy, privacy service, workspace derivation                         |
+| `@osfactory/otel-hook/privacy`     | Privacy policy, privacy service, workspace derivation, repository enrichment  |
 | `@osfactory/otel-hook/config`      | Typed configuration, precedence, environment parsing                          |
 | `@osfactory/otel-hook/errors`      | Error taxonomy, error info, attribution outcomes                              |
 | `@osfactory/otel-hook/runtime`     | `OtelHook`, ports, clock, ids, logger, in-memory implementations               |

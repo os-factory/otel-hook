@@ -24,6 +24,11 @@ describe("public surface", () => {
       "resolveInvocationIdentity",
       "workspaceIdentitySchema",
       "deriveWorkspaceIdentity",
+      "enrichRepositoryMetadata",
+      "createProcessRepositoryInspector",
+      "REPOSITORY_FIELD_PRIVACY",
+      "parseRepositoryOwnerName",
+      "sanitizeGitRemoteUrl",
       "extensionsSchema",
       "contentFactSchema",
       "createPrivacyService",
@@ -262,6 +267,7 @@ describe("public surface", () => {
     expect(Object.isFrozen(library.EMPTY_DELTA_USAGE)).toBe(true);
     expect(Object.isFrozen(library.SILENT_HOOK_RESPONSE)).toBe(true);
     expect(Object.isFrozen(library.RESERVED_RESOURCE_ATTRIBUTE_KEYS)).toBe(true);
+    expect(Object.isFrozen(library.REPOSITORY_FIELD_PRIVACY)).toBe(true);
     expect(Object.isFrozen(library.EMPTY_RESOURCE_ATTRIBUTES)).toBe(true);
     expect(Object.isFrozen(library.DEFAULT_SPOOL_POLICY)).toBe(true);
   });
