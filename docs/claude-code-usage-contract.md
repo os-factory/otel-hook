@@ -56,8 +56,9 @@ Not `Stop`, not `SubagentStop`, not `PostCompact`. This is why
 `capabilities.ts` frames cached-input support as "the payload shape is accepted
 when a wrapping harness attaches it": a bare Claude Code installation reports no
 tokens to a hook at all, and the adapter must not read `transcript_path` to find
-them (`AGENTS.md`, ADR 0003). A wrapping harness may, with the bounded helper
-described in finding 8.
+them (`AGENTS.md`, ADR 0003). The hook runtime may, when the host turns on
+`providers.claudeCode.readTranscriptUsage`, and a wrapping harness may, with the
+bounded helpers described in finding 8.
 
 ## Finding 2: usage lives at `message.usage`, and its input buckets are disjoint
 
@@ -237,8 +238,12 @@ and field names only, nothing copied.
   not read: it is a breakdown of `output_tokens`, and `reportsReasoningOutput`
   stays `false` until a decision is made to model it.
 
-So the model reaches a generation span in two steps, and neither one makes the
-adapter read a file:
+- One request is written as one record per content block, each repeating its
+  `message.id` and its usage so far; the last record of an id holds the final
+  counts.
+
+So the model and usage reach a generation span in up to three ways, and none of
+them makes the adapter read a file:
 
 1. **Session model, always on.** The core remembers the last model a session
    reported (`session.start`, or a top-level `generation.*` with a known model)
@@ -248,33 +253,59 @@ adapter read a file:
    `gen_ai.response.model`, and the span is named `generation <model>`. `unknown`
    remains only when nothing in the session ever named a model, or when the host
    runs with a store that does not survive between hook processes.
-2. **Exact per-turn model and usage, harness-attached (opt-in).** A wrapper
-   attaches `{ model, usage }` to the `Stop` payload. The schema accepts both;
-   `model` becomes the turn's response model and the session's model from then
-   on. otel-hook ships the bounded helper for this,
-   `attachClaudeTranscriptTurn(payload)` / `readClaudeTranscriptTurn(path)`
-   (exported from `@osfactory/otel-hook` and `/providers`). It reads only the last
-   1 MiB of the one `transcript_path` the payload names (a regular `.jsonl`
-   file at an absolute path), within 250 ms, and returns the last top-level,
-   non-`<synthetic>` assistant record's model and counters. It never throws and
-   never overwrites a field the payload already carries. Nothing else from the
-   record leaves the helper.
+2. **Turn totals, read by otel-hook (opt-in setting).** With
+   `providers.claudeCode.readTranscriptUsage` on (`--claude-transcript-usage`,
+   `OTEL_HOOK_CLAUDE_TRANSCRIPT_USAGE=1`, or the config file), the hook runtime
+   runs `createClaudeTranscriptUsageEnricher` before the adapter parses. It keeps
+   a byte cursor per session in the state store (`cursor:claude-transcript-usage:<sessionId>`,
+   holding the offset and a digest of the path, never the path):
+   - `SessionStart` records where the transcript ends (0 if it does not exist
+     yet), unless a cursor for the same transcript already exists, so a
+     compaction restart does not skip the turn it interrupted;
+   - `Stop` / `StopFailure` read from the cursor to the end (at most 8 MiB,
+     within 500 ms), sum every main-thread request (deduplicated by
+     `message.id`, last record wins; sidechain and `<synthetic>` records
+     skipped), attach the turn's model and usage with `usage_partial: false`,
+     and move the cursor to the end of the last complete line;
+   - with no cursor for this transcript, a range over the cap, or a transcript
+     that shrank, it falls back to the last request in the bounded tail,
+     attaches it with `usage_partial: true`, and moves the cursor to the end;
+   - a timeout or an unreadable file attaches nothing and keeps the cursor, so
+     the next turn's range includes the tokens: late, never twice;
+   - a payload that already carries `usage` is left alone, and the cursor moves
+     past it.
+   The generation span carries `otelhook.usage.partial` (`false` for a turn
+   total, `true` for the fallback).
+3. **Harness-attached (library helper).** A wrapper can instead attach
+   `{ model, usage }` itself with `attachClaudeTranscriptTurn(payload)`. It
+   reads the last 1 MiB of the one `transcript_path` the payload names, within
+   250 ms, and attaches the last request only, with `usage_partial: true`.
 
-Why the transcript read is a harness step and not an adapter option: ADR 0003
-gives adapters no filesystem handle, and this document has always said the
-adapter must not read `transcript_path`. Keeping the read in the wrapper keeps
-that boundary, and keeps it visible: a host that does not call the helper gets
-exactly what Claude Code's hooks report.
+All readers open only a regular `.jsonl` file at an absolute path, never list a
+directory, never throw, and let nothing but model ids and counters out of the
+record.
 
-The usage is the **last model request of the turn**, not the turn total. A turn
-that called tools made one request per tool round trip, each with its own
-`message.usage`, and only the last one is attached. Input is close to complete,
-because the last request's prompt holds the whole conversation, mostly as cache
-reads. Output tokens from the earlier requests are missing. Summing a turn would
-mean finding its first record, which a bounded tail cannot promise.
+### The one sanctioned exception to "no transcript reads in the hook"
+
+ADR 0003 gives adapters no filesystem handle, and this document has always said
+the adapter must not read `transcript_path`. That still holds: the adapter only
+maps fields that are already on the payload. Option 2 is the single place where
+otel-hook reads a file a hook payload names, inside the hook process, and it is
+off by default. It is allowed because there is no other source for Claude Code
+tokens, and because it is bounded (one named file, a byte cap, a time budget,
+fail-open), host-configured rather than provider-chosen, and visible in
+configuration. Any further transcript read needs the same justification and its
+own setting.
+
+Why turn totals and not the last request: across 1,194 recent local turns, 88%
+made more than one model request (median 5, p90 25), and the last request alone
+held 11% of the output tokens and 9% of the billed input tokens. A cursor gives
+the exact turn without a bounded tail ever having to find where the turn began.
+Subagent requests are not in the sum: Claude Code writes them to the subagent's
+own transcript, and `SubagentStop` carries no usage.
 
 The synthetic tail in `fixtures/contracts/claude-code/transcript-tail-turn.json`
 pins this shape. `tests/providers/claude/transcript.test.ts` covers the helper and
-the session model, and `tests/e2e-proof/proof-run.test.ts` shows that
-`check-evidence.mjs` `token-usage` passes for Claude Code when a wrapper attaches
-usage this way.
+the session model, `tests/providers/claude/transcript-usage-enricher.test.ts`
+the cursor and the setting, and `tests/e2e-proof/proof-run.test.ts` shows that
+`check-evidence.mjs` `token-usage` passes for Claude Code both ways.

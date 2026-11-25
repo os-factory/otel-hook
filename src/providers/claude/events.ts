@@ -139,6 +139,12 @@ export const parseClaudeCode = (
     return applyUsage(normalized);
   };
 
+  /** Usage plus the attacher's statement of whether it covers the whole turn. */
+  const withPartialUsage = (usage: ClaudeUsage | undefined, partial: boolean | undefined) => {
+    const applied = withUsage(usage);
+    return applied.usage === undefined || partial === undefined ? applied : { ...applied, usagePartial: partial };
+  };
+
   switch (payload.hook_event_name) {
     case "SessionStart":
       factory.build({
@@ -302,7 +308,7 @@ export const parseClaudeCode = (
                 text: assistantText,
               }),
         ],
-        ...withUsage(extractedUsage ?? payload.usage),
+        ...withPartialUsage(extractedUsage ?? payload.usage, payload.usage_partial),
       });
       break;
     }
@@ -333,7 +339,7 @@ export const parseClaudeCode = (
                 }),
               ],
             }),
-        ...withUsage(extractedUsage ?? payload.usage),
+        ...withPartialUsage(extractedUsage ?? payload.usage, payload.usage_partial),
       });
       break;
     }

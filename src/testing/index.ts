@@ -25,7 +25,7 @@ import {
   type RecordingLogger,
   type RecordingTelemetrySink,
 } from "../runtime/memory.js";
-import type { IdGenerator, WorktreeLocator } from "../runtime/ports.js";
+import type { IdGenerator, PayloadEnricher, WorktreeLocator } from "../runtime/ports.js";
 
 export * from "./fixture-adapter.js";
 export * from "./assertions.js";
@@ -90,6 +90,8 @@ export type TestHarnessOptions = {
    * cannot turn the assertion into a timing race.
    */
   readonly targetResolutionBudgetMillis?: number;
+  /** Payload enrichers, as a host would configure them (none by default). */
+  readonly payloadEnrichers?: readonly PayloadEnricher[];
 };
 
 export type TestHarness = {
@@ -154,6 +156,7 @@ export const createTestHook = (options: TestHarnessOptions = {}): TestHarness =>
     ...(options.targetResolutionBudgetMillis === undefined
       ? {}
       : { targetResolutionBudgetMillis: options.targetResolutionBudgetMillis }),
+    ...(options.payloadEnrichers === undefined ? {} : { payloadEnrichers: options.payloadEnrichers }),
   });
 
   return { hook, sink, stateStore, clock, ids, privacy, logger, registry, config };

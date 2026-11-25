@@ -827,9 +827,27 @@ export OTEL_RESOURCE_ATTRIBUTES="session.id=run-2041,factory.work_unit.id=wu-42,
 Claude Code's `Stop` hook names no model and carries no tokens. Out of the box,
 each generation span carries the session's model, which `SessionStart` reports
 and the state store remembers (so `--state-dir`, or the default durable store,
-matters). For the exact per-turn model and the four token buckets, the harness
-attaches them from the transcript before handing the payload to otel-hook. This is
-opt-in, and the adapter never reads the transcript itself (ADR 0003):
+matters).
+
+For the exact per-turn model and the turn's summed token usage, turn on the
+opt-in setting. otel-hook then reads the session transcript the payload names,
+from where the previous turn ended, and sums every model request of the turn:
+
+```bash
+otel-hook run --provider claude-code --claude-transcript-usage
+# or: OTEL_HOOK_CLAUDE_TRANSCRIPT_USAGE=1
+# or, in --config-file: { "providers": { "claudeCode": { "readTranscriptUsage": true } } }
+```
+
+This is the one sanctioned exception to "no transcript reads in the hook": off by
+default, done by the hook runtime and never by the adapter (ADR 0003), limited to
+the one `.jsonl` file the payload names, capped at 8 MiB per turn and 500 ms, and
+fail-open. When a turn cannot be summed exactly (no `SessionStart` was seen, the
+state was lost, the turn wrote more than the cap), the last request is reported
+instead and the span says so with `otelhook.usage.partial=true`.
+
+A harness that wants to attach usage itself can call the library helper, which
+reports the last request only (`usage_partial: true`):
 
 ```ts
 import { attachClaudeTranscriptTurn } from "@osfactory/otel-hook";
@@ -839,8 +857,7 @@ import { attachClaudeTranscriptTurn } from "@osfactory/otel-hook";
 const enriched = await attachClaudeTranscriptTurn(hookPayload);
 ```
 
-The usage is the turn's last model request, not the turn total. See
-[finding 8](docs/claude-code-usage-contract.md#finding-8-the-model-is-on-sessionstart-and-in-the-transcript-never-on-stop).
+See [finding 8](docs/claude-code-usage-contract.md#finding-8-the-model-is-on-sessionstart-and-in-the-transcript-never-on-stop).
 
 ### Multiple destinations
 
@@ -1186,9 +1203,9 @@ fixing one means updating that test rather than discovering a silent change.
    `usage.cache_read_input_tokens` and `usage.cache_creation_input_tokens` (whose
    TTL split is a breakdown, reconciled and never added). No hook callback carries
    a token counter at all, so `usage` is read only when a wrapping harness
-   attaches it — `attachClaudeTranscriptTurn` is the bounded helper that reads
-   the last assistant message of `transcript_path` for that, along with its exact
-   `model`; the adapter itself never reads the transcript. Without it, generations
+   attaches it, or the host turns on `providers.claudeCode.readTranscriptUsage`
+   (`--claude-transcript-usage`), which makes the hook runtime sum each turn from
+   `transcript_path`; the adapter itself never reads the transcript. Without it, generations
    still carry the session's model from `SessionStart`, remembered in the state
    store. A harness that attaches an excluded counter anyway is told which
    field was declined. `ADAPTER-NOTE-001`; see

@@ -1,4 +1,4 @@
-import type { OtelHookConfig } from "../config/schema.js";
+import { readsClaudeTranscriptUsage, type OtelHookConfig } from "../config/schema.js";
 import { summarizeHealth, type DeliveryHealthSnapshot, type OverallHealth } from "../diagnostics/health.js";
 import { createErrorInfo, errorInfoFromThrown, type OtelHookErrorInfo } from "../errors/index.js";
 import type { CanonicalEvent } from "../model/events.js";
@@ -15,6 +15,7 @@ import {
   type UsageAccumulatorSnapshot,
 } from "../lifecycle/usage-accumulator.js";
 import { createPrivacyService, type PrivacyService } from "../privacy/service.js";
+import { createClaudeTranscriptUsageEnricher } from "../providers/claude/transcript.js";
 import type { ProviderRegistry } from "../providers/registry.js";
 import { createSystemClock } from "../runtime/clock.js";
 import {
@@ -35,7 +36,7 @@ import {
 import { createDeterministicIdGenerator } from "../runtime/ids.js";
 import { createNullLogger } from "../runtime/logger.js";
 import { createFilesystemWorktreeLocator } from "../runtime/git-worktree.js";
-import type { Clock, IdGenerator, Logger, WorktreeLocator } from "../runtime/ports.js";
+import type { Clock, IdGenerator, Logger, PayloadEnricher, WorktreeLocator } from "../runtime/ports.js";
 import { createAsyncLock } from "../state/async-lock.js";
 import { createFilesystemStateStore, type FilesystemStateStore } from "../state/filesystem-store.js";
 import type { DurableLogSpool } from "../telemetry/durable-log-spool.js";
@@ -337,6 +338,13 @@ export type HookRuntimeOptions = {
    * `null` to disable resolution entirely.
    */
   readonly worktreeLocator?: WorktreeLocator | null;
+  /**
+   * Payload enrichers run before the adapter parses (see `PayloadEnricher`).
+   * When absent, the configuration decides: `providers.claudeCode.readTranscriptUsage`
+   * adds the Claude Code transcript-usage enricher, and nothing else is added.
+   * Pass `[]` to run none regardless of configuration.
+   */
+  readonly payloadEnrichers?: readonly PayloadEnricher[];
 };
 
 const DEFAULT_FLUSH_TIMEOUT_MILLIS = 2_000;
@@ -578,6 +586,9 @@ export const createHookRuntime = (options: HookRuntimeOptions): HookRuntime => {
     privacy,
     logger,
     installationId: options.installationId,
+    payloadEnrichers:
+      options.payloadEnrichers ??
+      (readsClaudeTranscriptUsage(options.config) ? [createClaudeTranscriptUsageEnricher()] : []),
     ...(options.worktreeLocator === null
       ? {}
       : {

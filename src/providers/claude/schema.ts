@@ -250,6 +250,13 @@ export const stopPayloadSchema = z.object({
    * failing the whole payload: the turn is still worth reporting without it.
    */
   model: z.string().min(1).max(256).optional().catch(undefined),
+  /**
+   * Harness-supplied, never upstream: whether `usage` covers only part of the
+   * turn. `true` when it is the last model request alone (the tail fallback),
+   * `false` when it sums every request since the previous stop. Exported as
+   * `otelhook.usage.partial`; absent means the attacher did not say.
+   */
+  usage_partial: z.boolean().optional().catch(undefined),
 });
 export type StopPayload = z.infer<typeof stopPayloadSchema>;
 
@@ -266,6 +273,8 @@ export const stopFailurePayloadSchema = z.object({
   usage: claudeUsageSchema.optional(),
   /** Harness-supplied, never upstream: see `stopPayloadSchema.model`. */
   model: z.string().min(1).max(256).optional().catch(undefined),
+  /** Harness-supplied, never upstream: see `stopPayloadSchema.usage_partial`. */
+  usage_partial: z.boolean().optional().catch(undefined),
 });
 export type StopFailurePayload = z.infer<typeof stopFailurePayloadSchema>;
 

@@ -56,6 +56,8 @@ import type {
   Clock,
   IdGenerator,
   Logger,
+  PayloadEnricher,
+  ReadCursor,
   StateStore,
   TelemetrySink,
   WorktreeLocator,
@@ -262,6 +264,11 @@ export type OtelHookDependencies = {
   readonly worktreeLocator?: WorktreeLocator;
   /** Ceiling on target resolution per callback. Default 50ms. */
   readonly targetResolutionBudgetMillis?: number;
+  /**
+   * Host-configured payload enrichers (see {@link PayloadEnricher}). Empty by
+   * default: nothing reads beyond the payload unless a host asks for it.
+   */
+  readonly payloadEnrichers?: readonly PayloadEnricher[];
 };
 
 const MAX_ERROR_EVENTS = 8;
@@ -325,6 +332,8 @@ const usageScopeOf = (
 
 const sequenceKey = (sessionId: string): string => `sequence:${sessionId}`;
 const sessionModelKey = (sessionId: string): string => `model:${sessionId}`;
+const readCursorKey = (enricherId: string, sessionId: string): string =>
+  `cursor:${enricherId}:${sessionId}`;
 
 /**
  * The placeholder an adapter uses when its payload names no model. Never
@@ -454,6 +463,71 @@ export const createOtelHook = (deps: OtelHookDependencies): OtelHook => {
       );
       return 0;
     }
+  };
+
+  /**
+   * Run the configured enrichers for this provider over the payload.
+   *
+   * Inside the session lock, so a cursor is read, advanced, and written by one
+   * process at a time. Every failure is contained: a throwing enricher or an
+   * unusable store leaves the payload as it was, and a cursor write that fails
+   * is a diagnostic — the next read then starts from the old cursor, which can
+   * count a turn into the next one but never twice.
+   */
+  const enrichPayload = async (
+    payload: unknown,
+    providerId: string,
+    sessionId: string,
+    diagnostics: OtelHookErrorInfo[],
+  ): Promise<unknown> => {
+    let current = payload;
+    for (const enricher of deps.payloadEnrichers ?? []) {
+      if (enricher.providerId !== providerId) {
+        continue;
+      }
+      const key = readCursorKey(enricher.id, sessionId);
+      let cursor: ReadCursor | undefined;
+      try {
+        const record = await deps.stateStore.read(key);
+        if (record?.value.kind === "read-cursor") {
+          cursor = { source: record.value.source, offset: record.value.offset };
+        }
+      } catch (thrown) {
+        diagnostics.push(
+          errorInfoFromThrown(thrown, { code: "state-store-failure", phase: "state", occurredAt: clock.now() }),
+        );
+        // Without the stored cursor a read would start from the wrong place.
+        continue;
+      }
+      let result;
+      try {
+        result = await enricher.enrich({ payload: current, sessionId, ...(cursor === undefined ? {} : { cursor }) });
+      } catch (thrown) {
+        logger.warn("payload enricher failed; parsing the payload as delivered", {
+          "enricher.id": enricher.id,
+          "error.name": thrown instanceof Error ? thrown.name : typeof thrown,
+        });
+        continue;
+      }
+      current = result.payload;
+      if (result.notes !== undefined && result.notes.length > 0) {
+        logger.debug("payload enricher notes", {
+          "enricher.id": enricher.id,
+          "enricher.notes": result.notes.slice(0, 8).map((note) => note.slice(0, 200)),
+        });
+      }
+      const next = result.cursor;
+      if (next !== undefined && (next.source !== cursor?.source || next.offset !== cursor.offset)) {
+        try {
+          await deps.stateStore.write(key, { kind: "read-cursor", source: next.source, offset: next.offset });
+        } catch (thrown) {
+          diagnostics.push(
+            errorInfoFromThrown(thrown, { code: "state-store-failure", phase: "state", occurredAt: clock.now() }),
+          );
+        }
+      }
+    }
+    return current;
   };
 
   /**
@@ -904,12 +978,16 @@ export const createOtelHook = (deps: OtelHookDependencies): OtelHook => {
       const prepare = async (): Promise<Prepared> => {
       const sequenceBase = await readSequenceBase(identity.sessionId, diagnostics);
       const sessionModel = await readSessionModel(identity.sessionId, diagnostics);
+      const payload = suppress
+        ? detectionInput.payload
+        : await enrichPayload(detectionInput.payload, detection.providerId, identity.sessionId, diagnostics);
 
       let parsed;
       try {
         parsed = adapter.parse(
           {
             ...detectionInput,
+            payload,
             detection,
             identity,
             sequenceBase,

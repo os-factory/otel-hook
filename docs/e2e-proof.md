@@ -219,10 +219,12 @@ Every cell is pending until a provider comment links its evidence.
 | Trace ↔ Factory Commits proof correlation | pending | pending | pending | pending | pending | **manual**: `git factory` output; `trace-proof` lists the session trace ids |
 
 Claude Code's hooks carry no token counter, so its `token-usage` cell can pass only
-when the harness attaches usage to `Stop` with `attachClaudeTranscriptTurn`
+with `--claude-transcript-usage` (or `OTEL_HOOK_CLAUDE_TRANSCRIPT_USAGE=1`) on the
+hook command, or a harness that attaches usage itself
 ([finding 8](claude-code-usage-contract.md#finding-8-the-model-is-on-sessionstart-and-in-the-transcript-never-on-stop)).
-The attached figure is the turn's last model request, so `--expect-usage` must be
-taken from those requests, not from the session's total spend.
+With the setting, generation spans carry each turn's summed main-thread requests;
+any span with `otelhook.usage.partial=true` holds one request only, so compare
+`--expect-usage` against a run where none is partial.
 
 ### What each check asserts
 
