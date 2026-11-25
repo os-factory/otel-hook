@@ -36,13 +36,16 @@ describe("otlpSignalEndpointFromBase", () => {
     expect(otlpSignalEndpointFromBase(`${BASE}/v1/traces`, "traces")).toBe(`${BASE}/v1/traces`);
     expect(otlpSignalEndpointFromBase(`${BASE}/v1/traces/`, "traces")).toBe(`${BASE}/v1/traces`);
     expect(otlpSignalEndpointFromBase(`${BASE}/v1/traces`, "logs")).toBe(`${BASE}/v1/logs`);
+    expect(otlpSignalEndpointFromBase(`${BASE}/v1/traces`, "metrics")).toBe(`${BASE}/v1/metrics`);
+    expect(otlpSignalEndpointFromBase(BASE, "metrics")).toBe(`${BASE}/v1/metrics`);
   });
 
-  it("names the three standard variables", () => {
+  it("names the four standard variables", () => {
     expect(OTLP_ENDPOINT_VARIABLES).toEqual({
       generic: "OTEL_EXPORTER_OTLP_ENDPOINT",
       traces: "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
       logs: "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+      metrics: "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
     });
   });
 });

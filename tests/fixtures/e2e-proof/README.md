@@ -17,8 +17,13 @@ run), not captured from any real agent session, Langfuse instance or HAR slot.
 
 What it models: request 1 is an empty traces body (the #54 observation),
 request 3 is rejected with an injected 503 and its tool span is redelivered in
-request 4, the session span arrives last. The checker passes it with
+request 4, the session span arrives last. Requests 7 to 9 are cumulative OTLP
+metrics (issue #69): request 7 holds the session and tool call counters, request
+8 adds the token usage and duration histograms, and request 9 re-sends request 8
+byte for byte, as a spool replay would, so the checker must count it once. The checker passes it with
 `--session-id har-synthetic-session-0001 --work-unit-id synthetic-56
---expect-tool Read --expect-usage input=200,output=8`. Failing cases are derived
+--expect-tool Read --expect-usage input=200,output=8,cache_read=80`. Tests that
+need protobuf metrics build them from `tests/e2e-proof/otlp-metrics.ts` with
+the OpenTelemetry SDK's own serializer. Failing cases are derived
 from it inside `tests/e2e-proof/check-evidence.test.ts` by mutating a temporary
 copy, so every failure is one visible edit away from a passing capture.

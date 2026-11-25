@@ -63,6 +63,13 @@ export type CliPolicyFlags = {
    * whether the logs pipeline may carry it. Both are needed for a body to appear.
    */
   readonly logsIncludeContent?: boolean;
+  /** Export hook-derived OTLP metrics to the `default` destination. Off unless asked for. */
+  readonly metricsEnabled?: boolean;
+  /** Full metrics URL. Derived from `endpoint` when absent. */
+  readonly metricsEndpoint?: string;
+  readonly metricsTemporality?: "cumulative" | "delta";
+  /** False drops `session.id` from metric data points (fewer series). */
+  readonly metricsIncludeSessionId?: boolean;
   /**
    * `providers.claudeCode.readTranscriptUsage`: read the Claude Code transcript
    * at `Stop` for the turn's model and token usage. Off unless asked for.
@@ -177,6 +184,8 @@ const VALUE_FLAGS = new Set([
   "--installation-id",
   "--flush-timeout-ms",
   "--logs-endpoint",
+  "--metrics-endpoint",
+  "--metrics-temporality",
   "--max-input-bytes",
   "--scope",
   "--project-dir",
@@ -196,6 +205,9 @@ const BOOLEAN_FLAGS = new Set([
   "--logs",
   "--no-logs",
   "--logs-content",
+  "--metrics",
+  "--no-metrics",
+  "--no-metrics-session-id",
   "--claude-transcript-usage",
   "--include-experimental",
   "--no-experimental",
@@ -418,6 +430,25 @@ const parsePolicy = (tokens: Tokenized, errors: string[]): CliPolicyFlags => {
     errors.push("flags --logs and --no-logs cannot both be given");
   }
 
+  const metricsEndpoint = single(tokens, "--metrics-endpoint", errors);
+  const metricsEnabled = tokens.booleans.has("--metrics")
+    ? true
+    : tokens.booleans.has("--no-metrics")
+      ? false
+      : undefined;
+  if (tokens.booleans.has("--metrics") && tokens.booleans.has("--no-metrics")) {
+    errors.push("flags --metrics and --no-metrics cannot both be given");
+  }
+  const metricsTemporalityRaw = single(tokens, "--metrics-temporality", errors);
+  let metricsTemporality: "cumulative" | "delta" | undefined;
+  if (metricsTemporalityRaw !== undefined) {
+    if (metricsTemporalityRaw === "cumulative" || metricsTemporalityRaw === "delta") {
+      metricsTemporality = metricsTemporalityRaw;
+    } else {
+      errors.push("flag --metrics-temporality must be cumulative or delta");
+    }
+  }
+
   return {
     ...(configFile === undefined ? {} : { configFile }),
     ...(endpoint === undefined ? {} : { endpoint }),
@@ -438,6 +469,10 @@ const parsePolicy = (tokens: Tokenized, errors: string[]): CliPolicyFlags => {
     ...(logsEnabled === undefined ? {} : { logsEnabled }),
     ...(logsEndpoint === undefined ? {} : { logsEndpoint }),
     ...(tokens.booleans.has("--logs-content") ? { logsIncludeContent: true } : {}),
+    ...(metricsEnabled === undefined ? {} : { metricsEnabled }),
+    ...(metricsEndpoint === undefined ? {} : { metricsEndpoint }),
+    ...(metricsTemporality === undefined ? {} : { metricsTemporality }),
+    ...(tokens.booleans.has("--no-metrics-session-id") ? { metricsIncludeSessionId: false } : {}),
     ...(tokens.booleans.has("--claude-transcript-usage") ? { claudeTranscriptUsage: true } : {}),
   };
 };
@@ -507,6 +542,11 @@ const RUN_FLAGS: ReadonlySet<string> = new Set([
   "--no-logs",
   "--logs-endpoint",
   "--logs-content",
+  "--metrics",
+  "--no-metrics",
+  "--metrics-endpoint",
+  "--metrics-temporality",
+  "--no-metrics-session-id",
   "--claude-transcript-usage",
   "--max-input-bytes",
   "--no-export",
@@ -537,6 +577,11 @@ const DOCTOR_FLAGS: ReadonlySet<string> = new Set([
   "--no-logs",
   "--logs-endpoint",
   "--logs-content",
+  "--metrics",
+  "--no-metrics",
+  "--metrics-endpoint",
+  "--metrics-temporality",
+  "--no-metrics-session-id",
   "--claude-transcript-usage",
   "--include-experimental",
   "--no-experimental",
@@ -825,6 +870,14 @@ Exporter and runtime policy (never identity):
   --logs-content             permit disclosed content text in a log body. Needs
                              --content-mode too: this decides whether the logs
                              pipeline may carry what that one discloses
+  --metrics                  also export hook-derived OTLP metrics (off by
+                             default): token usage, generation duration,
+                             sessions, tool calls, provider-reported cost
+  --metrics-endpoint <url>   OTLP HTTP/protobuf metrics endpoint; derived from
+                             --endpoint when omitted (/v1/traces -> /v1/metrics)
+  --metrics-temporality <t>  cumulative (default; running totals kept in the
+                             state dir) | delta
+  --no-metrics-session-id    leave session.id off metric points (fewer series)
   --claude-transcript-usage  Claude Code only: at Stop, read the transcript the
                              payload names (bounded) for the turn's model and
                              summed token usage. Off by default; also

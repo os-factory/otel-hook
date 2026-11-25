@@ -7,6 +7,7 @@ import {
   type CallbackDeduplicator,
   type DeliveryClaimOutcome,
 } from "../lifecycle/dedup.js";
+import { createMetricSeriesStore, type MetricSeriesStore } from "../lifecycle/metric-series.js";
 import { createLifecycleJanitor, type LifecycleCleanupReport, type LifecycleJanitor } from "../lifecycle/janitor.js";
 import { createSpanCorrelator, type SpanCorrelator } from "../lifecycle/span-correlator.js";
 import {
@@ -47,6 +48,14 @@ import {
   type ExportDestinationSinks,
   type SkippedExportDestination,
 } from "../telemetry/export-destinations.js";
+import { effectiveMetricsPolicy } from "../config/schema.js";
+import { resourceFromExporterPolicy } from "../telemetry/exporter-resource.js";
+import {
+  aggregateDeltaPoints,
+  deriveMetricObservations,
+  type GenerationStart,
+  type MetricPoint,
+} from "../telemetry/metric-model.js";
 import { createOtlpLogSink, type OtlpLogTelemetrySink } from "../telemetry/otlp-log-sink.js";
 import { createOtlpTraceSink, type OtlpTelemetrySink } from "../telemetry/otlp-sink.js";
 import {
@@ -221,10 +230,27 @@ export type HookProcessOutcome = {
   readonly delivery: DeliveryReport;
   /** Running per-scope totals after applying this invocation's deltas. */
   readonly usageRollups: readonly UsageRollup[];
+  /**
+   * Hook-derived metrics for this callback (issue #69). Absent when no destination
+   * takes metrics, or when nothing was recorded (a redelivery, a callback whose
+   * telemetry was lost and will be retried, or a batch with nothing to measure).
+   */
+  readonly metrics?: MetricsReport;
   /** Cleanup performed opportunistically; absent when no sweep ran. */
   readonly cleanup?: LifecycleCleanupReport;
   /** Diagnostics raised by this module, in addition to `ingest.diagnostics`. */
   readonly diagnostics: readonly OtelHookErrorInfo[];
+};
+
+export type MetricsReport = {
+  /** Data points derived for this callback, before fan-out. */
+  readonly points: number;
+  /** Per destination taking metrics: points delivered or spooled, and refused. */
+  readonly destinations: readonly {
+    readonly name: string;
+    readonly accepted: number;
+    readonly rejected: number;
+  }[];
 };
 
 export type UsageRollup = {
@@ -264,6 +290,8 @@ export interface HookRuntime {
   readonly usageAccumulator: UsageAccumulator;
   /** Backs the cross-process pairing the sink applies to every exported span. */
   readonly spanCorrelator: SpanCorrelator;
+  /** Cumulative metric series state (issue #69). */
+  readonly metricSeries: MetricSeriesStore;
   readonly janitor: LifecycleJanitor;
   /** Ingest one observation, then apply lifecycle accumulation. Never throws. */
   process(input: HookProcessInput): Promise<HookProcessOutcome>;
@@ -601,6 +629,12 @@ export const createHookRuntime = (options: HookRuntimeOptions): HookRuntime => {
 
   const deduplicator = createCallbackDeduplicator({ stateStore, clock });
   const usageAccumulator = createUsageAccumulator({ stateStore, clock });
+  const metricSeries = createMetricSeriesStore({ stateStore, clock });
+  const metricsPolicy = effectiveMetricsPolicy(options.config.exporter);
+  const metricDestinations = exportDestinations.destinations.filter(
+    (destination) => destination.metrics.enabled,
+  );
+  const metricResource = resourceFromExporterPolicy(options.config.exporter);
   const deliveryRetentionMillis = options.deliveryRetentionMillis ?? lifecycleMaxAge;
   if (deliveryRetentionMillis < staleClaimMillis) {
     // Not raised, only reported: an operator who wants dedup records gone in a
@@ -617,6 +651,7 @@ export const createHookRuntime = (options: HookRuntimeOptions): HookRuntime => {
     spanCorrelator,
     deduplicator,
     usageAccumulator,
+    metricSeries,
     spanMaxAgeMillis: lifecycleMaxAge,
     dedupMaxAgeMillis: deliveryRetentionMillis,
     // The *effective* window, not the requested one: a sweep that considered a
@@ -630,6 +665,114 @@ export const createHookRuntime = (options: HookRuntimeOptions): HookRuntime => {
 
   const stateDiagnostic = (thrown: unknown): OtelHookErrorInfo =>
     errorInfoFromThrown(thrown, { code: "state-store-failure", phase: "state", occurredAt: clock.now() });
+
+  /**
+   * Start edges for generations whose `generation.start` was recorded by an earlier
+   * process. Served from the batch's shared correlation, which the trace and log
+   * sinks have already resolved for this exact batch, so this is normally a memo
+   * hit rather than a second resolution.
+   */
+  const generationStartsFor = async (
+    events: readonly CanonicalEvent[],
+  ): Promise<((generationId: string) => GenerationStart | undefined) | undefined> => {
+    const needed = events.some(
+      (event) =>
+        event.type === "generation.end" &&
+        event.durationMillis === undefined &&
+        !events.some(
+          (other) => other.type === "generation.start" && other.generationId === event.generationId,
+        ),
+    );
+    if (!needed) {
+      return undefined;
+    }
+    try {
+      const starts = new Map<string, GenerationStart>();
+      for (const correlation of await correlate(events)) {
+        if (correlation.ref.family !== "generation" || correlation.startMillis === undefined) {
+          continue;
+        }
+        const requestModel = correlation.attributes?.["gen_ai.request.model"];
+        starts.set(correlation.ref.scopeKey, {
+          startMillis: correlation.startMillis,
+          ...(typeof requestModel === "string" ? { requestModel } : {}),
+        });
+      }
+      return (generationId) => starts.get(generationId);
+    } catch {
+      return undefined;
+    }
+  };
+
+  /**
+   * Derive, aggregate, and send this callback's metrics (issue #69).
+   *
+   * Runs only for a callback whose accounting committed — the same condition the
+   * usage deltas it reads were derived under — so a redelivery or a lost-and-retried
+   * callback is measured exactly once. Fails open: a metrics failure is a
+   * diagnostic, never a reason to retry the callback, whose traces are already out.
+   */
+  const recordMetrics = async (
+    ingest: HookIngestOutcome,
+    deliveryToken: string | undefined,
+    diagnostics: OtelHookErrorInfo[],
+  ): Promise<MetricsReport | undefined> => {
+    if (metricDestinations.length === 0 || ingest.events.length === 0) {
+      return undefined;
+    }
+    try {
+      for (const event of ingest.events) {
+        if (event.type === "prompt.submitted") {
+          await metricSeries.recordTurnStart(event.sessionId, event.occurredAt);
+        }
+      }
+      const generationStarts = await generationStartsFor(ingest.events);
+      const turnStarts = new Map<string, number | undefined>();
+      for (const event of ingest.events) {
+        if (event.type === "generation.end" && !turnStarts.has(event.sessionId)) {
+          turnStarts.set(event.sessionId, await metricSeries.readTurnStart(event.sessionId));
+        }
+      }
+      const observations = deriveMetricObservations({
+        events: ingest.events,
+        usage: ingest.usageObservations,
+        resource: metricResource,
+        includeSessionId: metricsPolicy.includeSessionId,
+        ...(generationStarts === undefined ? {} : { generationStarts }),
+        turnStart: (sessionId) => turnStarts.get(sessionId),
+      });
+      if (observations.length === 0) {
+        return undefined;
+      }
+      const points: readonly MetricPoint[] =
+        metricsPolicy.temporality === "delta"
+          ? aggregateDeltaPoints(observations, clock.now())
+          : await metricSeries.recordCumulative(observations, {
+              perSession: metricsPolicy.includeSessionId,
+              ...(deliveryToken === undefined ? {} : { deliveryToken }),
+            });
+      const results = await Promise.all(
+        metricDestinations.map(async (destination) => {
+          const result = await destination.metrics.exportPoints(points).catch(
+            (thrown: unknown) => ({
+              accepted: 0,
+              rejected: points.length,
+              errors: [
+                errorInfoFromThrown(thrown, { code: "telemetry-export-failure", phase: "export" }),
+              ],
+            }),
+          );
+          diagnostics.push(...result.errors);
+          return { name: destination.name, accepted: result.accepted, rejected: result.rejected };
+        }),
+      );
+      return { points: points.length, destinations: results };
+    } catch (thrown) {
+      diagnostics.push(stateDiagnostic(thrown));
+      logger.warn("hook-derived metrics could not be recorded for this callback", {});
+      return undefined;
+    }
+  };
 
   /**
    * Opaque, replay-stable token for a delivery, safe to write into a state record.
@@ -839,6 +982,15 @@ export const createHookRuntime = (options: HookRuntimeOptions): HookRuntime => {
       );
     }
 
+    const metrics =
+      !duplicateDelivery && ingest.identity !== undefined && isCommittable(ingest.durability)
+        ? await recordMetrics(
+            ingest,
+            identity === undefined ? undefined : rollupDeliveryToken(identity),
+            diagnostics,
+          )
+        : undefined;
+
     if (owned && identity !== undefined) {
       // Committing means "this callback is accounted for; never process it again",
       // so the decision turns on whether *anything* survived rather than whether
@@ -933,6 +1085,7 @@ export const createHookRuntime = (options: HookRuntimeOptions): HookRuntime => {
       duplicateDelivery,
       delivery,
       usageRollups,
+      ...(metrics === undefined ? {} : { metrics }),
       ...(cleanup === undefined ? {} : { cleanup }),
       diagnostics,
     };
@@ -956,13 +1109,21 @@ export const createHookRuntime = (options: HookRuntimeOptions): HookRuntime => {
     );
   };
 
-  const snapshots = (): readonly DeliveryHealthSnapshot[] => sink.health();
+  const snapshots = (): readonly DeliveryHealthSnapshot[] => [
+    ...sink.health(),
+    ...metricDestinations.map((destination) => destination.metrics.health()),
+  ];
 
   let shutdownReport: Promise<HookShutdownReport> | undefined;
   const shutdown = (): Promise<HookShutdownReport> => {
     shutdownReport ??= (async (): Promise<HookShutdownReport> => {
       const raced = await Promise.race([
-        hook.shutdown().then(() => "completed" as const),
+        Promise.all([
+          hook.shutdown(),
+          // Metric sinks are not behind the hook's sink: they replay their own
+          // spools here, inside the same bounded window.
+          ...metricDestinations.map((destination) => destination.metrics.shutdown().catch(() => undefined)),
+        ]).then(() => "completed" as const),
         delay(flushTimeoutMillis),
       ]);
       if (raced === "timeout") {
@@ -996,6 +1157,7 @@ export const createHookRuntime = (options: HookRuntimeOptions): HookRuntime => {
     deduplicator,
     usageAccumulator,
     spanCorrelator,
+    metricSeries,
     janitor,
     process: process_,
     shutdown,

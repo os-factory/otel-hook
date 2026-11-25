@@ -43,6 +43,7 @@ export const ROWS = Object.freeze({
   destinations: "Multiple destinations + spool replay",
   privacy: "Privacy: no `factory.local.*`, no paths, no account identity",
   proof: "Trace ↔ Factory Commits proof correlation",
+  metrics: "Metrics (token, duration, session, tool calls)",
 });
 
 /** Profile keys required on every record (resource or record attributes) by default. */
@@ -67,6 +68,35 @@ const ATTR = Object.freeze({
   agentVersion: "otelhook.agent.version",
   providerVersion: "otelhook.provider.version",
   providerId: "otelhook.provider.id",
+  tokenType: "gen_ai.token.type",
+});
+
+/** Metric names that must be present when a capture's metrics are checked (`--expect-metric` replaces them). */
+export const DEFAULT_METRICS = Object.freeze([
+  "gen_ai.client.token.usage",
+  "gen_ai.client.operation.duration",
+  "otelhook.sessions",
+  "otelhook.tool.calls",
+]);
+
+/** The shape otel-hook gives each metric it exports (issue #69). Other names are reported, not judged. */
+const METRIC_CONTRACT = Object.freeze({
+  "gen_ai.client.token.usage": { type: "histogram", unit: "{token}" },
+  "gen_ai.client.operation.duration": { type: "histogram", unit: "s" },
+  "otelhook.sessions": { type: "sum", unit: "{session}", monotonic: true },
+  "otelhook.tool.calls": { type: "sum", unit: "{call}", monotonic: true },
+  "otelhook.cost.usage": { type: "sum", unit: "USD", monotonic: true },
+});
+
+const TOKEN_USAGE_METRIC = "gen_ai.client.token.usage";
+const TOOL_CALLS_METRIC = "otelhook.tool.calls";
+
+/** `--expect-usage` keys to `gen_ai.token.type` values of the token usage histogram. */
+const TOKEN_TYPES = Object.freeze({
+  input: "input",
+  output: "output",
+  cache_read: "cache_read",
+  cache_creation: "cache_creation",
 });
 
 /** `--expect-usage` keys to `gen_ai.usage.*` attributes. */
@@ -84,7 +114,7 @@ const OTEL_HOOK_SCOPE = "@osfactory/otel-hook";
 // Loading a capture
 // ---------------------------------------------------------------------------
 
-const REQUEST_FILE = /^(\d{4,})-(traces|logs|unknown)\.json$/;
+const REQUEST_FILE = /^(\d{4,})-(traces|logs|metrics|unknown)\.json$/;
 
 const decompress = (body, encoding) => {
   const value = String(encoding ?? "").toLowerCase();
@@ -120,7 +150,7 @@ export const loadCapture = async (captureDir, label = path.basename(captureDir))
     const signal = meta.signal ?? match?.[2] ?? "unknown";
     const status = Number(meta.responseStatus ?? 200);
     let body = raw;
-    let decoded = { spans: [], logs: [] };
+    let decoded = { spans: [], logs: [], metrics: [] };
     let decodeError;
     try {
       body = decompress(raw, meta.contentEncoding);
@@ -141,6 +171,7 @@ export const loadCapture = async (captureDir, label = path.basename(captureDir))
       body,
       spans: decoded.spans,
       logs: decoded.logs,
+      metrics: decoded.metrics,
       decodeError,
     });
   }
@@ -188,6 +219,90 @@ const deliveredRecords = (capture) => {
     }
   }
   return { records: [...seen.values()], keys: new Set(seen.keys()), duplicates };
+};
+
+/** Point attributes in a stable order, so one series has one key whatever the encoder's order. */
+const sortedAttributes = (attributes) =>
+  JSON.stringify(Object.keys(attributes).sort().map((key) => [key, attributes[key]]));
+
+/** A metric series: name, point attributes and the resource's `session.id`. */
+const seriesKey = (point) =>
+  `${point.name}|${sortedAttributes(point.attributes)}|${String(point.resourceAttributes[ATTR.sessionId] ?? "")}`;
+
+/** One data point of one series, regardless of its value. */
+const pointIdentity = (point) =>
+  `${seriesKey(point)}|${point.temporality}|${String(point.startTimeUnixNanos)}|${String(point.timeUnixNanos)}`;
+
+const pointValue = (point) => (point.histogram === undefined ? point.value : point.histogram);
+
+/** One exact data point: identity plus value. A re-sent snapshot has the same key. */
+const metricPointKey = (point) => `metric:${pointIdentity(point)}|${JSON.stringify(pointValue(point))}`;
+
+/** Metric data points from delivered (2xx) requests, in arrival order, duplicates kept. */
+const deliveredMetricPoints = (capture) =>
+  capture.requests
+    .filter((request) => request.delivered)
+    .flatMap((request) => request.metrics.map((point, index) => ({ ...point, seq: request.seq, index })));
+
+const compareBigint = (left, right) => (left < right ? -1 : left > right ? 1 : 0);
+
+/**
+ * Split one cumulative series into runs that share a start time (a newer start
+ * time is a reset), each run ordered by the point's own time, then arrival.
+ * Ordering by time rather than arrival alone keeps a late spool replay of an
+ * older snapshot from looking like a decrease.
+ */
+const cumulativeRuns = (points) => {
+  const runs = new Map();
+  for (const point of points) {
+    const key = String(point.startTimeUnixNanos);
+    const list = runs.get(key) ?? [];
+    list.push(point);
+    runs.set(key, list);
+  }
+  return [...runs.values()]
+    .sort((left, right) => compareBigint(left[0].startTimeUnixNanos, right[0].startTimeUnixNanos))
+    .map((list) =>
+      list.sort(
+        (left, right) =>
+          compareBigint(left.timeUnixNanos, right.timeUnixNanos) || left.seq - right.seq || left.index - right.index,
+      ),
+    );
+};
+
+/** The quantities of a point that a cumulative series must never decrease. */
+const monotoneQuantities = (point) =>
+  point.histogram === undefined
+    ? { value: point.value }
+    : { count: point.histogram.count, sum: point.histogram.sum ?? 0 };
+
+/**
+ * The total a set of points of one metric stands for. Delta points are summed
+ * once per identity (a re-sent point is not counted twice). A cumulative series
+ * contributes the last running total of each run (one run per start time), so
+ * running totals are never summed.
+ */
+const metricTotal = (points, quantity) => {
+  let total = 0;
+  const deltas = new Map();
+  for (const point of points.filter((entry) => entry.temporality === "delta")) {
+    deltas.set(pointIdentity(point), quantity(point));
+  }
+  for (const value of deltas.values()) {
+    total += value;
+  }
+  const series = new Map();
+  for (const point of points.filter((entry) => entry.temporality === "cumulative")) {
+    const list = series.get(seriesKey(point)) ?? [];
+    list.push(point);
+    series.set(seriesKey(point), list);
+  }
+  for (const list of series.values()) {
+    for (const run of cumulativeRuns(list)) {
+      total += quantity(run.at(-1));
+    }
+  }
+  return total;
 };
 
 const countBy = (values) => {
@@ -238,8 +353,9 @@ const RAW_HOME_PATH = /(?:\/home\/|\/Users\/|\/root\/|[A-Za-z]:\\\\?Users\\)[A-Z
 const RAW_EMAIL = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g;
 /** `scheme://user[:pass]@host`: credentials in a URL. */
 const RAW_URL_USERINFO = /\b[a-z][a-z0-9+.-]*:\/\/[A-Za-z0-9._~%!$&'()*+,;=:-]+@/gi;
-/** Attribute keys that name an account holder rather than a session. */
-const IDENTITY_KEY = /^(?:enduser\.|user\.(?:email|name|full_name|id|hash)$)|(?:^|[._])e?mail(?:$|[._])/i;
+/** Attribute keys that name an account holder or organization rather than a session. */
+const IDENTITY_KEY =
+  /^(?:enduser\.|organization\.id$|user\.(?:email|name|full_name|id|hash|account_uuid|account_id)$)|(?:^|[._])e?mail(?:$|[._])/i;
 /** Local parts that are protocol users, not people (`git@host:org/repo`). */
 const SERVICE_EMAIL_LOCAL = new Set(["git", "noreply", "no-reply"]);
 
@@ -259,7 +375,7 @@ const stringValues = (record) => {
     values.push({ scope: "record", key: "<log body>", value: record.body });
   }
   if (typeof record.name === "string") {
-    values.push({ scope: "record", key: "<span name>", value: record.name });
+    values.push({ scope: "record", key: record.spanId === undefined ? "<metric name>" : "<span name>", value: record.name });
   }
   return values;
 };
@@ -524,6 +640,157 @@ const checkLogs = (records) => {
   ]);
 };
 
+const checkMetrics = (capture, options) => {
+  const metricRequests = capture.requests.filter((request) => request.signal === "metrics");
+  const expected = options.expectMetrics ?? DEFAULT_METRICS;
+  const required = options.expectMetricsRequired === true || options.expectMetrics !== undefined;
+  if (metricRequests.length === 0) {
+    return required
+      ? check("metrics", ROWS.metrics, "fail", ["metrics are expected (`--expect-metrics` or `--expect-metric`), but the capture holds no `/v1/metrics` request"])
+      : check("metrics", ROWS.metrics, "skip", ["no `/v1/metrics` request in the capture: pass `--expect-metrics` to require metrics"]);
+  }
+  const failures = [];
+  const details = [];
+  const decoded = metricRequests.filter((request) => request.delivered && !request.empty && request.decodeError === undefined);
+  details.push(`${String(metricRequests.length)} metrics request(s), ${String(decoded.length)} delivered with a body that decodes`);
+  if (decoded.length === 0) {
+    failures.push("no delivered metrics request decodes");
+  }
+  const points = deliveredMetricPoints(capture);
+
+  // Per metric: point count, type, unit, temporality, and the contract of #69.
+  const byName = new Map();
+  for (const point of points) {
+    const list = byName.get(point.name) ?? [];
+    list.push(point);
+    byName.set(point.name, list);
+  }
+  for (const [name, list] of [...byName].sort(([left], [right]) => left.localeCompare(right))) {
+    const types = [...new Set(list.map((point) => point.type))];
+    const units = [...new Set(list.map((point) => point.unit))];
+    const temporalities = [...new Set(list.map((point) => point.temporality))];
+    details.push(`\`${name}\`: ${String(list.length)} point(s), ${types.join("/")}, unit \`${units.join("`/`")}\`, ${temporalities.join("/")}`);
+    const contract = METRIC_CONTRACT[name];
+    if (contract !== undefined) {
+      if (types.some((type) => type !== contract.type)) {
+        failures.push(`\`${name}\` is a ${types.join("/")}, expected a ${contract.type}`);
+      }
+      if (units.some((unit) => unit !== contract.unit)) {
+        failures.push(`\`${name}\` has unit \`${units.join("`/`")}\`, expected \`${contract.unit}\``);
+      }
+      if (contract.monotonic === true && list.some((point) => !point.monotonic)) {
+        failures.push(`\`${name}\` is not a monotonic sum`);
+      }
+    }
+    if (list.some((point) => point.type !== "gauge" && point.temporality === "unspecified")) {
+      failures.push(`\`${name}\` has points with an unspecified aggregation temporality`);
+    }
+  }
+  const missing = expected.filter((name) => !byName.has(name));
+  if (missing.length > 0) {
+    failures.push(`expected metric(s) without a delivered point: ${missing.map((name) => `\`${name}\``).join(", ")}`);
+  }
+
+  // Re-sent points (spool replay, retries) and conflicting snapshots.
+  const values = new Map();
+  let resent = 0;
+  for (const point of points) {
+    const identity = pointIdentity(point);
+    const value = JSON.stringify(pointValue(point));
+    if (!values.has(identity)) {
+      values.set(identity, value);
+    } else if (values.get(identity) === value) {
+      resent += 1;
+    } else {
+      failures.push(`\`${point.name}\` point at time ${String(point.timeUnixNanos)} was sent twice with different values (request #${String(point.seq)})`);
+    }
+  }
+  if (resent > 0) {
+    details.push(`${String(resent)} identical point(s) re-sent (spool replay or retry), counted once`);
+  }
+
+  // A cumulative series never goes down within one start time.
+  const series = new Map();
+  for (const point of points.filter((entry) => entry.temporality === "cumulative" && entry.type !== "gauge")) {
+    const list = series.get(seriesKey(point)) ?? [];
+    list.push(point);
+    series.set(seriesKey(point), list);
+  }
+  let resets = 0;
+  for (const list of series.values()) {
+    const runs = cumulativeRuns(list);
+    resets += runs.length - 1;
+    for (const run of runs) {
+      for (let index = 1; index < run.length; index += 1) {
+        const before = monotoneQuantities(run[index - 1]);
+        const after = monotoneQuantities(run[index]);
+        for (const [quantity, value] of Object.entries(after)) {
+          if (value < before[quantity]) {
+            failures.push(
+              `cumulative \`${run[index].name}\` ${quantity} went down (${String(before[quantity])} → ${String(value)}) in series ${sortedAttributes(run[index].attributes)} (request #${String(run[index].seq)})`,
+            );
+          }
+        }
+      }
+    }
+  }
+  details.push(`${String(series.size)} cumulative series checked for decreases`);
+  if (resets > 0) {
+    details.push(`${String(resets)} cumulative reset(s): a series restarted with a newer start time`);
+  }
+
+  // Token totals per type, against the agent's own report.
+  const tokenPoints = byName.get(TOKEN_USAGE_METRIC) ?? [];
+  if (tokenPoints.length > 0) {
+    const totals = {};
+    for (const [key, type] of Object.entries(TOKEN_TYPES)) {
+      totals[key] = metricTotal(
+        tokenPoints.filter((point) => point.attributes[ATTR.tokenType] === type),
+        (point) => point.histogram?.sum ?? 0,
+      );
+    }
+    details.push(`token usage totals: ${Object.entries(totals).map(([name, value]) => `${name}=${String(value)}`).join(", ")}`);
+    if (options.expectUsage !== undefined) {
+      const mismatches = [];
+      for (const [name, value] of Object.entries(options.expectUsage)) {
+        if (!(name in TOKEN_TYPES)) {
+          details.push(`\`${name}\` has no \`gen_ai.token.type\` in the metrics; not compared`);
+        } else if (totals[name] !== value) {
+          mismatches.push(`metric ${name} tokens ${String(totals[name])} ≠ expected ${String(value)} (from the agent's own report)`);
+        }
+      }
+      failures.push(...mismatches);
+      if (mismatches.length === 0) {
+        details.push("metric token totals match the agent-reported totals");
+      }
+    }
+  } else if (options.expectUsage !== undefined) {
+    details.push(`\`${TOKEN_USAGE_METRIC}\` not delivered: \`--expect-usage\` not compared against metrics`);
+  }
+
+  // Tool calls.
+  const toolPoints = byName.get(TOOL_CALLS_METRIC) ?? [];
+  if (toolPoints.length > 0 || expected.includes(TOOL_CALLS_METRIC)) {
+    const tools = [...new Set(toolPoints.map((point) => point.attributes[ATTR.toolName]).filter((name) => typeof name === "string"))].sort();
+    details.push(`tool call series: ${tools.map((name) => `\`${name}\``).join(", ") || "none"}`);
+    const absent = (options.expectTools ?? []).filter((name) => !tools.includes(name));
+    if (absent.length > 0) {
+      failures.push(`expected tool(s) without an \`${TOOL_CALLS_METRIC}\` series: ${absent.map((name) => `\`${name}\``).join(", ")}`);
+    }
+  }
+
+  // The launcher's session id, on the point or the resource.
+  if (options.sessionId !== undefined && points.length > 0) {
+    const carrying = points.filter(
+      (point) => point.attributes[ATTR.sessionId] === options.sessionId || point.resourceAttributes[ATTR.sessionId] === options.sessionId,
+    ).length;
+    details.push(
+      `${carrying === points.length ? "" : "warning: "}${String(carrying)}/${String(points.length)} metric points carry \`session.id\`=\`${options.sessionId}\` (point or resource)`,
+    );
+  }
+  return check("metrics", ROWS.metrics, failures.length === 0 ? "pass" : "fail", [...failures, ...details]);
+};
+
 const checkPrivacy = (captures, options) => {
   const failures = [];
   const note = (message) => {
@@ -537,7 +804,7 @@ const checkPrivacy = (captures, options) => {
     const where = (request) => `${captures.length > 1 ? `${capture.label} ` : ""}request #${String(request.seq)}`;
     for (const request of capture.requests) {
       inspected += 1;
-      for (const record of [...request.spans, ...request.logs]) {
+      for (const record of [...request.spans, ...request.logs, ...request.metrics]) {
         for (const { scope, key } of [
           ...Object.keys(record.resourceAttributes).map((key) => ({ scope: "resource", key })),
           ...Object.keys(record.attributes).map((key) => ({ scope: "record", key })),
@@ -596,10 +863,30 @@ const checkSpoolReplay = (capture) => {
   let total = 0;
   for (const request of rejected) {
     const later = capture.requests.filter((candidate) => candidate.delivered && candidate.seq > request.seq);
-    const laterKeys = new Set(later.flatMap((candidate) => [...candidate.spans.map(spanKey), ...candidate.logs.map(logKey)]));
+    const laterKeys = new Set(
+      later.flatMap((candidate) => [...candidate.spans.map(spanKey), ...candidate.logs.map(logKey), ...candidate.metrics.map(metricPointKey)]),
+    );
     for (const key of [...request.spans.map(spanKey), ...request.logs.map(logKey)]) {
       total += 1;
       if (!laterKeys.has(key)) {
+        missing.push(`#${String(request.seq)}`);
+      }
+    }
+    // A metric point is replayed when the same point arrives later, or, for a
+    // running total, when a later snapshot of the same series and start time does.
+    const laterPoints = later.flatMap((candidate) => candidate.metrics);
+    for (const point of request.metrics) {
+      total += 1;
+      const replayed =
+        laterKeys.has(metricPointKey(point)) ||
+        (point.temporality === "cumulative" &&
+          laterPoints.some(
+            (candidate) =>
+              seriesKey(candidate) === seriesKey(point) &&
+              candidate.startTimeUnixNanos === point.startTimeUnixNanos &&
+              candidate.timeUnixNanos >= point.timeUnixNanos,
+          ));
+      if (!replayed) {
         missing.push(`#${String(request.seq)}`);
       }
     }
@@ -619,7 +906,7 @@ const checkSpoolReplay = (capture) => {
   return check("spool-replay", ROWS.destinations, missing.length === 0 ? "pass" : "fail", details);
 };
 
-const checkDestinations = (captures, deliveredSets) => {
+const checkDestinations = (captures, deliveredSets, metricSets) => {
   if (captures.length < 2) {
     return check("multi-destination", ROWS.destinations, "skip", [
       "one capture directory: pass a second destination's capture to compare (needs #54)",
@@ -637,6 +924,18 @@ const checkDestinations = (captures, deliveredSets) => {
       details.push(`\`${label}\` differs from \`${captures[0]?.label ?? ""}\`: ${String(onlyFirst)} record(s) only in the first, ${String(onlyOther)} only in \`${label}\``);
     } else {
       details.push(`\`${label}\` received the same ${String(set.keys.size)} record(s) as \`${captures[0]?.label ?? ""}\``);
+    }
+    const firstPoints = metricSets[0] ?? new Set();
+    const otherPoints = metricSets[index + 1] ?? new Set();
+    if (firstPoints.size > 0 || otherPoints.size > 0) {
+      const pointsOnlyFirst = [...firstPoints].filter((key) => !otherPoints.has(key)).length;
+      const pointsOnlyOther = [...otherPoints].filter((key) => !firstPoints.has(key)).length;
+      if (pointsOnlyFirst > 0 || pointsOnlyOther > 0) {
+        same = false;
+        details.push(`\`${label}\` metric points differ: ${String(pointsOnlyFirst)} only in the first, ${String(pointsOnlyOther)} only in \`${label}\``);
+      } else {
+        details.push(`\`${label}\` received the same ${String(otherPoints.size)} metric point(s)`);
+      }
     }
   });
   return check("multi-destination", ROWS.destinations, same && first.keys.size > 0 ? "pass" : "fail", details);
@@ -683,6 +982,8 @@ const checkProof = (records) => {
  * @param {string[]} [options.expectTools] tool names that must have a span
  * @param {Record<string, number>} [options.expectUsage] agent-reported totals, keys of USAGE_KEYS
  * @param {string[]} [options.forbid] strings that must not appear in any body
+ * @param {string[]} [options.expectMetrics] metric names that must be delivered (replaces DEFAULT_METRICS; implies metrics are required)
+ * @param {boolean} [options.expectMetricsRequired] fail the `metrics` check when the capture holds no metrics request
  */
 export const checkEvidence = (captures, options = {}) => {
   if (captures.length === 0) {
@@ -692,6 +993,8 @@ export const checkEvidence = (captures, options = {}) => {
   const deliveredSets = captures.map((capture) => deliveredRecords(capture));
   const delivered = deliveredSets[0];
   const records = delivered.records;
+  const metricSets = captures.map((capture) => new Set(deliveredMetricPoints(capture).map(metricPointKey)));
+  const metricPoints = deliveredMetricPoints(primary);
 
   const checks = [
     checkCaptureIntegrity(primary, delivered),
@@ -700,8 +1003,9 @@ export const checkEvidence = (captures, options = {}) => {
     checkTools(records, options),
     checkUsage(records, options),
     checkLogs(records),
+    checkMetrics(primary, options),
     checkAuth(primary),
-    checkDestinations(captures, deliveredSets),
+    checkDestinations(captures, deliveredSets, metricSets),
     checkSpoolReplay(primary),
     checkPrivacy(captures, options),
     checkProof(records),
@@ -725,6 +1029,8 @@ export const checkEvidence = (captures, options = {}) => {
       spans: spans.length,
       logs: records.length - spans.length,
       duplicates: delivered.duplicates,
+      metricPoints: metricPoints.length,
+      metricNames: [...new Set(metricPoints.map((point) => point.name))].sort(),
       traceIds: [...new Set(spans.map((span) => span.traceId))],
       launcherSessionIds: [...new Set(records.map((record) => record.resourceAttributes[ATTR.sessionId]).filter((id) => typeof id === "string"))],
       providerIds: providers,
@@ -751,7 +1057,9 @@ export const renderMarkdown = (result) => {
   lines.push(
     `- Requests: ${String(summary.requests)} (${formatCounts(summary.bySignal) || "none"}); empty bodies: ${summary.emptyRequests.length === 0 ? "none" : summary.emptyRequests.map((seq) => `#${String(seq)}`).join(", ")}; rejected: ${summary.rejectedRequests.length === 0 ? "none" : summary.rejectedRequests.map((seq) => `#${String(seq)}`).join(", ")}`,
   );
-  lines.push(`- Delivered records: ${String(summary.spans)} spans, ${String(summary.logs)} log records; duplicates: ${String(summary.duplicates)}`);
+  lines.push(
+    `- Delivered records: ${String(summary.spans)} spans, ${String(summary.logs)} log records, ${String(summary.metricPoints)} metric points; duplicates: ${String(summary.duplicates)}`,
+  );
   lines.push(`- otel-hook (instrumentation scope): ${summary.otelHookVersions.map((version) => `\`${version}\``).join(", ") || "unknown"}; agent version: ${summary.agentVersions.map((version) => `\`${version}\``).join(", ") || "unknown"}`);
   lines.push(`- Trace ids: ${summary.traceIds.map((id) => `\`${short(id, 32)}\``).join(", ") || "none"}`);
   lines.push("");
@@ -774,6 +1082,7 @@ const USAGE = `usage: check-evidence.mjs <capture-dir> [<second-destination-capt
   [--provider <id>] [--session-id <launcher session id>] [--work-unit-id <id>]
   [--require-attr <key>]... [--expect-tool <name>]...
   [--expect-usage input=N,output=N[,cache_read=N,cache_creation=N,reasoning=N]]
+  [--expect-metrics] [--expect-metric <name>]...
   [--forbid <string>]... [--json-out <file>] [--markdown-out <file>] [--markdown]`;
 
 export const parseExpectUsage = (text) => {
@@ -818,6 +1127,12 @@ const parseArgs = (argv) => {
         break;
       case "--expect-usage":
         options.expectUsage = parseExpectUsage(need());
+        break;
+      case "--expect-metrics":
+        options.expectMetricsRequired = true;
+        break;
+      case "--expect-metric":
+        (options.expectMetrics ??= []).push(need());
         break;
       case "--forbid":
         options.forbid.push(need());

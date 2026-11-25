@@ -10,6 +10,7 @@ import {
 import { describeResourceAttributeNames } from "./resource-attributes.js";
 import {
   DEFAULT_CONFIG,
+  effectiveMetricsPolicy,
   otelHookConfigPatchSchema,
   otelHookConfigSchema,
   type OtelHookConfig,
@@ -207,6 +208,16 @@ export const resolveConfig = (layers: readonly ConfigLayer[] = []): ConfigResolu
       "exporter.logs.enabled is true but neither a logs endpoint nor a trace endpoint to derive one from is configured",
     );
   }
+  if (
+    !withDestinations &&
+    parsed.data.exporter.metrics?.enabled === true &&
+    parsed.data.exporter.metrics.endpoint === undefined &&
+    parsed.data.exporter.endpoint === undefined
+  ) {
+    notes.push(
+      "exporter.metrics.enabled is true but neither a metrics endpoint nor a trace endpoint to derive one from is configured",
+    );
+  }
   if (parsed.data.exporter.logs.includeContent && parsed.data.privacy.contentMode === "omit") {
     // Not an error: the two settings are independent by design, and this is the
     // combination somebody lands on when they enable one and forget the other. Said
@@ -248,6 +259,9 @@ const describeDestinationAttributes = (config: OtelHookConfig): Attributes => {
     if (destination.logsEndpointOrigin !== undefined) {
       attributes[`${prefix}.logs_endpoint_origin`] = destination.logsEndpointOrigin;
     }
+    if (destination.metricsEndpointOrigin !== undefined) {
+      attributes[`${prefix}.metrics_endpoint_origin`] = destination.metricsEndpointOrigin;
+    }
     attributes[`${prefix}.header_names`] = [...destination.headerNames];
     attributes[`${prefix}.header_variables`] = [...destination.headerVariables];
   }
@@ -273,6 +287,8 @@ export const describeResolvedConfig = (config: OtelHookConfig): Attributes => {
   };
   const endpointOrigin = originOf(config.exporter.endpoint);
   const logsEndpointOrigin = originOf(config.exporter.logs.endpoint);
+  const metrics = effectiveMetricsPolicy(config.exporter);
+  const metricsEndpointOrigin = originOf(metrics.endpoint);
   return {
     "exporter.enabled": config.exporter.enabled,
     "exporter.protocol": config.exporter.protocol,
@@ -283,6 +299,12 @@ export const describeResolvedConfig = (config: OtelHookConfig): Attributes => {
     ...(logsEndpointOrigin === undefined
       ? {}
       : { "exporter.logs_endpoint_origin": logsEndpointOrigin }),
+    "exporter.metrics_enabled": metrics.enabled,
+    "exporter.metrics_temporality": metrics.temporality,
+    "exporter.metrics_include_session_id": metrics.includeSessionId,
+    ...(metricsEndpointOrigin === undefined
+      ? {}
+      : { "exporter.metrics_endpoint_origin": metricsEndpointOrigin }),
     "exporter.header_names": [...config.exporter.headerNames],
     // Names only. A resource attribute *name* is already on the wire in every
     // exported resource, so disclosing it here adds nothing; a *value* may hold

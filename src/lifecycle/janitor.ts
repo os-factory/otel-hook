@@ -1,5 +1,6 @@
 import type { CallbackDeduplicator } from "./dedup.js";
 import type { SpanCorrelator } from "./span-correlator.js";
+import type { MetricSeriesStore } from "./metric-series.js";
 import type { UsageAccumulator } from "./usage-accumulator.js";
 
 const DEFAULT_MAX_AGE_MILLIS = 24 * 60 * 60 * 1000;
@@ -9,6 +10,8 @@ export type LifecycleJanitorOptions = {
   readonly spanCorrelator?: SpanCorrelator;
   readonly deduplicator?: CallbackDeduplicator;
   readonly usageAccumulator?: UsageAccumulator;
+  /** Cumulative metric series state; swept by age, like usage rollups. */
+  readonly metricSeries?: MetricSeriesStore;
   readonly spanMaxAgeMillis?: number;
   readonly dedupMaxAgeMillis?: number;
   /**
@@ -45,6 +48,7 @@ export type LifecycleCleanupReport = {
   readonly span?: LifecycleSweepStats;
   readonly dedup?: LifecycleSweepStats;
   readonly usage?: LifecycleSweepStats;
+  readonly metrics?: LifecycleSweepStats;
 };
 
 /**
@@ -68,7 +72,7 @@ export const createLifecycleJanitor = (options: LifecycleJanitorOptions): Lifecy
 
   const runOnce = async (sessionId?: string): Promise<LifecycleCleanupReport> => {
     const scope = { maxEntries, ...(sessionId === undefined ? {} : { sessionId }) };
-    const [span, dedup, usage] = await Promise.all([
+    const [span, dedup, usage, metrics] = await Promise.all([
       options.spanCorrelator?.cleanup(spanMaxAge, scope),
       // Deduplication is deliberately swept across every scope rather than the
       // ending session's: a delivery scope is a host-chosen namespace or a
@@ -82,11 +86,13 @@ export const createLifecycleJanitor = (options: LifecycleJanitorOptions): Lifecy
           : { staleClaimMillis: options.dedupStaleClaimMillis }),
       }),
       options.usageAccumulator?.cleanup(usageMaxAge, scope),
+      options.metricSeries?.cleanup(usageMaxAge, scope),
     ]);
     return {
       ...(span === undefined ? {} : { span }),
       ...(dedup === undefined ? {} : { dedup }),
       ...(usage === undefined ? {} : { usage }),
+      ...(metrics === undefined ? {} : { metrics }),
     };
   };
 

@@ -89,7 +89,7 @@ describe("exporter.destinations schema", () => {
 
   it("refuses unknown fields, unknown signals, and non-URL endpoints", () => {
     rejects({ exporter: { destinations: [{ ...COLLECTOR, url: "http://x" }] } });
-    rejects({ exporter: { destinations: [{ ...COLLECTOR, signals: ["metrics"] }] } });
+    rejects({ exporter: { destinations: [{ ...COLLECTOR, signals: ["profiles"] }] } });
     rejects({ exporter: { destinations: [{ ...COLLECTOR, signals: [] }] } });
     rejects({ exporter: { destinations: [{ name: "bad", endpoint: "not a url" }] } });
   });
@@ -208,7 +208,7 @@ describe("resolveExportDestinations", () => {
         name: "default",
         source: "exporter",
         protocol: "http/protobuf",
-        signals: { traces: true, logs: false },
+        signals: { traces: true, logs: false, metrics: false },
         headers: {},
       },
     ]);
@@ -244,11 +244,11 @@ describe("resolveExportDestinations", () => {
 
   it("keeps the logs signal behind exporter.logs.enabled", () => {
     const off = resolveExportDestinations(exporter({ destinations: [COLLECTOR] }));
-    expect(off[0]?.signals).toEqual({ traces: true, logs: false });
+    expect(off[0]?.signals).toEqual({ traces: true, logs: false, metrics: false });
     const on = resolveExportDestinations(
       exporter({ destinations: [COLLECTOR], logs: { ...DEFAULT_EXPORTER_POLICY.logs, enabled: true } }),
     );
-    expect(on[0]?.signals).toEqual({ traces: true, logs: true });
+    expect(on[0]?.signals).toEqual({ traces: true, logs: true, metrics: false });
   });
 
   it("inherits the exporter protocol unless a destination sets its own", () => {

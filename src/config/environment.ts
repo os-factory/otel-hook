@@ -57,6 +57,12 @@ export const ENVIRONMENT_VARIABLES = Object.freeze({
   /** Standard per-signal endpoint; the weaker source of the two. */
   otlpLogsEndpoint: "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
   logsIncludeContent: "OTEL_HOOK_LOGS_INCLUDE_CONTENT",
+  metricsEnabled: "OTEL_HOOK_METRICS_ENABLED",
+  metricsEndpoint: "OTEL_HOOK_METRICS_ENDPOINT",
+  /** Standard per-signal endpoint; the weaker source of the two. */
+  otlpMetricsEndpoint: "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+  /** Standard: `cumulative`, `delta`, or `lowmemory` (read as `delta` here). */
+  otlpMetricsTemporality: "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE",
   serviceName: "OTEL_HOOK_SERVICE_NAME",
   otlpServiceName: "OTEL_SERVICE_NAME",
   serviceNamespace: "OTEL_HOOK_SERVICE_NAMESPACE",
@@ -291,6 +297,30 @@ export const parseEnvironmentConfig = (env: EnvironmentRecord): EnvironmentConfi
     ...(logsIncludeContent === undefined ? {} : { includeContent: logsIncludeContent }),
   };
 
+  const metricsEnabled = readBoolean(ENVIRONMENT_VARIABLES.metricsEnabled);
+  // Same precedence as the logs endpoint.
+  const metricsEndpoint =
+    readString(ENVIRONMENT_VARIABLES.metricsEndpoint) ??
+    readString(ENVIRONMENT_VARIABLES.otlpMetricsEndpoint) ??
+    (hookEndpoint === undefined && otlpTracesEndpoint !== undefined && otlpBaseEndpoint !== undefined
+      ? otlpSignalEndpointFromBase(otlpBaseEndpoint, "metrics")
+      : undefined);
+  const temporalityRaw = readString(ENVIRONMENT_VARIABLES.otlpMetricsTemporality)?.toLowerCase();
+  let metricsTemporality: "cumulative" | "delta" | undefined;
+  if (temporalityRaw === "cumulative") {
+    metricsTemporality = "cumulative";
+  } else if (temporalityRaw === "delta" || temporalityRaw === "lowmemory") {
+    // `lowmemory` is delta for counters and histograms, which is all otel-hook has.
+    metricsTemporality = "delta";
+  } else if (temporalityRaw !== undefined) {
+    warn(ENVIRONMENT_VARIABLES.otlpMetricsTemporality, "expected cumulative, delta, or lowmemory");
+  }
+  const metrics = {
+    ...(metricsEnabled === undefined ? {} : { enabled: metricsEnabled }),
+    ...(metricsEndpoint === undefined ? {} : { endpoint: metricsEndpoint }),
+    ...(metricsTemporality === undefined ? {} : { temporality: metricsTemporality }),
+  };
+
   // Names only: the values stay out of configuration, and so out of every
   // resolved-config snapshot. Their warnings are position-only.
   const otlpHeaders = resolveOtlpHeaders(env);
@@ -309,6 +339,7 @@ export const parseEnvironmentConfig = (env: EnvironmentRecord): EnvironmentConfi
     ...(serviceNamespace === undefined ? {} : { serviceNamespace }),
     ...(Object.keys(resourceAttributes).length === 0 ? {} : { resourceAttributes }),
     ...(Object.keys(logs).length === 0 ? {} : { logs }),
+    ...(Object.keys(metrics).length === 0 ? {} : { metrics }),
   };
 
   const limits = {

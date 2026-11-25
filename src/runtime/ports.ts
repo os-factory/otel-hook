@@ -115,6 +115,31 @@ export const stateValueSchema = z.discriminatedUnion("kind", [
    * (Claude Code's transcript), so the next read starts where the last ended.
    * `source` is an opaque digest of what was read, never a path.
    */
+  /**
+   * Running state of one metric series (issue #69), so a cumulative data point
+   * exported by a later hook process continues the same total. Holds numbers and
+   * a series digest only; the series' attributes are re-supplied by the caller
+   * and never read back from disk.
+   */
+  z.strictObject({
+    kind: z.literal("metric-series"),
+    /** Start of the cumulative interval. */
+    startTimeMillis: epochMillisSchema,
+    /** Counters: the running total. */
+    value: z.number().finite().min(0).optional(),
+    /** Histograms: the running aggregation. */
+    histogram: z
+      .strictObject({
+        count: z.number().int().min(0),
+        sum: z.number().finite().min(0),
+        min: z.number().finite(),
+        max: z.number().finite(),
+        bucketCounts: z.array(z.number().int().min(0)).max(64),
+      })
+      .optional(),
+    /** Opaque digest of the last delivery folded in; makes a replay a no-op. */
+    appliedDelivery: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/).optional(),
+  }),
   z.strictObject({
     kind: z.literal("read-cursor"),
     source: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/),

@@ -37,6 +37,13 @@ export {
   type UsageAccumulatorSnapshot,
 } from "../lifecycle/usage-accumulator.js";
 export {
+  createMetricSeriesStore,
+  type MetricSeriesCleanupResult,
+  type MetricSeriesStore,
+  type MetricSeriesStoreDependencies,
+  type RecordCumulativeOptions,
+} from "../lifecycle/metric-series.js";
+export {
   createLifecycleJanitor,
   type LifecycleCleanupReport,
   type LifecycleJanitor,

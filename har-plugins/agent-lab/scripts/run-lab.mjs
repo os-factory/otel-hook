@@ -29,7 +29,7 @@ import { fileURLToPath } from "node:url";
 import { checkEvidence, loadCapture, renderMarkdown } from "../../../scripts/e2e-proof/check-evidence.mjs";
 import { assertLab } from "./assert.mjs";
 import { startLabCollector } from "./collector.mjs";
-import { decodeAllExportedLogRecords, decodeAllExportedSpans } from "./otlp-decode.mjs";
+import { decodeAllExportedLogRecords, decodeAllExportedMetrics, decodeAllExportedSpans } from "./otlp-decode.mjs";
 import { claudeCodeProvider } from "./providers/claude-code.mjs";
 import { codexProvider } from "./providers/codex.mjs";
 
@@ -159,6 +159,8 @@ const main = async () => {
   const mockLog = path.join(labRoot, "mock-requests.jsonl");
   const reportPath = path.join(labRoot, "report.json");
   const captureDir = path.join(labRoot, "otlp-capture");
+  const tracesOnlyCaptureDir = path.join(labRoot, "otlp-capture-traces-only");
+  const exporterConfigFile = path.join(labRoot, "otel-hook.json");
   const launcherSessionId = `agent-lab-${provider.id}-session`;
 
   await mkdir(homeDir, { recursive: true });
@@ -172,6 +174,17 @@ const main = async () => {
   }
 
   const collector = await startLabCollector({ captureDir });
+  // A second destination that subscribes to traces only (issue #69): it must
+  // receive the session's spans and no metrics.
+  const tracesOnly = await startLabCollector({ captureDir: tracesOnlyCaptureDir });
+  await writeFile(
+    exporterConfigFile,
+    `${JSON.stringify(
+      { exporter: { destinations: [{ name: "traces-only", endpoint: tracesOnly.tracesUrl, signals: ["traces"] }] } },
+      null,
+      2,
+    )}\n`,
+  );
   const mock = await provider.startMock({ scenario, widgetPath, logPath: mockLog });
   log(`==> ${provider.id} mock at ${mock.url}`);
   log(`==> OTLP collector traces ${collector.tracesUrl}`);
@@ -194,6 +207,11 @@ const main = async () => {
     "--logs",
     "--logs-endpoint",
     quote(collector.logsUrl),
+    // Hook-derived metrics to the default destination (issue #69); the URL is
+    // derived from --endpoint (/v1/traces -> /v1/metrics).
+    "--metrics",
+    "--config-file",
+    quote(exporterConfigFile),
     "--state-dir",
     quote(stateDir),
     "--log-level",
@@ -303,6 +321,14 @@ const main = async () => {
 
   const spans = decodeAllExportedSpans(collector.bodiesFor("/v1/traces"));
   const logs = decodeAllExportedLogRecords(collector.bodiesFor("/v1/logs"));
+  const metricPoints = decodeAllExportedMetrics(collector.bodiesFor("/v1/metrics"));
+  const metricsAssertion = summarizeLabMetrics({
+    metricPoints,
+    launcherSessionId,
+    tracesOnlyPaths: tracesOnly.requests.map((request) => request.path),
+    wireText: collector.latin1(),
+    forbid: [scenario.secret],
+  });
   const assertion = assertLab({
     scenario,
     provider,
@@ -315,6 +341,7 @@ const main = async () => {
     agentExitCode: agent.code,
   });
   await collector.close();
+  await tracesOnly.close();
   let evidence;
   try {
     evidence = checkEvidence([await loadCapture(captureDir)], {
@@ -332,13 +359,15 @@ const main = async () => {
             },
           }),
       forbid: [labRoot, scenario.secret],
+      expectMetricsRequired: true,
     });
     await writeFile(path.join(labRoot, "evidence.md"), renderMarkdown(evidence));
   } catch (error) {
     evidence = { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
+  const ok = assertion.ok && metricsAssertion.ok;
   const report = {
-    status: assertion.ok ? "pass" : "fail",
+    status: ok ? "pass" : "fail",
     provider: provider.id,
     labRoot,
     mockUrl: mock.url,
@@ -347,7 +376,9 @@ const main = async () => {
     setup: { code: setup.code, stdout: setup.stdout },
     agent: { code: agent.code, stderrTail: agent.stderr.slice(-4000) },
     assertion,
+    metrics: metricsAssertion,
     captureDir,
+    tracesOnlyCaptureDir,
     evidence,
   };
   await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`);
@@ -358,11 +389,90 @@ const main = async () => {
   log(`==> lab directory ${labRoot}`);
   log(`==> report ${reportPath}`);
 
-  if (process.env.AGENT_LAB_KEEP !== "1" && process.env.CLAUDE_LIVE_LAB_KEEP !== "1" && assertion.ok) {
+  if (process.env.AGENT_LAB_KEEP !== "1" && process.env.CLAUDE_LIVE_LAB_KEEP !== "1" && ok) {
     await rm(labRoot, { recursive: true, force: true });
   }
 
-  return assertion.ok ? 0 : 1;
+  return ok ? 0 : 1;
+};
+
+/**
+ * The lab's own metrics verdict (issue #69): the metrics destination received the
+ * four hook-derived instruments with the launcher's session id and no account
+ * identity, and the traces-only destination received traces and no metrics.
+ * Token totals are reported (the last running total of each series) so they can
+ * be read next to the agent's own numbers.
+ */
+const summarizeLabMetrics = ({ metricPoints, launcherSessionId, tracesOnlyPaths, wireText, forbid }) => {
+  const required = [
+    "gen_ai.client.token.usage",
+    "gen_ai.client.operation.duration",
+    "otelhook.sessions",
+    "otelhook.tool.calls",
+  ];
+  const names = [...new Set(metricPoints.map((point) => point.name))].sort();
+  const last = new Map();
+  for (const point of metricPoints) {
+    const attributes = Object.entries(point.attributes).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    last.set(JSON.stringify([point.name, attributes]), point);
+  }
+  const final = [...last.values()];
+  const tokenTotals = {};
+  for (const point of final.filter((entry) => entry.name === "gen_ai.client.token.usage")) {
+    const type = String(point.attributes["gen_ai.token.type"]);
+    tokenTotals[type] = (tokenTotals[type] ?? 0) + (point.histogram?.sum ?? 0);
+  }
+  const counters = Object.fromEntries(
+    final
+      .filter((point) => point.type === "sum")
+      .map((point) => [
+        `${point.name}${point.attributes["gen_ai.tool.name"] === undefined ? "" : `{${String(point.attributes["gen_ai.tool.name"])},${String(point.attributes["otelhook.outcome"])}}`}`,
+        point.value,
+      ]),
+  );
+  const durations = final
+    .filter((point) => point.name === "gen_ai.client.operation.duration")
+    .map((point) => ({ count: point.histogram?.count, sumSeconds: point.histogram?.sum }));
+  const identityKeys = metricPoints.flatMap((point) =>
+    [...Object.keys(point.attributes), ...Object.keys(point.resourceAttributes)].filter((key) =>
+      /^(user|enduser|organization)\./.test(key),
+    ),
+  );
+  const failures = [];
+  for (const name of required) {
+    if (!names.includes(name)) {
+      failures.push(`metric ${name} was not delivered`);
+    }
+  }
+  if (!metricPoints.every((point) => point.attributes["session.id"] === launcherSessionId)) {
+    failures.push("a metric point lacks the launcher's session.id");
+  }
+  if (identityKeys.length > 0) {
+    failures.push(`account identity keys on metrics: ${[...new Set(identityKeys)].join(", ")}`);
+  }
+  if (forbid.some((value) => value.length > 0 && wireText.includes(value))) {
+    failures.push("a forbidden value reached the metrics destination");
+  }
+  if (tracesOnlyPaths.includes("/v1/metrics")) {
+    failures.push("the traces-only destination received metrics");
+  }
+  if (!tracesOnlyPaths.includes("/v1/traces")) {
+    failures.push("the traces-only destination received no traces");
+  }
+  return {
+    ok: failures.length === 0,
+    failures,
+    names,
+    points: metricPoints.length,
+    temporality: [...new Set(metricPoints.map((point) => point.temporality))],
+    tokenTotals,
+    counters,
+    durations,
+    tracesOnlyRequests: tracesOnlyPaths.reduce((counts, requestPath) => {
+      counts[requestPath] = (counts[requestPath] ?? 0) + 1;
+      return counts;
+    }, {}),
+  };
 };
 
 try {

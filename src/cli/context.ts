@@ -86,6 +86,14 @@ export const policyFlagsToPatch = (policy: CliPolicyFlags): OtelHookConfigPatch 
       ? {}
       : { includeContent: policy.logsIncludeContent }),
   };
+  const metrics = {
+    ...(policy.metricsEnabled === undefined ? {} : { enabled: policy.metricsEnabled }),
+    ...(policy.metricsEndpoint === undefined ? {} : { endpoint: policy.metricsEndpoint }),
+    ...(policy.metricsTemporality === undefined ? {} : { temporality: policy.metricsTemporality }),
+    ...(policy.metricsIncludeSessionId === undefined
+      ? {}
+      : { includeSessionId: policy.metricsIncludeSessionId }),
+  };
   const exporter = {
     ...(policy.exportDisabled === true ? { enabled: false } : {}),
     ...(policy.endpoint === undefined ? {} : { endpoint: policy.endpoint }),
@@ -104,6 +112,7 @@ export const policyFlagsToPatch = (policy: CliPolicyFlags): OtelHookConfigPatch 
       ? {}
       : { resourceAttributes: policy.resourceAttributes }),
     ...(Object.keys(logs).length === 0 ? {} : { logs }),
+    ...(Object.keys(metrics).length === 0 ? {} : { metrics }),
   };
   const privacy = policy.contentMode === undefined ? {} : { contentMode: policy.contentMode };
   const diagnostics = policy.logLevel === undefined ? {} : { logLevel: policy.logLevel };

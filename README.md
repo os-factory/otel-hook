@@ -581,6 +581,79 @@ signal, because a collector with no logs receiver leaves traces perfectly health
 The full mapping table, attribute vocabulary, bounds, and durability matrix are in
 [docs/canonical-log-mapping.md](docs/canonical-log-mapping.md).
 
+## Metrics
+
+otel-hook can also send OpenTelemetry **metrics**, derived from the hook events it
+already normalizes. They work for every supported provider, not only the ones with
+native telemetry, and they go through the same destinations and spools as traces.
+
+**Off by default.** Turn them on for the `default` destination with `--metrics`
+(or `exporter.metrics.enabled` in a config file, or `OTEL_HOOK_METRICS_ENABLED=1`).
+A `destinations[]` entry receives them only when its `signals` list names
+`metrics`. A destination that lists only `traces` never receives a metric.
+
+```bash
+otel-hook run --provider codex --endpoint http://localhost:4318/v1/traces --metrics
+# metrics go to http://localhost:4318/v1/metrics
+```
+
+| Metric | Type | Unit | Recorded |
+| --- | --- | --- | --- |
+| `gen_ai.client.token.usage` | histogram | `{token}` | Once per generation with usage, per `gen_ai.token.type`: `input`, `output`, `cache_read`, `cache_creation` |
+| `gen_ai.client.operation.duration` | histogram | `s` | Once per generation whose duration is known (see below) |
+| `otelhook.sessions` | counter | `{session}` | Once per `session.start` |
+| `otelhook.tool.calls` | counter | `{call}` | Once per completed tool call, by `gen_ai.tool.name` and `otelhook.outcome` |
+| `otelhook.cost.usage` | counter | `USD` | Only when the provider reports a cost. Never estimated |
+
+Data-point attributes: `otelhook.provider.id` (the agent), `gen_ai.operation.name`,
+`gen_ai.provider.name` (the model vendor, when known), `gen_ai.request.model`,
+`gen_ai.response.model`, and `session.id` (the launcher's key when it sets one, like
+spans). The resource is the same as for traces. Metrics carry **no** account
+identity (`user.*`, `enduser.*` and `organization.*` keys are stripped, even from the
+resource), no content, and no per-event ids.
+
+- **Tokens.** `input` includes cache reads, as in the GenAI conventions, and
+  `cache_read` and `cache_creation` describe parts of it. Do not add the token types
+  together. A provider that reports a running total (Codex) is diffed against the
+  previous turn first, exactly as usage accounting does, so a session is never
+  counted twice.
+- **Duration.** The first source that has it: the duration the provider states, a
+  `generation.start` recorded by an earlier hook, or the time the turn's prompt was
+  submitted. For Claude Code and Codex a generation is a turn, so this is the
+  turn's wall-clock time, tool calls included. A start the adapter made in the same
+  callback as the end is not used: it would record zero.
+- **Temporality.** `cumulative` by default: each series' running total is kept in
+  the state directory, so a later hook process continues it, and receivers that
+  merge counters by keeping the largest value stay correct. Set
+  `exporter.metrics.temporality` to `delta` (or `--metrics-temporality delta`, or
+  `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=delta`) to send what each
+  callback observed and keep no state.
+- **Cardinality.** `session.id` makes one series per session. Leave it off with
+  `exporter.metrics.includeSessionId: false` or `--no-metrics-session-id`.
+- **Delivery.** Points are sent once, right after the callback's traces and logs,
+  inside the same bounded flush. There is no periodic reader, because a hook process
+  lives for one callback. What a destination refuses is kept in that destination's
+  `spool-metrics` queue and replayed by the next hook. Replaying a cumulative point
+  restates a total; it does not add to it.
+- **Exactly once.** A redelivered callback, or one whose traces were lost and will be
+  retried, records nothing. A callback replayed after a crash restates its series'
+  totals instead of adding to them.
+
+These numbers are **hook-derived**. They can differ from a provider's own
+telemetry: for example, Claude Code's native `claude_code.token.usage` counts
+subagent spend that hooks do not see yet (#68). A harness that already books Claude
+Code usage from native telemetry should not add both.
+
+| Field | Default | Flag | Variable |
+| --- | --- | --- | --- |
+| `exporter.metrics.enabled` | `false` | `--metrics` / `--no-metrics` | `OTEL_HOOK_METRICS_ENABLED` |
+| `exporter.metrics.endpoint` | derived from `endpoint` (`/v1/traces` → `/v1/metrics`) | `--metrics-endpoint` | `OTEL_HOOK_METRICS_ENDPOINT`, then `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`, then `OTEL_EXPORTER_OTLP_ENDPOINT` |
+| `exporter.metrics.temporality` | `cumulative` | `--metrics-temporality` | `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE` (`lowmemory` reads as `delta`) |
+| `exporter.metrics.includeSessionId` | `true` | `--no-metrics-session-id` | — |
+
+Claude Code does not pass `OTEL_*` variables to hook processes, so under Claude Code
+use the flags or a config file.
+
 ## Privacy
 
 Content is omitted by default; only lengths and a stable salted hash are
@@ -696,6 +769,12 @@ set (and not blank) wins:
 | logs | `OTEL_EXPORTER_OTLP_ENDPOINT` | base URL; `/v1/logs` is appended (see below) |
 | logs | `exporter.logs.endpoint` in a config file | full logs URL |
 | logs | derived from the resolved traces endpoint | `/v1/traces` swapped for `/v1/logs`, or `/v1/logs` appended |
+| metrics | `--metrics-endpoint` | full metrics URL |
+| metrics | `OTEL_HOOK_METRICS_ENDPOINT` | full metrics URL |
+| metrics | `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` | full metrics URL, used as-is |
+| metrics | `OTEL_EXPORTER_OTLP_ENDPOINT` | base URL; `/v1/metrics` is appended (same rule as logs) |
+| metrics | `exporter.metrics.endpoint` in a config file | full metrics URL |
+| metrics | derived from the resolved traces endpoint | `/v1/traces` swapped for `/v1/metrics`, or `/v1/metrics` appended |
 
 `OTEL_EXPORTER_OTLP_ENDPOINT` follows the OpenTelemetry exporter
 specification: it is a **base** URL, and the signal path is appended to it.
@@ -904,10 +983,10 @@ Each destination takes:
 | --- | --- | --- |
 | `name` | — | Unique; lowercase letters, digits, `_` and `-`. Also its spool directory. `default` is reserved. |
 | `endpoint` | — | Traces URL, as `exporter.endpoint`. The logs URL is derived from it (`/v1/traces` → `/v1/logs`). |
-| `tracesEndpoint`, `logsEndpoint` | — | Per-signal URLs, overriding `endpoint`. At least one of the three is required. |
+| `tracesEndpoint`, `logsEndpoint`, `metricsEndpoint` | — | Per-signal URLs, overriding `endpoint`. At least one of the four is required. |
 | `protocol` | `exporter.protocol` | `http/protobuf` is the protocol this build sends. |
 | `headers` | `{}` | Header name → value. `"env:NAME"` reads the value from that environment variable when sending. |
-| `signals` | `["traces", "logs"]` | Which signals it receives. Logs still need `exporter.logs.enabled`. |
+| `signals` | `["traces", "logs"]` | Which signals it receives: `traces`, `logs`, `metrics`. Logs still need `exporter.logs.enabled`. Metrics are sent only when listed (see [Metrics](#metrics)). |
 | `enabled` | `true` | `false` keeps the entry but neither sends to it nor drains its spool. |
 
 Everything else — timeout, batch sizes, service identity, resource attributes,
@@ -950,7 +1029,7 @@ committed — retrying it would duplicate spans at the destinations that accepte
 
 **Spools are per destination and bounded.** Every destination queues under
 `<state-dir>/<provider>/<installation>/destinations/<name>/` (`default` keeps the
-original `spool` and `spool-logs` directories), and each spool is drained at the
+original `spool`, `spool-logs` and `spool-metrics` directories), and each spool is drained at the
 end of the next hook event. Bounds apply per destination and per signal, and can
 be set under `exporter.spool`:
 

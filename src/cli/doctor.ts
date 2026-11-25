@@ -327,6 +327,9 @@ const describeDestinationLine = (destination: DoctorDestination): string => {
   if (destination.logsEndpointOrigin !== undefined) {
     parts.push(`logs -> ${destination.logsEndpointOrigin}`);
   }
+  if (destination.metricsEndpointOrigin !== undefined) {
+    parts.push(`metrics -> ${destination.metricsEndpointOrigin}`);
+  }
   if (destination.headerNames.length > 0) {
     parts.push(`headers ${destination.headerNames.join(", ")}`);
   }
@@ -417,7 +420,8 @@ const describeDoctorDestinations = async (
       const sends = description.signals.length > 0;
       const reachable =
         (description.signals.includes("traces") && description.tracesEndpointOrigin !== undefined) ||
-        (description.signals.includes("logs") && description.logsEndpointOrigin !== undefined);
+        (description.signals.includes("logs") && description.logsEndpointOrigin !== undefined) ||
+        (description.signals.includes("metrics") && description.metricsEndpointOrigin !== undefined);
       let detail = "resolves";
       let ok = true;
       if (!description.enabled) {
@@ -445,6 +449,9 @@ const describeDoctorDestinations = async (
                 : {}),
               ...(description.signals.includes("logs")
                 ? { logs: await inspectQueue(spool, queues.logs) }
+                : {}),
+              ...(description.signals.includes("metrics")
+                ? { metrics: await inspectQueue(spool, queues.metrics) }
                 : {}),
             };
       return {
