@@ -1,3 +1,10 @@
+# [0.11.0](https://github.com/os-factory/otel-hook/compare/v0.10.0...v0.11.0) (2026-11-25)
+
+
+### Features
+
+* export hook-derived OpenTelemetry metrics to every destination ([#69](https://github.com/os-factory/otel-hook/issues/69)) ([#70](https://github.com/os-factory/otel-hook/issues/70)) ([f8db3e4](https://github.com/os-factory/otel-hook/commit/f8db3e4a5520018994fc5e16ad64c9a56b41c2f7))
+
 # [0.10.0](https://github.com/os-factory/otel-hook/compare/v0.9.0...v0.10.0) (2026-11-25)
 
 
