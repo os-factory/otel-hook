@@ -13,7 +13,7 @@ import {
   isUnavailableContentFact,
   type ContentFact,
 } from "../model/content.js";
-import type { CanonicalEvent } from "../model/events.js";
+import type { CanonicalEvent, ModelDescriptor } from "../model/events.js";
 import {
   resolveInvocationIdentity,
   sourceProvenanceSchema,
@@ -324,6 +324,44 @@ const usageScopeOf = (
 };
 
 const sequenceKey = (sessionId: string): string => `sequence:${sessionId}`;
+const sessionModelKey = (sessionId: string): string => `model:${sessionId}`;
+
+/**
+ * The placeholder an adapter uses when its payload names no model. Never
+ * remembered: storing it would overwrite a real model the session reported.
+ */
+const UNKNOWN_MODEL_ID = "unknown";
+
+/**
+ * The last model a batch reports for the top-level agent, if any.
+ *
+ * `session.start` and `generation.*` edges count; a subagent's events do not,
+ * because a subagent can run on a different model than the session it serves and
+ * must not rename the session's own generations. The last such event wins, so a
+ * turn that reports a model switch updates what the session remembers.
+ */
+const latestSessionModel = (events: readonly CanonicalEvent[]): ModelDescriptor | undefined => {
+  let latest: ModelDescriptor | undefined;
+  for (const event of events) {
+    if (event.subagentId !== undefined) {
+      continue;
+    }
+    if (
+      (event.type === "session.start" || event.type === "generation.start" || event.type === "generation.end") &&
+      event.model !== undefined &&
+      event.model.modelId !== UNKNOWN_MODEL_ID
+    ) {
+      latest = event.model;
+    }
+  }
+  return latest;
+};
+
+const sameModel = (left: ModelDescriptor | undefined, right: ModelDescriptor): boolean =>
+  left !== undefined &&
+  left.modelId === right.modelId &&
+  left.vendor === right.vendor &&
+  left.family === right.family;
 const usageKey = (sessionId: string, scope: UsageScope, scopeKey: string): string =>
   `usage:${sessionId}:${scope}:${scopeKey}`;
 
@@ -415,6 +453,27 @@ export const createOtelHook = (deps: OtelHookDependencies): OtelHook => {
         errorInfoFromThrown(thrown, { code: "state-store-failure", phase: "state", occurredAt: clock.now() }),
       );
       return 0;
+    }
+  };
+
+  /**
+   * The model this session last reported, or `undefined`.
+   *
+   * Fails open: an unreadable store costs the model name, never the observation,
+   * so a read failure is a diagnostic and the adapter falls back to `unknown`.
+   */
+  const readSessionModel = async (
+    sessionId: string,
+    diagnostics: OtelHookErrorInfo[],
+  ): Promise<ModelDescriptor | undefined> => {
+    try {
+      const record = await deps.stateStore.read(sessionModelKey(sessionId));
+      return record?.value.kind === "session-model" ? record.value.model : undefined;
+    } catch (thrown) {
+      diagnostics.push(
+        errorInfoFromThrown(thrown, { code: "state-store-failure", phase: "state", occurredAt: clock.now() }),
+      );
+      return undefined;
     }
   };
 
@@ -844,11 +903,18 @@ export const createOtelHook = (deps: OtelHookDependencies): OtelHook => {
        */
       const prepare = async (): Promise<Prepared> => {
       const sequenceBase = await readSequenceBase(identity.sessionId, diagnostics);
+      const sessionModel = await readSessionModel(identity.sessionId, diagnostics);
 
       let parsed;
       try {
         parsed = adapter.parse(
-          { ...detectionInput, detection, identity, sequenceBase },
+          {
+            ...detectionInput,
+            detection,
+            identity,
+            sequenceBase,
+            ...(sessionModel === undefined ? {} : { sessionModel }),
+          },
           providerContext,
         );
       } catch (thrown) {
@@ -970,6 +1036,28 @@ export const createOtelHook = (deps: OtelHookDependencies): OtelHook => {
               occurredAt: clock.now(),
             }),
           );
+        }
+
+        // Remember the session's model for the invocations whose payload names
+        // none. Written only when it changed, so a session costs one record and
+        // a steady session no extra writes; never written for a redelivery,
+        // which is not a new observation.
+        const reportedModel = latestSessionModel(screened.kept);
+        if (reportedModel !== undefined && !sameModel(sessionModel, reportedModel)) {
+          try {
+            await deps.stateStore.write(sessionModelKey(identity.sessionId), {
+              kind: "session-model",
+              model: reportedModel,
+            });
+          } catch (thrown) {
+            diagnostics.push(
+              errorInfoFromThrown(thrown, {
+                code: "state-store-failure",
+                phase: "state",
+                occurredAt: clock.now(),
+              }),
+            );
+          }
         }
       }
 

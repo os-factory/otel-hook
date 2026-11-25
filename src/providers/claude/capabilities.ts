@@ -11,7 +11,8 @@ import type { ProviderCapabilities } from "../adapter.js";
  * - `reportsCachedInput`/`reportsCacheCreation` are true because the payload
  *   schema *accepts* Anthropic's `message.usage` shape when a wrapping harness
  *   attaches it. No hook callback in the protocol carries a token counter, and
- *   this adapter never reads the transcript to find them.
+ *   this adapter never reads the transcript to find them; `transcript.ts` is the
+ *   bounded helper a wrapper calls to attach them (issue #64).
  * - `cacheCreationAccounting` is `included-in-input` because `input_tokens` is
  *   the fresh portion only, so the adapter folds all three input buckets into one
  *   inclusive total (see `usage.ts`).

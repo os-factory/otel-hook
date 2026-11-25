@@ -1,0 +1,125 @@
+{
+  "records": [
+    {
+      "type": "user",
+      "isSidechain": false,
+      "sessionId": "ses-contract-claude-0002",
+      "uuid": "uuid-contract-0001",
+      "parentUuid": null,
+      "cwd": "/workspace/contract-repo",
+      "message": { "role": "user", "content": "Synthetic placeholder prompt." }
+    },
+    {
+      "type": "assistant",
+      "isSidechain": false,
+      "sessionId": "ses-contract-claude-0002",
+      "uuid": "uuid-contract-0002",
+      "parentUuid": "uuid-contract-0001",
+      "requestId": "req_contract_0001",
+      "message": {
+        "id": "msg_contract_0001",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-synthetic-opus-9",
+        "stop_reason": "tool_use",
+        "content": [
+          { "type": "tool_use", "id": "toolu_contract_0001", "name": "Read", "input": { "file_path": "/workspace/contract-repo/README.md" } }
+        ],
+        "usage": {
+          "input_tokens": 5,
+          "output_tokens": 20,
+          "cache_read_input_tokens": 1000,
+          "cache_creation_input_tokens": 200
+        }
+      }
+    },
+    {
+      "type": "user",
+      "isSidechain": false,
+      "sessionId": "ses-contract-claude-0002",
+      "uuid": "uuid-contract-0003",
+      "parentUuid": "uuid-contract-0002",
+      "message": {
+        "role": "user",
+        "content": [{ "type": "tool_result", "tool_use_id": "toolu_contract_0001", "content": "Synthetic placeholder file body." }]
+      }
+    },
+    {
+      "type": "assistant",
+      "isSidechain": false,
+      "sessionId": "ses-contract-claude-0002",
+      "uuid": "uuid-contract-0004",
+      "parentUuid": "uuid-contract-0003",
+      "requestId": "req_contract_0002",
+      "message": {
+        "id": "msg_contract_0002",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-synthetic-opus-9",
+        "stop_reason": "end_turn",
+        "content": [{ "type": "text", "text": "Synthetic placeholder for the final assistant message." }],
+        "usage": {
+          "input_tokens": 3,
+          "output_tokens": 412,
+          "cache_read_input_tokens": 118000,
+          "cache_creation_input_tokens": 7400,
+          "cache_creation": { "ephemeral_5m_input_tokens": 1400, "ephemeral_1h_input_tokens": 6000 },
+          "output_tokens_details": { "thinking_tokens": 0 },
+          "server_tool_use": { "web_search_requests": 0, "web_fetch_requests": 0 },
+          "service_tier": "standard",
+          "inference_geo": "synthetic-region",
+          "speed": "standard",
+          "iterations": [
+            {
+              "type": "message",
+              "input_tokens": 3,
+              "output_tokens": 412,
+              "cache_read_input_tokens": 118000,
+              "cache_creation_input_tokens": 7400,
+              "cache_creation": { "ephemeral_5m_input_tokens": 1400, "ephemeral_1h_input_tokens": 6000 }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "type": "assistant",
+      "isSidechain": true,
+      "agentId": "agent-contract-0001",
+      "sessionId": "ses-contract-claude-0002",
+      "uuid": "uuid-contract-0005",
+      "parentUuid": "uuid-contract-0004",
+      "message": {
+        "id": "msg_contract_0003",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-synthetic-haiku-9",
+        "content": [{ "type": "text", "text": "Synthetic placeholder from a subagent." }],
+        "usage": { "input_tokens": 9, "output_tokens": 9 }
+      }
+    },
+    {
+      "type": "assistant",
+      "isSidechain": false,
+      "sessionId": "ses-contract-claude-0002",
+      "uuid": "uuid-contract-0006",
+      "parentUuid": "uuid-contract-0004",
+      "message": {
+        "id": "msg_contract_0004",
+        "type": "message",
+        "role": "assistant",
+        "model": "<synthetic>",
+        "content": [{ "type": "text", "text": "Synthetic placeholder for a locally generated notice." }],
+        "usage": { "input_tokens": 0, "output_tokens": 0 }
+      }
+    },
+    {
+      "type": "system",
+      "isSidechain": false,
+      "sessionId": "ses-contract-claude-0002",
+      "uuid": "uuid-contract-0007",
+      "parentUuid": "uuid-contract-0006",
+      "subtype": "stop_hook_summary"
+    }
+  ]
+}

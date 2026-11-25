@@ -56,7 +56,8 @@ Not `Stop`, not `SubagentStop`, not `PostCompact`. This is why
 `capabilities.ts` frames cached-input support as "the payload shape is accepted
 when a wrapping harness attaches it": a bare Claude Code installation reports no
 tokens to a hook at all, and the adapter must not read `transcript_path` to find
-them (`AGENT.md`).
+them (`AGENTS.md`, ADR 0003). A wrapping harness may, with the bounded helper
+described in finding 8.
 
 ## Finding 2: usage lives at `message.usage`, and its input buckets are disjoint
 
@@ -218,3 +219,62 @@ The same reasoning fixes a latent inversion on `SubagentStop`, which was keyed o
 `agent_id` alone: a hook-continued subagent stop repeats `agent_id` and would
 have been suppressed as a redelivery. It now declines an identity when
 `stop_hook_active` is `true`.
+
+## Finding 8: the model is on `SessionStart` and in the transcript, never on `Stop`
+
+The hook side is finding 1's (2.1.220 schemas); the transcript side was
+re-checked against **Claude Code 2.1.332** for issue #64, the same way: record
+and field names only, nothing copied.
+
+- `SessionStart` carries `model`. No other hook callback in finding 1's list
+  names one, `Stop` and `StopFailure` included.
+- Every top-level assistant transcript record carries `message.model` next to
+  `message.usage`. It follows `/model`, so it is the only exact per-turn source.
+- Assistant records that Claude Code makes up itself (an API error notice, an
+  interrupted turn) carry the model `<synthetic>` and zeroed usage. Subagent
+  records carry `isSidechain: true`.
+- `message.usage` now also has `output_tokens_details { thinking_tokens }`. It is
+  not read: it is a breakdown of `output_tokens`, and `reportsReasoningOutput`
+  stays `false` until a decision is made to model it.
+
+So the model reaches a generation span in two steps, and neither one makes the
+adapter read a file:
+
+1. **Session model, always on.** The core remembers the last model a session
+   reported (`session.start`, or a top-level `generation.*` with a known model)
+   under `model:<sessionId>` in the state store, and hands it to the adapter as
+   `ProviderParseInput.sessionModel` (ADR 0006: the adapter keeps no state of its
+   own). `Stop` / `StopFailure` use it for both `gen_ai.request.model` and
+   `gen_ai.response.model`, and the span is named `generation <model>`. `unknown`
+   remains only when nothing in the session ever named a model, or when the host
+   runs with a store that does not survive between hook processes.
+2. **Exact per-turn model and usage, harness-attached (opt-in).** A wrapper
+   attaches `{ model, usage }` to the `Stop` payload. The schema accepts both;
+   `model` becomes the turn's response model and the session's model from then
+   on. otel-hook ships the bounded helper for this,
+   `attachClaudeTranscriptTurn(payload)` / `readClaudeTranscriptTurn(path)`
+   (exported from `@osfactory/otel-hook` and `/providers`). It reads only the last
+   1 MiB of the one `transcript_path` the payload names (a regular `.jsonl`
+   file at an absolute path), within 250 ms, and returns the last top-level,
+   non-`<synthetic>` assistant record's model and counters. It never throws and
+   never overwrites a field the payload already carries. Nothing else from the
+   record leaves the helper.
+
+Why the transcript read is a harness step and not an adapter option: ADR 0003
+gives adapters no filesystem handle, and this document has always said the
+adapter must not read `transcript_path`. Keeping the read in the wrapper keeps
+that boundary, and keeps it visible: a host that does not call the helper gets
+exactly what Claude Code's hooks report.
+
+The usage is the **last model request of the turn**, not the turn total. A turn
+that called tools made one request per tool round trip, each with its own
+`message.usage`, and only the last one is attached. Input is close to complete,
+because the last request's prompt holds the whole conversation, mostly as cache
+reads. Output tokens from the earlier requests are missing. Summing a turn would
+mean finding its first record, which a bounded tail cannot promise.
+
+The synthetic tail in `fixtures/contracts/claude-code/transcript-tail-turn.json`
+pins this shape. `tests/providers/claude/transcript.test.ts` covers the helper and
+the session model, and `tests/e2e-proof/proof-run.test.ts` shows that
+`check-evidence.mjs` `token-usage` passes for Claude Code when a wrapper attaches
+usage this way.

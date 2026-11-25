@@ -218,6 +218,12 @@ Every cell is pending until a provider comment links its evidence.
 | Privacy: no `factory.local.*`, no paths, no account identity | pending | pending | pending | pending | pending | `privacy` (mechanical, every destination, delivered and rejected requests) + a glance at Langfuse |
 | Trace ↔ Factory Commits proof correlation | pending | pending | pending | pending | pending | **manual**: `git factory` output; `trace-proof` lists the session trace ids |
 
+Claude Code's hooks carry no token counter, so its `token-usage` cell can pass only
+when the harness attaches usage to `Stop` with `attachClaudeTranscriptTurn`
+([finding 8](claude-code-usage-contract.md#finding-8-the-model-is-on-sessionstart-and-in-the-transcript-never-on-stop)).
+The attached figure is the turn's last model request, so `--expect-usage` must be
+taken from those requests, not from the session's total spend.
+
 ### What each check asserts
 
 | Check | Passes when |

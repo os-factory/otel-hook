@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 import type { OtelHookErrorInfo } from "../errors/index.js";
-import type { CanonicalEvent } from "../model/events.js";
+import { modelDescriptorSchema, type CanonicalEvent } from "../model/events.js";
 import {
   attributesSchema,
   epochMillisSchema,
@@ -99,6 +99,16 @@ export const stateValueSchema = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("attributes"),
     attributes: attributesSchema,
+  }),
+  /**
+   * The model a session last reported, so a later invocation whose payload names
+   * none (Claude Code's `Stop`) can still say which model it was. A model id is
+   * not sensitive (`modelDescriptorSchema`), and the descriptor is the strict,
+   * bounded canonical shape, never a payload fragment.
+   */
+  z.strictObject({
+    kind: z.literal("session-model"),
+    model: modelDescriptorSchema,
   }),
 ]);
 export type StateValue = z.infer<typeof stateValueSchema>;

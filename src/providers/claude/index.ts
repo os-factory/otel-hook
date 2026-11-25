@@ -8,3 +8,4 @@ export * from "./identity.js";
 export * from "./events.js";
 export * from "./capabilities.js";
 export * from "./adapter.js";
+export * from "./transcript.js";

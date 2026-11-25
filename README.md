@@ -822,6 +822,26 @@ export OTEL_RESOURCE_ATTRIBUTES="session.id=run-2041,factory.work_unit.id=wu-42,
 - Langfuse filters on span attributes, which is why `factory.*` and `vcs.*` are
   [copied onto every span](#on-records-too); `factory.local.*` is not.
 
+#### Claude Code: model and token usage
+
+Claude Code's `Stop` hook names no model and carries no tokens. Out of the box,
+each generation span carries the session's model, which `SessionStart` reports
+and the state store remembers (so `--state-dir`, or the default durable store,
+matters). For the exact per-turn model and the four token buckets, the harness
+attaches them from the transcript before handing the payload to otel-hook. This is
+opt-in, and the adapter never reads the transcript itself (ADR 0003):
+
+```ts
+import { attachClaudeTranscriptTurn } from "@osfactory/otel-hook";
+
+// Bounded: last 1 MiB of transcript_path, 250 ms, never throws, never
+// overwrites a field the payload already has. Non-stop payloads pass through.
+const enriched = await attachClaudeTranscriptTurn(hookPayload);
+```
+
+The usage is the turn's last model request, not the turn total. See
+[finding 8](docs/claude-code-usage-contract.md#finding-8-the-model-is-on-sessionstart-and-in-the-transcript-never-on-stop).
+
 ### Multiple destinations
 
 `exporter.destinations` sends every batch to several OTLP endpoints at once — a
@@ -1166,7 +1186,11 @@ fixing one means updating that test rather than discovering a silent change.
    `usage.cache_read_input_tokens` and `usage.cache_creation_input_tokens` (whose
    TTL split is a breakdown, reconciled and never added). No hook callback carries
    a token counter at all, so `usage` is read only when a wrapping harness
-   attaches it. A harness that attaches an excluded counter anyway is told which
+   attaches it — `attachClaudeTranscriptTurn` is the bounded helper that reads
+   the last assistant message of `transcript_path` for that, along with its exact
+   `model`; the adapter itself never reads the transcript. Without it, generations
+   still carry the session's model from `SessionStart`, remembered in the state
+   store. A harness that attaches an excluded counter anyway is told which
    field was declined. `ADAPTER-NOTE-001`; see
    [docs/claude-code-usage-contract.md](docs/claude-code-usage-contract.md).
 6. **`contextTokensBefore` is an explicit exclusion for Claude Code.** Neither

@@ -16,6 +16,16 @@ export {
 export { CLAUDE_CODE_CAPABILITIES } from "./claude/capabilities.js";
 export { CLAUDE_CODE_PROVIDER_ID } from "./claude/detect.js";
 export { CLAUDE_HOOK_EVENT_NAMES, type ClaudeHookEventName } from "./claude/schema.js";
+// The harness half of the Claude Code usage contract: a wrapper calls these to
+// attach `{ model, usage }` to a `Stop` payload. The adapter never does (ADR 0003).
+export {
+  attachClaudeTranscriptTurn,
+  readClaudeTranscriptTurn,
+  DEFAULT_CLAUDE_TRANSCRIPT_TAIL_BYTES,
+  DEFAULT_CLAUDE_TRANSCRIPT_TIMEOUT_MILLIS,
+  type ClaudeTranscriptTurn,
+  type ReadClaudeTranscriptTurnOptions,
+} from "./claude/transcript.js";
 
 export {
   createCursorAdapter,

@@ -532,6 +532,8 @@ describe("OtelHook usage derivation", () => {
     expect(other.usageObservations[0]?.scopeKey).toBe("gen-b");
     expect(other.usageObservations[0]?.delta.inputTokens).toBe(40);
     expect([...harness.stateStore.snapshot().keys()].sort()).toEqual([
+      // The generation named a model, which the session now remembers.
+      "model:ses_1",
       "sequence:ses_1",
       "usage:ses_1:generation:gen-a",
       "usage:ses_1:generation:gen-b",
@@ -545,9 +547,9 @@ describe("OtelHook usage derivation", () => {
     );
     // Fail every state operation the next invocation performs, up to and including
     // the usage-baseline read. In transaction order those are: the sequence read,
-    // the sequence reservation write, and then — after export — the baseline read
-    // that usage accounting starts from.
-    harness.stateStore.failNext(3);
+    // the session-model read, the sequence reservation write, and then — after
+    // export — the baseline read that usage accounting starts from.
+    harness.stateStore.failNext(4);
     const outcome = await harness.hook.ingest(
       ingestInput({ ...sessionStart, event: "session.end", usage: cumulativeUsage(150, 25) }),
     );

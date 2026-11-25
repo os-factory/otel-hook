@@ -51,6 +51,9 @@ describe("public surface", () => {
       "VERSION",
       // Provider adapters and the default registry factory.
       "createClaudeCodeAdapter",
+      // The harness half of the Claude Code usage contract (issue #64).
+      "attachClaudeTranscriptTurn",
+      "readClaudeTranscriptTurn",
       "createCursorAdapter",
       "createCodexAdapter",
       "createGeminiCliAdapter",
