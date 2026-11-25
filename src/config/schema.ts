@@ -123,11 +123,32 @@ export const diagnosticsPolicySchema = z.strictObject({
 });
 export type DiagnosticsPolicy = z.infer<typeof diagnosticsPolicySchema>;
 
+/**
+ * Per-provider behaviour that is not part of an adapter's parse.
+ *
+ * `claudeCode.readTranscriptUsage` is the one sanctioned exception to "no
+ * transcript reads in the hook" (docs/claude-code-usage-contract.md, finding 8).
+ * When true, the hook runtime — never the adapter — reads the session transcript
+ * named by a Claude Code `Stop` / `StopFailure` payload, bounded, and attaches the
+ * turn's model and summed token usage before the adapter parses it. Off by
+ * default: without it, otel-hook reads no file a hook payload names.
+ */
+export const providersPolicySchema = z.strictObject({
+  claudeCode: z
+    .strictObject({
+      readTranscriptUsage: z.boolean(),
+    })
+    .optional(),
+});
+export type ProvidersPolicy = z.infer<typeof providersPolicySchema>;
+
 export const otelHookConfigSchema = z.strictObject({
   exporter: exporterPolicySchema,
   privacy: privacyPolicySchema,
   detection: detectionPolicySchema,
   diagnostics: diagnosticsPolicySchema,
+  /** Optional so a hand-built configuration from before it existed stays valid. */
+  providers: providersPolicySchema.optional(),
 });
 export type OtelHookConfig = z.infer<typeof otelHookConfigSchema>;
 
@@ -151,6 +172,12 @@ export const otelHookConfigPatchSchema = z.strictObject({
     .optional(),
   detection: detectionPolicySchema.partial().optional(),
   diagnostics: diagnosticsPolicySchema.partial().optional(),
+  providers: z
+    .strictObject({
+      claudeCode: z.strictObject({ readTranscriptUsage: z.boolean() }).partial().optional(),
+    })
+    .partial()
+    .optional(),
 });
 export type OtelHookConfigPatch = z.infer<typeof otelHookConfigPatchSchema>;
 
@@ -178,12 +205,21 @@ export const DEFAULT_DIAGNOSTICS_POLICY: DiagnosticsPolicy = Object.freeze({
   emitErrorEvents: true,
 });
 
+export const DEFAULT_PROVIDERS_POLICY: ProvidersPolicy = Object.freeze({
+  claudeCode: Object.freeze({ readTranscriptUsage: false }),
+});
+
 export const DEFAULT_CONFIG: OtelHookConfig = Object.freeze({
   exporter: DEFAULT_EXPORTER_POLICY,
   privacy: DEFAULT_PRIVACY_POLICY,
   detection: DEFAULT_DETECTION_POLICY,
   diagnostics: DEFAULT_DIAGNOSTICS_POLICY,
+  providers: DEFAULT_PROVIDERS_POLICY,
 });
+
+/** Whether the runtime may read Claude Code transcripts at `Stop` (default false). */
+export const readsClaudeTranscriptUsage = (config: OtelHookConfig): boolean =>
+  config.providers?.claudeCode?.readTranscriptUsage === true;
 
 /** Content mode is re-exported for callers building patches. */
 export { contentModeSchema };

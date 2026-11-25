@@ -13,7 +13,7 @@ import {
   isUnavailableContentFact,
   type ContentFact,
 } from "../model/content.js";
-import type { CanonicalEvent } from "../model/events.js";
+import type { CanonicalEvent, ModelDescriptor } from "../model/events.js";
 import {
   resolveInvocationIdentity,
   sourceProvenanceSchema,
@@ -56,6 +56,8 @@ import type {
   Clock,
   IdGenerator,
   Logger,
+  PayloadEnricher,
+  ReadCursor,
   StateStore,
   TelemetrySink,
   WorktreeLocator,
@@ -262,6 +264,11 @@ export type OtelHookDependencies = {
   readonly worktreeLocator?: WorktreeLocator;
   /** Ceiling on target resolution per callback. Default 50ms. */
   readonly targetResolutionBudgetMillis?: number;
+  /**
+   * Host-configured payload enrichers (see {@link PayloadEnricher}). Empty by
+   * default: nothing reads beyond the payload unless a host asks for it.
+   */
+  readonly payloadEnrichers?: readonly PayloadEnricher[];
 };
 
 const MAX_ERROR_EVENTS = 8;
@@ -324,6 +331,46 @@ const usageScopeOf = (
 };
 
 const sequenceKey = (sessionId: string): string => `sequence:${sessionId}`;
+const sessionModelKey = (sessionId: string): string => `model:${sessionId}`;
+const readCursorKey = (enricherId: string, sessionId: string): string =>
+  `cursor:${enricherId}:${sessionId}`;
+
+/**
+ * The placeholder an adapter uses when its payload names no model. Never
+ * remembered: storing it would overwrite a real model the session reported.
+ */
+const UNKNOWN_MODEL_ID = "unknown";
+
+/**
+ * The last model a batch reports for the top-level agent, if any.
+ *
+ * `session.start` and `generation.*` edges count; a subagent's events do not,
+ * because a subagent can run on a different model than the session it serves and
+ * must not rename the session's own generations. The last such event wins, so a
+ * turn that reports a model switch updates what the session remembers.
+ */
+const latestSessionModel = (events: readonly CanonicalEvent[]): ModelDescriptor | undefined => {
+  let latest: ModelDescriptor | undefined;
+  for (const event of events) {
+    if (event.subagentId !== undefined) {
+      continue;
+    }
+    if (
+      (event.type === "session.start" || event.type === "generation.start" || event.type === "generation.end") &&
+      event.model !== undefined &&
+      event.model.modelId !== UNKNOWN_MODEL_ID
+    ) {
+      latest = event.model;
+    }
+  }
+  return latest;
+};
+
+const sameModel = (left: ModelDescriptor | undefined, right: ModelDescriptor): boolean =>
+  left !== undefined &&
+  left.modelId === right.modelId &&
+  left.vendor === right.vendor &&
+  left.family === right.family;
 const usageKey = (sessionId: string, scope: UsageScope, scopeKey: string): string =>
   `usage:${sessionId}:${scope}:${scopeKey}`;
 
@@ -415,6 +462,92 @@ export const createOtelHook = (deps: OtelHookDependencies): OtelHook => {
         errorInfoFromThrown(thrown, { code: "state-store-failure", phase: "state", occurredAt: clock.now() }),
       );
       return 0;
+    }
+  };
+
+  /**
+   * Run the configured enrichers for this provider over the payload.
+   *
+   * Inside the session lock, so a cursor is read, advanced, and written by one
+   * process at a time. Every failure is contained: a throwing enricher or an
+   * unusable store leaves the payload as it was, and a cursor write that fails
+   * is a diagnostic — the next read then starts from the old cursor, which can
+   * count a turn into the next one but never twice.
+   */
+  const enrichPayload = async (
+    payload: unknown,
+    providerId: string,
+    sessionId: string,
+    diagnostics: OtelHookErrorInfo[],
+  ): Promise<unknown> => {
+    let current = payload;
+    for (const enricher of deps.payloadEnrichers ?? []) {
+      if (enricher.providerId !== providerId) {
+        continue;
+      }
+      const key = readCursorKey(enricher.id, sessionId);
+      let cursor: ReadCursor | undefined;
+      try {
+        const record = await deps.stateStore.read(key);
+        if (record?.value.kind === "read-cursor") {
+          cursor = { source: record.value.source, offset: record.value.offset };
+        }
+      } catch (thrown) {
+        diagnostics.push(
+          errorInfoFromThrown(thrown, { code: "state-store-failure", phase: "state", occurredAt: clock.now() }),
+        );
+        // Without the stored cursor a read would start from the wrong place.
+        continue;
+      }
+      let result;
+      try {
+        result = await enricher.enrich({ payload: current, sessionId, ...(cursor === undefined ? {} : { cursor }) });
+      } catch (thrown) {
+        logger.warn("payload enricher failed; parsing the payload as delivered", {
+          "enricher.id": enricher.id,
+          "error.name": thrown instanceof Error ? thrown.name : typeof thrown,
+        });
+        continue;
+      }
+      current = result.payload;
+      if (result.notes !== undefined && result.notes.length > 0) {
+        logger.debug("payload enricher notes", {
+          "enricher.id": enricher.id,
+          "enricher.notes": result.notes.slice(0, 8).map((note) => note.slice(0, 200)),
+        });
+      }
+      const next = result.cursor;
+      if (next !== undefined && (next.source !== cursor?.source || next.offset !== cursor.offset)) {
+        try {
+          await deps.stateStore.write(key, { kind: "read-cursor", source: next.source, offset: next.offset });
+        } catch (thrown) {
+          diagnostics.push(
+            errorInfoFromThrown(thrown, { code: "state-store-failure", phase: "state", occurredAt: clock.now() }),
+          );
+        }
+      }
+    }
+    return current;
+  };
+
+  /**
+   * The model this session last reported, or `undefined`.
+   *
+   * Fails open: an unreadable store costs the model name, never the observation,
+   * so a read failure is a diagnostic and the adapter falls back to `unknown`.
+   */
+  const readSessionModel = async (
+    sessionId: string,
+    diagnostics: OtelHookErrorInfo[],
+  ): Promise<ModelDescriptor | undefined> => {
+    try {
+      const record = await deps.stateStore.read(sessionModelKey(sessionId));
+      return record?.value.kind === "session-model" ? record.value.model : undefined;
+    } catch (thrown) {
+      diagnostics.push(
+        errorInfoFromThrown(thrown, { code: "state-store-failure", phase: "state", occurredAt: clock.now() }),
+      );
+      return undefined;
     }
   };
 
@@ -844,11 +977,22 @@ export const createOtelHook = (deps: OtelHookDependencies): OtelHook => {
        */
       const prepare = async (): Promise<Prepared> => {
       const sequenceBase = await readSequenceBase(identity.sessionId, diagnostics);
+      const sessionModel = await readSessionModel(identity.sessionId, diagnostics);
+      const payload = suppress
+        ? detectionInput.payload
+        : await enrichPayload(detectionInput.payload, detection.providerId, identity.sessionId, diagnostics);
 
       let parsed;
       try {
         parsed = adapter.parse(
-          { ...detectionInput, detection, identity, sequenceBase },
+          {
+            ...detectionInput,
+            payload,
+            detection,
+            identity,
+            sequenceBase,
+            ...(sessionModel === undefined ? {} : { sessionModel }),
+          },
           providerContext,
         );
       } catch (thrown) {
@@ -970,6 +1114,28 @@ export const createOtelHook = (deps: OtelHookDependencies): OtelHook => {
               occurredAt: clock.now(),
             }),
           );
+        }
+
+        // Remember the session's model for the invocations whose payload names
+        // none. Written only when it changed, so a session costs one record and
+        // a steady session no extra writes; never written for a redelivery,
+        // which is not a new observation.
+        const reportedModel = latestSessionModel(screened.kept);
+        if (reportedModel !== undefined && !sameModel(sessionModel, reportedModel)) {
+          try {
+            await deps.stateStore.write(sessionModelKey(identity.sessionId), {
+              kind: "session-model",
+              model: reportedModel,
+            });
+          } catch (thrown) {
+            diagnostics.push(
+              errorInfoFromThrown(thrown, {
+                code: "state-store-failure",
+                phase: "state",
+                occurredAt: clock.now(),
+              }),
+            );
+          }
         }
       }
 

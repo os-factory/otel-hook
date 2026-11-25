@@ -58,10 +58,11 @@ export const claudeUsageIterationSchema = z.object({
  * `PostCompact` — no hook event in the protocol reports a token counter at all
  * (docs/claude-code-usage-contract.md, finding 1). The tokens exist only at
  * `message.usage` in the transcript, and this adapter never reads the transcript
- * itself (AGENT.md forbids scanning transcript directories from provider
- * adapters). So the field is accepted only when a caller has already placed it
- * on the payload, and the shape mirrors `message.usage` exactly so a harness can
- * attach what it read without reshaping it.
+ * itself (AGENTS.md and ADR 0003: an adapter has no filesystem handle). So the
+ * field is accepted only when a caller has already placed it on the payload, and
+ * the shape mirrors `message.usage` exactly so a harness can attach what it read
+ * without reshaping it — `readClaudeTranscriptTurn` / `attachClaudeTranscriptTurn`
+ * (`transcript.ts`) are the bounded helper a wrapper can call to do that.
  *
  * `input_tokens` is the **fresh** portion of the prompt only; cache reads and
  * cache writes are separate, additive buckets (finding 2). `usage.ts` documents
@@ -238,6 +239,24 @@ export const stopPayloadSchema = z.object({
    */
   stop_hook_active: z.boolean().optional(),
   usage: claudeUsageSchema.optional(),
+  /**
+   * The model that answered this turn — harness-supplied, never upstream.
+   *
+   * Claude Code's `Stop` carries no model id; the per-turn model sits only at
+   * `message.model` in the transcript, beside `message.usage`. A wrapping harness
+   * that read it (for instance with `readClaudeTranscriptTurn`) attaches it here
+   * with `usage`, and it becomes the generation's response model. An unusable
+   * value (empty, over 256 characters, not a string) is dropped rather than
+   * failing the whole payload: the turn is still worth reporting without it.
+   */
+  model: z.string().min(1).max(256).optional().catch(undefined),
+  /**
+   * Harness-supplied, never upstream: whether `usage` covers only part of the
+   * turn. `true` when it is the last model request alone (the tail fallback),
+   * `false` when it sums every request since the previous stop. Exported as
+   * `otelhook.usage.partial`; absent means the attacher did not say.
+   */
+  usage_partial: z.boolean().optional().catch(undefined),
 });
 export type StopPayload = z.infer<typeof stopPayloadSchema>;
 
@@ -252,6 +271,10 @@ export const stopFailurePayloadSchema = z.object({
   error_type: z.string().min(1),
   error_message: z.string().optional(),
   usage: claudeUsageSchema.optional(),
+  /** Harness-supplied, never upstream: see `stopPayloadSchema.model`. */
+  model: z.string().min(1).max(256).optional().catch(undefined),
+  /** Harness-supplied, never upstream: see `stopPayloadSchema.usage_partial`. */
+  usage_partial: z.boolean().optional().catch(undefined),
 });
 export type StopFailurePayload = z.infer<typeof stopFailurePayloadSchema>;
 

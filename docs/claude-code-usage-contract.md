@@ -56,7 +56,9 @@ Not `Stop`, not `SubagentStop`, not `PostCompact`. This is why
 `capabilities.ts` frames cached-input support as "the payload shape is accepted
 when a wrapping harness attaches it": a bare Claude Code installation reports no
 tokens to a hook at all, and the adapter must not read `transcript_path` to find
-them (`AGENT.md`).
+them (`AGENTS.md`, ADR 0003). The hook runtime may, when the host turns on
+`providers.claudeCode.readTranscriptUsage`, and a wrapping harness may, with the
+bounded helpers described in finding 8.
 
 ## Finding 2: usage lives at `message.usage`, and its input buckets are disjoint
 
@@ -218,3 +220,92 @@ The same reasoning fixes a latent inversion on `SubagentStop`, which was keyed o
 `agent_id` alone: a hook-continued subagent stop repeats `agent_id` and would
 have been suppressed as a redelivery. It now declines an identity when
 `stop_hook_active` is `true`.
+
+## Finding 8: the model is on `SessionStart` and in the transcript, never on `Stop`
+
+The hook side is finding 1's (2.1.220 schemas); the transcript side was
+re-checked against **Claude Code 2.1.332** for issue #64, the same way: record
+and field names only, nothing copied.
+
+- `SessionStart` carries `model`. No other hook callback in finding 1's list
+  names one, `Stop` and `StopFailure` included.
+- Every top-level assistant transcript record carries `message.model` next to
+  `message.usage`. It follows `/model`, so it is the only exact per-turn source.
+- Assistant records that Claude Code makes up itself (an API error notice, an
+  interrupted turn) carry the model `<synthetic>` and zeroed usage. Subagent
+  records carry `isSidechain: true`.
+- `message.usage` now also has `output_tokens_details { thinking_tokens }`. It is
+  not read: it is a breakdown of `output_tokens`, and `reportsReasoningOutput`
+  stays `false` until a decision is made to model it.
+
+- One request is written as one record per content block, each repeating its
+  `message.id` and its usage so far; the last record of an id holds the final
+  counts.
+
+So the model and usage reach a generation span in up to three ways, and none of
+them makes the adapter read a file:
+
+1. **Session model, always on.** The core remembers the last model a session
+   reported (`session.start`, or a top-level `generation.*` with a known model)
+   under `model:<sessionId>` in the state store, and hands it to the adapter as
+   `ProviderParseInput.sessionModel` (ADR 0006: the adapter keeps no state of its
+   own). `Stop` / `StopFailure` use it for both `gen_ai.request.model` and
+   `gen_ai.response.model`, and the span is named `generation <model>`. `unknown`
+   remains only when nothing in the session ever named a model, or when the host
+   runs with a store that does not survive between hook processes.
+2. **Turn totals, read by otel-hook (opt-in setting).** With
+   `providers.claudeCode.readTranscriptUsage` on (`--claude-transcript-usage`,
+   `OTEL_HOOK_CLAUDE_TRANSCRIPT_USAGE=1`, or the config file), the hook runtime
+   runs `createClaudeTranscriptUsageEnricher` before the adapter parses. It keeps
+   a byte cursor per session in the state store (`cursor:claude-transcript-usage:<sessionId>`,
+   holding the offset and a digest of the path, never the path):
+   - `SessionStart` records where the transcript ends (0 if it does not exist
+     yet), unless a cursor for the same transcript already exists, so a
+     compaction restart does not skip the turn it interrupted;
+   - `Stop` / `StopFailure` read from the cursor to the end (at most 8 MiB,
+     within 500 ms), sum every main-thread request (deduplicated by
+     `message.id`, last record wins; sidechain and `<synthetic>` records
+     skipped), attach the turn's model and usage with `usage_partial: false`,
+     and move the cursor to the end of the last complete line;
+   - with no cursor for this transcript, a range over the cap, or a transcript
+     that shrank, it falls back to the last request in the bounded tail,
+     attaches it with `usage_partial: true`, and moves the cursor to the end;
+   - a timeout or an unreadable file attaches nothing and keeps the cursor, so
+     the next turn's range includes the tokens: late, never twice;
+   - a payload that already carries `usage` is left alone, and the cursor moves
+     past it.
+   The generation span carries `otelhook.usage.partial` (`false` for a turn
+   total, `true` for the fallback).
+3. **Harness-attached (library helper).** A wrapper can instead attach
+   `{ model, usage }` itself with `attachClaudeTranscriptTurn(payload)`. It
+   reads the last 1 MiB of the one `transcript_path` the payload names, within
+   250 ms, and attaches the last request only, with `usage_partial: true`.
+
+All readers open only a regular `.jsonl` file at an absolute path, never list a
+directory, never throw, and let nothing but model ids and counters out of the
+record.
+
+### The one sanctioned exception to "no transcript reads in the hook"
+
+ADR 0003 gives adapters no filesystem handle, and this document has always said
+the adapter must not read `transcript_path`. That still holds: the adapter only
+maps fields that are already on the payload. Option 2 is the single place where
+otel-hook reads a file a hook payload names, inside the hook process, and it is
+off by default. It is allowed because there is no other source for Claude Code
+tokens, and because it is bounded (one named file, a byte cap, a time budget,
+fail-open), host-configured rather than provider-chosen, and visible in
+configuration. Any further transcript read needs the same justification and its
+own setting.
+
+Why turn totals and not the last request: in agentic use most turns contain
+several model requests (one per tool round trip), so the last request alone
+reports only a small share of the turn's billed input and output tokens. A cursor gives
+the exact turn without a bounded tail ever having to find where the turn began.
+Subagent requests are not in the sum: Claude Code writes them to the subagent's
+own transcript, and `SubagentStop` carries no usage.
+
+The synthetic tail in `fixtures/contracts/claude-code/transcript-tail-turn.json`
+pins this shape. `tests/providers/claude/transcript.test.ts` covers the helper and
+the session model, `tests/providers/claude/transcript-usage-enricher.test.ts`
+the cursor and the setting, and `tests/e2e-proof/proof-run.test.ts` shows that
+`check-evidence.mjs` `token-usage` passes for Claude Code both ways.

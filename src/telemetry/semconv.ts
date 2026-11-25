@@ -47,6 +47,8 @@ const ATTR_OTELHOOK_SPAN_PAIRING = "otelhook.span.pairing";
 const ATTR_OTELHOOK_SPAN_ORPHAN = "otelhook.span.orphan";
 const ATTR_OTELHOOK_OUTCOME = "otelhook.outcome";
 const ATTR_OTELHOOK_RESET_DETECTED = "otelhook.usage.reset_detected";
+/** True when a generation's usage covers only part of it; see `generation.end.usagePartial`. */
+export const ATTR_OTELHOOK_USAGE_PARTIAL = "otelhook.usage.partial";
 const ATTR_OTELHOOK_TOOL_KIND = "otelhook.tool.kind";
 const ATTR_OTELHOOK_DELEGATION_DEPTH = "otelhook.delegation_depth";
 const ATTR_OTELHOOK_COMPACTION_TRIGGER = "otelhook.compaction.trigger";
@@ -589,6 +591,9 @@ const buildLifecycleSpan = (
         [ATTR_OTELHOOK_GENERATION_ID]: group.ref.scopeKey,
         ...(end?.outcome === undefined ? {} : { [ATTR_OTELHOOK_OUTCOME]: end.outcome }),
         ...usageAttributes(end?.usage, false),
+        ...(end?.usage === undefined || end.usagePartial === undefined
+          ? {}
+          : { [ATTR_OTELHOOK_USAGE_PARTIAL]: end.usagePartial }),
       };
       status = outcomeStatus(end?.outcome);
       break;

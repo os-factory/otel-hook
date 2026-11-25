@@ -25,6 +25,7 @@ import {
   usageTemporalityAttributes,
 } from "./export-identity.js";
 import {
+  ATTR_OTELHOOK_USAGE_PARTIAL,
   canonicalEventTraceIdentities,
   DEFAULT_INSTRUMENTATION_SCOPE,
   type SpanCorrelation,
@@ -433,6 +434,9 @@ const eventAttributes = (event: CanonicalEvent): Attributes => {
         [ATTR_OTELHOOK_OUTCOME]: event.outcome,
         ...(event.stopReason === undefined ? {} : { [ATTR_OTELHOOK_STOP_REASON]: event.stopReason }),
         ...usageAttributes(event.usage),
+        ...(event.usage === undefined || event.usagePartial === undefined
+          ? {}
+          : { [ATTR_OTELHOOK_USAGE_PARTIAL]: event.usagePartial }),
       };
     case "tool.start":
       return {

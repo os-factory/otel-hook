@@ -71,6 +71,8 @@ export const ENVIRONMENT_VARIABLES = Object.freeze({
   maxEventsPerInvocation: "OTEL_HOOK_MAX_EVENTS_PER_INVOCATION",
   minimumConfidence: "OTEL_HOOK_MIN_DETECTION_CONFIDENCE",
   logLevel: "OTEL_HOOK_LOG_LEVEL",
+  /** `providers.claudeCode.readTranscriptUsage`; see `providersPolicySchema`. */
+  claudeTranscriptUsage: "OTEL_HOOK_CLAUDE_TRANSCRIPT_USAGE",
 });
 
 const BOOLEAN_TRUE = new Set(["1", "true", "yes", "on"]);
@@ -328,11 +330,18 @@ export const parseEnvironmentConfig = (env: EnvironmentRecord): EnvironmentConfi
 
   const diagnostics = logLevel === undefined ? {} : { logLevel };
 
+  const claudeTranscriptUsage = readBoolean(ENVIRONMENT_VARIABLES.claudeTranscriptUsage);
+  const providers =
+    claudeTranscriptUsage === undefined
+      ? {}
+      : { claudeCode: { readTranscriptUsage: claudeTranscriptUsage } };
+
   const patch: OtelHookConfigPatch = {
     ...(Object.keys(exporter).length === 0 ? {} : { exporter }),
     ...(Object.keys(privacy).length === 0 ? {} : { privacy }),
     ...(Object.keys(detection).length === 0 ? {} : { detection }),
     ...(Object.keys(diagnostics).length === 0 ? {} : { diagnostics }),
+    ...(Object.keys(providers).length === 0 ? {} : { providers }),
   };
 
   return { patch, warnings };

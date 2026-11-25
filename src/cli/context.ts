@@ -111,6 +111,9 @@ export const policyFlagsToPatch = (policy: CliPolicyFlags): OtelHookConfigPatch 
     ...(Object.keys(exporter).length === 0 ? {} : { exporter }),
     ...(Object.keys(privacy).length === 0 ? {} : { privacy }),
     ...(Object.keys(diagnostics).length === 0 ? {} : { diagnostics }),
+    ...(policy.claudeTranscriptUsage === true
+      ? { providers: { claudeCode: { readTranscriptUsage: true } } }
+      : {}),
   } as OtelHookConfigPatch;
 };
 

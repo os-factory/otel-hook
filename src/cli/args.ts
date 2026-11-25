@@ -63,6 +63,11 @@ export type CliPolicyFlags = {
    * whether the logs pipeline may carry it. Both are needed for a body to appear.
    */
   readonly logsIncludeContent?: boolean;
+  /**
+   * `providers.claudeCode.readTranscriptUsage`: read the Claude Code transcript
+   * at `Stop` for the turn's model and token usage. Off unless asked for.
+   */
+  readonly claudeTranscriptUsage?: boolean;
 };
 
 /**
@@ -191,6 +196,7 @@ const BOOLEAN_FLAGS = new Set([
   "--logs",
   "--no-logs",
   "--logs-content",
+  "--claude-transcript-usage",
   "--include-experimental",
   "--no-experimental",
   "--dry-run",
@@ -432,6 +438,7 @@ const parsePolicy = (tokens: Tokenized, errors: string[]): CliPolicyFlags => {
     ...(logsEnabled === undefined ? {} : { logsEnabled }),
     ...(logsEndpoint === undefined ? {} : { logsEndpoint }),
     ...(tokens.booleans.has("--logs-content") ? { logsIncludeContent: true } : {}),
+    ...(tokens.booleans.has("--claude-transcript-usage") ? { claudeTranscriptUsage: true } : {}),
   };
 };
 
@@ -500,6 +507,7 @@ const RUN_FLAGS: ReadonlySet<string> = new Set([
   "--no-logs",
   "--logs-endpoint",
   "--logs-content",
+  "--claude-transcript-usage",
   "--max-input-bytes",
   "--no-export",
   "--no-spool",
@@ -529,6 +537,7 @@ const DOCTOR_FLAGS: ReadonlySet<string> = new Set([
   "--no-logs",
   "--logs-endpoint",
   "--logs-content",
+  "--claude-transcript-usage",
   "--include-experimental",
   "--no-experimental",
 ]);
@@ -816,6 +825,10 @@ Exporter and runtime policy (never identity):
   --logs-content             permit disclosed content text in a log body. Needs
                              --content-mode too: this decides whether the logs
                              pipeline may carry what that one discloses
+  --claude-transcript-usage  Claude Code only: at Stop, read the transcript the
+                             payload names (bounded) for the turn's model and
+                             summed token usage. Off by default; also
+                             OTEL_HOOK_CLAUDE_TRANSCRIPT_USAGE=1
   --max-input-bytes <n>      stdin bound (default 1048576)
   --attr <key=value>         opaque consumer attribute for this invocation,
                              carried unchanged (not a resource attribute)

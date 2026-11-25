@@ -14,11 +14,37 @@ import { extractClaudeUsage, normalizeClaudeUsage } from "./usage.js";
 /**
  * Claude Code hooks never report a model identifier on the events this
  * adapter turns into `generation.start`/`generation.end` (`Stop`,
- * `StopFailure`). Using a real-looking model id here would assert something
- * the payload never said; `unknown` is the same honest-absence sentinel the
- * core model uses for provider and workspace identity.
+ * `StopFailure`). Only `SessionStart` names one.
+ *
+ * So a generation's model comes from, in order:
+ *
+ * 1. a `model` a wrapping harness attached to the stop payload — the per-turn
+ *    model it read from the transcript's last assistant message, the only
+ *    source that follows a `/model` switch exactly;
+ * 2. the session's model, which the core remembers from `SessionStart` (or the
+ *    last turn that named one) and hands in as `sessionModel` (ADR 0006: the
+ *    adapter itself holds no cross-invocation state);
+ * 3. `unknown`, when nothing in this session ever named a model. Using a
+ *    real-looking model id here would assert something no payload said;
+ *    `unknown` is the same honest-absence sentinel the core model uses for
+ *    provider and workspace identity.
+ *
+ * The request model (`generation.start`) prefers the session's model, since that
+ * is what the turn was sent to; the response model (`generation.end`) prefers the
+ * attached per-turn one, since that is what answered.
  */
 const UNKNOWN_MODEL: ModelDescriptor = { modelId: "unknown" };
+
+const generationModels = (
+  attached: string | undefined,
+  sessionModel: ModelDescriptor | undefined,
+): { readonly request: ModelDescriptor; readonly response: ModelDescriptor } => {
+  const turnModel: ModelDescriptor | undefined = attached === undefined ? undefined : { modelId: attached };
+  return {
+    request: sessionModel ?? turnModel ?? UNKNOWN_MODEL,
+    response: turnModel ?? sessionModel ?? UNKNOWN_MODEL,
+  };
+};
 
 type SessionEndReason = "completed" | "aborted" | "error" | "timeout" | "unknown";
 
@@ -111,6 +137,12 @@ export const parseClaudeCode = (
     const normalized = normalizeClaudeUsage(usage);
     warnings.push(...normalized.warnings);
     return applyUsage(normalized);
+  };
+
+  /** Usage plus the attacher's statement of whether it covers the whole turn. */
+  const withPartialUsage = (usage: ClaudeUsage | undefined, partial: boolean | undefined) => {
+    const applied = withUsage(usage);
+    return applied.usage === undefined || partial === undefined ? applied : { ...applied, usagePartial: partial };
   };
 
   switch (payload.hook_event_name) {
@@ -257,11 +289,12 @@ export const parseClaudeCode = (
         payload.prompt_id ?? String(input.sequenceBase),
       ]);
       const assistantText = extractClaudeAssistantText(normalizedPayload);
-      factory.build({ type: "generation.start", generationId, model: UNKNOWN_MODEL });
+      const models = generationModels(payload.model, input.sessionModel);
+      factory.build({ type: "generation.start", generationId, model: models.request });
       factory.build({
         type: "generation.end",
         generationId,
-        model: UNKNOWN_MODEL,
+        model: models.response,
         outcome: "ok",
         // Always a response fact: a body when Claude sent text, otherwise a
         // zero-length omitted fact so the log mapping can emit metadata_only
@@ -275,7 +308,7 @@ export const parseClaudeCode = (
                 text: assistantText,
               }),
         ],
-        ...withUsage(extractedUsage ?? payload.usage),
+        ...withPartialUsage(extractedUsage ?? payload.usage, payload.usage_partial),
       });
       break;
     }
@@ -287,11 +320,12 @@ export const parseClaudeCode = (
         payload.prompt_id ?? String(input.sequenceBase),
       ]);
       const assistantText = extractClaudeAssistantText(normalizedPayload);
-      factory.build({ type: "generation.start", generationId, model: UNKNOWN_MODEL });
+      const models = generationModels(payload.model, input.sessionModel);
+      factory.build({ type: "generation.start", generationId, model: models.request });
       factory.build({
         type: "generation.end",
         generationId,
-        model: UNKNOWN_MODEL,
+        model: models.response,
         outcome: mapStopFailureOutcome(payload.error_type),
         stopReason: payload.error_type,
         ...(assistantText === undefined
@@ -305,7 +339,7 @@ export const parseClaudeCode = (
                 }),
               ],
             }),
-        ...withUsage(extractedUsage ?? payload.usage),
+        ...withPartialUsage(extractedUsage ?? payload.usage, payload.usage_partial),
       });
       break;
     }

@@ -38,6 +38,8 @@ layout. As of the current version:
 | Key                                                              | Holds                                            |
 | ---------------------------------------------------------------- | ------------------------------------------------ |
 | `sequence:<sessionId>`                                            | Next per-session event sequence number (reserved up front; gaps are expected) |
+| `model:<sessionId>`                                               | The model the session last reported (`session.start`, or a top-level `generation.*` with a known model), for adapters whose generation callbacks name none. Written only when it changes; never for a redelivery |
+| `cursor:<enricherId>:<sessionId>`                                 | Byte offset a payload enricher has read a session's source to, plus a digest naming the source (never a path). Only with `providers.claudeCode.readTranscriptUsage`; never advanced for a redelivery |
 | `usage:<sessionId>:...`                                           | Cumulative usage baseline for delta computation  |
 | `lifecycle:span:v2:<sessionId>:<providerId>:<scope>:<scopeKey>`    | One open or recently closed lifecycle span       |
 | `lifecycle:dedup:v2:<deliveryScope>:<callbackId>`                 | A delivery id already claimed or completed       |

@@ -218,6 +218,14 @@ Every cell is pending until a provider comment links its evidence.
 | Privacy: no `factory.local.*`, no paths, no account identity | pending | pending | pending | pending | pending | `privacy` (mechanical, every destination, delivered and rejected requests) + a glance at Langfuse |
 | Trace ↔ Factory Commits proof correlation | pending | pending | pending | pending | pending | **manual**: `git factory` output; `trace-proof` lists the session trace ids |
 
+Claude Code's hooks carry no token counter, so its `token-usage` cell can pass only
+with `--claude-transcript-usage` (or `OTEL_HOOK_CLAUDE_TRANSCRIPT_USAGE=1`) on the
+hook command, or a harness that attaches usage itself
+([finding 8](claude-code-usage-contract.md#finding-8-the-model-is-on-sessionstart-and-in-the-transcript-never-on-stop)).
+With the setting, generation spans carry each turn's summed main-thread requests;
+any span with `otelhook.usage.partial=true` holds one request only, so compare
+`--expect-usage` against a run where none is partial.
+
 ### What each check asserts
 
 | Check | Passes when |

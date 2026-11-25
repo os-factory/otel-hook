@@ -1,7 +1,12 @@
 import { z } from "zod";
 
 import type { AttributionOutcome, AttributionReason, OtelHookErrorInfo } from "../errors/index.js";
-import { canonicalEventTypeSchema, type CanonicalEvent, type CanonicalEventType } from "../model/events.js";
+import {
+  canonicalEventTypeSchema,
+  type CanonicalEvent,
+  type CanonicalEventType,
+  type ModelDescriptor,
+} from "../model/events.js";
 import type { IdentityClaim, InvocationIdentity } from "../model/identity.js";
 import type { TargetHint } from "../model/target.js";
 import {
@@ -228,6 +233,18 @@ export type ProviderParseInput = ProviderDetectionInput & {
    * consecutively from here so event ids stay stable across replays.
    */
   readonly sequenceBase: number;
+  /**
+   * The model this session last reported, as the core remembers it across
+   * invocations (`session.start` or a `generation.*` edge with a known model).
+   *
+   * Read from the state store by the core and handed in, because an adapter must
+   * not hold cross-invocation state itself (ADR 0006). Absent when no earlier
+   * invocation of this session named a model, or when the store is unreadable.
+   * An adapter whose generation callbacks carry no model id (Claude Code's
+   * `Stop`) uses it instead of the `unknown` sentinel; one whose callbacks carry
+   * their own model can ignore it.
+   */
+  readonly sessionModel?: ModelDescriptor;
 };
 
 export type ProviderParseResult =

@@ -28,6 +28,11 @@ are opaque, immutable invocation metadata.
 - Prompt, response, reasoning, error, and tool content is omitted by default.
 - Do not introduce module-level mutable identity, session, tracer, or workspace.
 - Do not scan arbitrary transcript directories from provider adapters.
+- The one sanctioned exception to "no transcript reads in the hook" is the
+  opt-in `providers.claudeCode.readTranscriptUsage` setting (off by default):
+  the hook runtime, never the adapter, reads the single Claude Code transcript a
+  payload names, bounded and fail-open. See
+  `docs/claude-code-usage-contract.md`, finding 8.
 
 ## Branch names, CI, and releases
 

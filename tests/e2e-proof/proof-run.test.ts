@@ -1,9 +1,10 @@
 import { execFileSync } from "node:child_process";
-import { mkdir, realpath } from "node:fs/promises";
+import { appendFile, mkdir, readFile, readdir, realpath, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 
+import { attachClaudeTranscriptTurn } from "../../src/providers/index.js";
 import { CLI_PATH, ensureBuiltCli } from "../e2e/harness.js";
 import { detailsOf, makeTempDir, runChecker, runNode, startReceiverProcess, statusOf } from "./harness.js";
 
@@ -133,5 +134,167 @@ describe.skipIf(!gitAvailable)("e2e proof: receiver capture → evidence checker
     expect(statusOf(result, "spool-replay")).toBe("pass");
     expect(detailsOf(result, "spool-replay")).toContain("every rejected record arrived later");
     expect(stdout).not.toContain(root);
+  }, 120_000);
+
+  /**
+   * Issue #64: Claude Code's `Stop` carries neither a model nor tokens. With the
+   * harness contract on — the wrapper attaches the transcript's last assistant
+   * message with `attachClaudeTranscriptTurn` — the exported generation must name
+   * the exact model and carry all four token buckets, and `token-usage` must pass.
+   * The transcript is the synthetic contract fixture, one record per line.
+   */
+  it("exports the model and token usage a wrapper attaches from the transcript", async () => {
+    const temp = await makeTempDir("otel-hook-proof-transcript-");
+    cleanups.push(() => temp.remove());
+    const root = await realpath(temp.dir);
+    const checkout = path.join(root, "sandbox");
+    await mkdir(checkout);
+    execFileSync("git", ["init", "-q", "-b", "proof/synthetic"], { cwd: checkout, stdio: "ignore" });
+
+    const fixture = path.resolve(import.meta.dirname, "..", "..", "fixtures", "contracts", "claude-code", "transcript-tail-turn.json");
+    const { records } = JSON.parse(await readFile(fixture, "utf8")) as { records: unknown[] };
+    const transcriptPath = path.join(root, "transcript.jsonl");
+    await writeFile(transcriptPath, `${records.map((record) => JSON.stringify(record)).join("\n")}\n`);
+
+    const captureDir = path.join(root, "capture");
+    const receiver = await startReceiverProcess(["--capture-dir", captureDir]);
+    cleanups.push(async () => {
+      if (receiver.child.exitCode === null) {
+        await receiver.stop();
+      }
+    });
+
+    const base = { session_id: "ses-proof-transcript-0001", transcript_path: transcriptPath, cwd: checkout };
+    const events = [
+      { ...base, hook_event_name: "SessionStart", source: "startup", model: "claude-synthetic-opus-9" },
+      { ...base, hook_event_name: "UserPromptSubmit", prompt_id: "prompt-1", prompt: PROMPT_SECRET },
+      { ...base, hook_event_name: "Stop", prompt_id: "prompt-1", stop_hook_active: false, last_assistant_message: "READY" },
+      { ...base, hook_event_name: "SessionEnd", reason: "other" },
+    ];
+    for (const event of events) {
+      const payload = await attachClaudeTranscriptTurn(event);
+      const result = await runNode(
+        [CLI_PATH, "run", "--provider", "claude-code", "--endpoint", receiver.tracesUrl, "--state-dir", path.join(root, "state")],
+        { stdin: JSON.stringify(payload), env: { OTEL_RESOURCE_ATTRIBUTES: `session.id=${LAUNCHER_SESSION}` } },
+      );
+      expect(result.code).toBe(0);
+    }
+    await receiver.stop();
+
+    const { result } = await runChecker([
+      captureDir,
+      "--provider",
+      "claude-code",
+      "--session-id",
+      LAUNCHER_SESSION,
+      // Canonical input includes cache reads and writes: 3 + 118,000 + 7,400.
+      "--expect-usage",
+      "input=125403,output=412,cache_read=118000,cache_creation=7400",
+      "--forbid",
+      PROMPT_SECRET,
+    ]);
+    expect({ id: "token-usage", status: statusOf(result, "token-usage"), details: detailsOf(result, "token-usage") }).toMatchObject({
+      status: "pass",
+    });
+    expect(statusOf(result, "privacy")).toBe("pass");
+
+    const spans: { name: string; attributes: Record<string, unknown> }[] = [];
+    for (const name of (await readdir(captureDir)).filter((entry) => /^\d+-traces\.json$/.test(entry))) {
+      const meta = JSON.parse(await readFile(path.join(captureDir, name), "utf8")) as {
+        decoded: { spans: { name: string; attributes: Record<string, unknown> }[] } | null;
+      };
+      spans.push(...(meta.decoded?.spans ?? []));
+    }
+    const generation = spans.find((span) => span.attributes["gen_ai.operation.name"] === "chat");
+    expect(generation?.name).toBe("generation claude-synthetic-opus-9");
+    expect(generation?.attributes).toMatchObject({
+      "gen_ai.request.model": "claude-synthetic-opus-9",
+      "gen_ai.response.model": "claude-synthetic-opus-9",
+      "gen_ai.usage.output_tokens": 412,
+      "gen_ai.usage.cache_read.input_tokens": 118000,
+      "gen_ai.usage.cache_creation.input_tokens": 7400,
+      "otelhook.usage.partial": true,
+    });
+  }, 120_000);
+
+  /**
+   * The same session with `--claude-transcript-usage` and no wrapper: otel-hook
+   * itself records the transcript's end at SessionStart and sums every request of
+   * the turn at Stop, so the generation carries the exact turn total.
+   */
+  it("sums the turn itself with --claude-transcript-usage", async () => {
+    const temp = await makeTempDir("otel-hook-proof-transcript-flag-");
+    cleanups.push(() => temp.remove());
+    const root = await realpath(temp.dir);
+    const checkout = path.join(root, "sandbox");
+    await mkdir(checkout);
+    execFileSync("git", ["init", "-q", "-b", "proof/synthetic"], { cwd: checkout, stdio: "ignore" });
+
+    const fixture = path.resolve(import.meta.dirname, "..", "..", "fixtures", "contracts", "claude-code", "transcript-tail-turn.json");
+    const { records } = JSON.parse(await readFile(fixture, "utf8")) as { records: unknown[] };
+    const transcriptPath = path.join(root, "transcript.jsonl");
+
+    const captureDir = path.join(root, "capture");
+    const receiver = await startReceiverProcess(["--capture-dir", captureDir]);
+    cleanups.push(async () => {
+      if (receiver.child.exitCode === null) {
+        await receiver.stop();
+      }
+    });
+
+    const base = { session_id: "ses-proof-transcript-0002", transcript_path: transcriptPath, cwd: checkout };
+    const run = async (event: Record<string, unknown>): Promise<void> => {
+      const result = await runNode(
+        [
+          CLI_PATH,
+          "run",
+          "--provider",
+          "claude-code",
+          "--claude-transcript-usage",
+          "--endpoint",
+          receiver.tracesUrl,
+          "--state-dir",
+          path.join(root, "state"),
+        ],
+        { stdin: JSON.stringify(event), env: { OTEL_RESOURCE_ATTRIBUTES: `session.id=${LAUNCHER_SESSION}` } },
+      );
+      expect(result.code).toBe(0);
+    };
+    // The transcript does not exist yet at startup; the turn is written before Stop.
+    await run({ ...base, hook_event_name: "SessionStart", source: "startup", model: "claude-synthetic-opus-9" });
+    await appendFile(transcriptPath, `${records.map((record) => JSON.stringify(record)).join("\n")}\n`);
+    await run({ ...base, hook_event_name: "Stop", prompt_id: "prompt-1", stop_hook_active: false, last_assistant_message: "READY" });
+    await run({ ...base, hook_event_name: "SessionEnd", reason: "other" });
+    await receiver.stop();
+
+    // Both requests of the turn: 0001 (5 + 1,000 + 200 in, 20 out) and 0002.
+    const { result } = await runChecker([
+      captureDir,
+      "--provider",
+      "claude-code",
+      "--session-id",
+      LAUNCHER_SESSION,
+      "--expect-usage",
+      "input=126608,output=432,cache_read=119000,cache_creation=7600",
+    ]);
+    expect({ status: statusOf(result, "token-usage"), details: detailsOf(result, "token-usage") }).toMatchObject({
+      status: "pass",
+    });
+    expect(statusOf(result, "privacy")).toBe("pass");
+
+    const spans: { name: string; attributes: Record<string, unknown> }[] = [];
+    for (const name of (await readdir(captureDir)).filter((entry) => /^\d+-traces\.json$/.test(entry))) {
+      const meta = JSON.parse(await readFile(path.join(captureDir, name), "utf8")) as {
+        decoded: { spans: { name: string; attributes: Record<string, unknown> }[] } | null;
+      };
+      spans.push(...(meta.decoded?.spans ?? []));
+    }
+    const generation = spans.find((span) => span.attributes["gen_ai.operation.name"] === "chat");
+    expect(generation?.name).toBe("generation claude-synthetic-opus-9");
+    expect(generation?.attributes).toMatchObject({
+      "gen_ai.response.model": "claude-synthetic-opus-9",
+      "gen_ai.usage.output_tokens": 432,
+      "otelhook.usage.partial": false,
+    });
   }, 120_000);
 });

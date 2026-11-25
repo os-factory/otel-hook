@@ -131,6 +131,13 @@ export const generationEndEventSchema = event({
   stopReason: nonEmptyStringSchema.optional(),
   durationMillis: durationMillisSchema.optional(),
   usage: canonicalUsageSchema.optional(),
+  /**
+   * True when `usage` is known to cover only part of the generation (for
+   * example the last model request of a multi-request turn); false when the
+   * provider or harness said it is the whole. Absent: not stated. Meaningless
+   * without `usage`.
+   */
+  usagePartial: z.boolean().optional(),
   cost: costFactsSchema.optional(),
   outputContent: contentFactsSchema.optional(),
 });

@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 import type { OtelHookErrorInfo } from "../errors/index.js";
-import type { CanonicalEvent } from "../model/events.js";
+import { modelDescriptorSchema, type CanonicalEvent } from "../model/events.js";
 import {
   attributesSchema,
   epochMillisSchema,
@@ -100,6 +100,26 @@ export const stateValueSchema = z.discriminatedUnion("kind", [
     kind: z.literal("attributes"),
     attributes: attributesSchema,
   }),
+  /**
+   * The model a session last reported, so a later invocation whose payload names
+   * none (Claude Code's `Stop`) can still say which model it was. A model id is
+   * not sensitive (`modelDescriptorSchema`), and the descriptor is the strict,
+   * bounded canonical shape, never a payload fragment.
+   */
+  z.strictObject({
+    kind: z.literal("session-model"),
+    model: modelDescriptorSchema,
+  }),
+  /**
+   * How far a {@link PayloadEnricher} has read a session's append-only source
+   * (Claude Code's transcript), so the next read starts where the last ended.
+   * `source` is an opaque digest of what was read, never a path.
+   */
+  z.strictObject({
+    kind: z.literal("read-cursor"),
+    source: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/),
+    offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+  }),
 ]);
 export type StateValue = z.infer<typeof stateValueSchema>;
 
@@ -195,4 +215,47 @@ export type LocatedWorktree = {
  */
 export interface WorktreeLocator {
   locate(absolutePath: string): Promise<LocatedWorktree | undefined>;
+}
+
+/** Where an enricher stopped reading a session's source; see the `read-cursor` state value. */
+export type ReadCursor = {
+  /** Opaque digest naming the source, so a cursor never applies to another file. */
+  readonly source: string;
+  /** Byte offset the next read starts at. */
+  readonly offset: number;
+};
+
+export type PayloadEnrichmentInput = {
+  readonly payload: unknown;
+  readonly sessionId: string;
+  /** The cursor this enricher stored for this session last time, if any. */
+  readonly cursor?: ReadCursor;
+};
+
+export type PayloadEnrichment = {
+  /** The payload the adapter parses: the input, or a copy with fields attached. */
+  readonly payload: unknown;
+  /** A cursor to store for this session; absent leaves the stored one as it is. */
+  readonly cursor?: ReadCursor;
+  /** Short, non-sensitive notes for the debug log (why a read fell back, ...). */
+  readonly notes?: readonly string[];
+};
+
+/**
+ * Host-side step that attaches facts to a provider payload before its adapter
+ * parses it — for facts the provider writes somewhere other than the hook
+ * payload, such as Claude Code's transcript.
+ *
+ * Not an adapter capability, on purpose: adapters get no filesystem handle (ADR
+ * 0003). An enricher is configured by the host, runs inside the session lock so
+ * its cursor is read and written atomically, and must be bounded and never throw
+ * (a throw is contained and the original payload is parsed). It never runs for a
+ * redelivered callback, which is not a new observation.
+ */
+export interface PayloadEnricher {
+  /** Stable id; namespaces the enricher's cursor in the state store. */
+  readonly id: string;
+  /** The provider whose payloads it enriches. Others are never passed to it. */
+  readonly providerId: string;
+  enrich(input: PayloadEnrichmentInput): Promise<PayloadEnrichment>;
 }
