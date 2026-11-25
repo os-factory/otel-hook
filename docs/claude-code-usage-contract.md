@@ -297,9 +297,9 @@ fail-open), host-configured rather than provider-chosen, and visible in
 configuration. Any further transcript read needs the same justification and its
 own setting.
 
-Why turn totals and not the last request: across 1,194 recent local turns, 88%
-made more than one model request (median 5, p90 25), and the last request alone
-held 11% of the output tokens and 9% of the billed input tokens. A cursor gives
+Why turn totals and not the last request: in agentic use most turns contain
+several model requests (one per tool round trip), so the last request alone
+reports only a small share of the turn's billed input and output tokens. A cursor gives
 the exact turn without a bounded tail ever having to find where the turn began.
 Subagent requests are not in the sum: Claude Code writes them to the subagent's
 own transcript, and `SubagentStop` carries no usage.
