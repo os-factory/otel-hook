@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { mkdir, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 
 import type { Clock, Logger } from "../runtime/ports.js";
@@ -96,7 +96,7 @@ export type SpoolQueueOptions<TBatch> = StoreNamespace & {
   readonly maxAgeMillis?: number;
   /** Default `refuse-new`. */
   readonly overflow?: SpoolOverflowPolicy;
-  /** Age after which a claim left by a dead drain is put back. Default {@link SPOOL_CLAIM_STALE_MILLIS}. */
+  /** Age after which a claim left by a dead drain is released. Default {@link SPOOL_CLAIM_STALE_MILLIS}. */
   readonly claimStaleMillis?: number;
   /**
    * Directory holding the queue, under the identity namespace. One name per
@@ -206,15 +206,35 @@ export const readSpoolQueueStats = async (queueDir: string): Promise<SpoolStats>
 export const DEFAULT_DRAIN_MAX_BATCHES = 20;
 
 /**
- * A drain claims a batch (renames it out of the queue) before sending it, so two
- * hook processes draining one queue at once — many sessions on one machine —
- * never deliver the same batch twice. The claim names its process: a claim whose
- * process is gone (a hook that exited at its flush deadline mid-send) is put back
- * by the next drain; one whose process cannot be checked is put back once it is
- * this old.
+ * A drain claims a batch before sending it, so two hook processes draining one
+ * queue at once — many sessions on one machine — never deliver the same batch
+ * twice. A claim whose process is gone (a hook that exited at its flush deadline
+ * mid-send) is released by the next drain; one whose process cannot be checked is
+ * released once it is this old.
  */
 export const SPOOL_CLAIM_STALE_MILLIS = 5 * 60 * 1000;
-const CLAIM_MARKER = ".claimed-";
+
+/**
+ * Claim file of a batch: `<batch>.json.claim`, beside it, outside the `*.json`
+ * listing.
+ *
+ * The claim is a file created with `open(path, "wx")` — `O_CREAT|O_EXCL` on POSIX,
+ * `CREATE_NEW` on Windows — at a name fixed by the batch, so of any number of
+ * drains exactly one creates it. Claiming by renaming the batch to a per-drain
+ * name is not exclusive on Windows: `MoveFileExW` opens the source and renames the
+ * open handle, so two drains that opened the batch before either renamed it both
+ * succeed, the later one moving the file out of the earlier one's claim after
+ * that one read it — one batch, two sends.
+ */
+const CLAIM_SUFFIX = ".claim";
+/** Tombstone of a claim being released: `<claim>.<token>-<random>.releasing`. */
+const RELEASING_SUFFIX = ".releasing";
+
+type ClaimContents = {
+  readonly token: string;
+  readonly pid: number;
+  readonly claimedAt: number;
+};
 
 /** Whether the process that made a claim still runs; unknown counts as alive. */
 const isClaimOwnerAlive = (pid: number): boolean => {
@@ -234,6 +254,52 @@ const isClaimOwnerAlive = (pid: number): boolean => {
 
 const isErrnoException = (thrown: unknown, code: string): boolean =>
   thrown instanceof Error && (thrown as NodeJS.ErrnoException).code === code;
+
+const readClaim = async (claimPath: string): Promise<ClaimContents | undefined> => {
+  try {
+    const parsed = JSON.parse(await readFile(claimPath, "utf8")) as Partial<ClaimContents>;
+    return typeof parsed.token === "string" &&
+      typeof parsed.pid === "number" &&
+      typeof parsed.claimedAt === "number"
+      ? { token: parsed.token, pid: parsed.pid, claimedAt: parsed.claimedAt }
+      : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+/**
+ * Remove a claim only if it is still the one identified by `token`.
+ *
+ * Compare-and-delete through a tombstone, as `src/install/file-lock.ts` does: the
+ * claim is first renamed to a name only this call knows, then read; anything but
+ * the expected claim (a peer's fresh claim created since the expected one was
+ * judged) is put back. `undefined` releases a claim whose contents could not be
+ * read — judged stale by its file age alone.
+ */
+const releaseClaim = async (claimPath: string, token: string | undefined): Promise<void> => {
+  const tombstone = `${claimPath}.${token ?? "untokened"}-${randomBytes(4).toString("hex")}${RELEASING_SUFFIX}`;
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await rename(claimPath, tombstone);
+      break;
+    } catch (thrown) {
+      // Gone: nothing to release. Otherwise (Windows: EPERM/EBUSY while a peer
+      // reads it to judge staleness) try again briefly; a claim left behind only
+      // delays its batch until its process exits, it never sends it twice.
+      if (isErrnoException(thrown, "ENOENT") || attempt >= 3) {
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10 * attempt));
+    }
+  }
+  const captured = await readClaim(tombstone);
+  if (captured !== undefined && captured.token !== token) {
+    await rename(tombstone, claimPath).catch(() => undefined);
+    return;
+  }
+  await unlink(tombstone).catch(() => undefined);
+};
 
 export const createSpoolQueue = <TBatch>(
   options: SpoolQueueOptions<TBatch>,
@@ -416,7 +482,37 @@ export const createSpoolQueue = <TBatch>(
     return { spooled: true };
   };
 
-  /** Put back claims a crashed drain left behind (rename sets ctime: the claim's age). */
+  const claimStaleMillis = options.claimStaleMillis ?? SPOOL_CLAIM_STALE_MILLIS;
+
+  /**
+   * Whether a held claim was abandoned: its process is gone, or it is older than
+   * `claimStaleMillis`. A claim with no readable contents — created, not yet
+   * written — is aged by its file's mtime, so a fresh one is never released.
+   */
+  const staleClaim = async (
+    claimPath: string,
+  ): Promise<{ readonly stale: false } | { readonly stale: true; readonly token: string | undefined }> => {
+    const claim = await readClaim(claimPath);
+    const now = Date.now();
+    if (claim !== undefined) {
+      return !isClaimOwnerAlive(claim.pid) || now - claim.claimedAt > claimStaleMillis
+        ? { stale: true, token: claim.token }
+        : { stale: false };
+    }
+    try {
+      return now - (await stat(claimPath)).mtimeMs > claimStaleMillis
+        ? { stale: true, token: undefined }
+        : { stale: false };
+    } catch {
+      return { stale: false };
+    }
+  };
+
+  /**
+   * Release claims a crashed drain left behind — including claims on batches that
+   * are gone (a drain that died between delivering and releasing) — and remove
+   * tombstones a crashed release left behind.
+   */
   const releaseStaleClaims = async (): Promise<void> => {
     let entries: string[];
     try {
@@ -426,22 +522,41 @@ export const createSpoolQueue = <TBatch>(
     }
     const now = Date.now();
     for (const entry of entries) {
-      const marker = entry.lastIndexOf(CLAIM_MARKER);
-      if (marker <= 0) {
-        continue;
-      }
-      const claimPath = path.join(queueDir, entry);
-      const owner = Number.parseInt(entry.slice(marker + CLAIM_MARKER.length), 10);
-      try {
-        if (
-          !isClaimOwnerAlive(owner) ||
-          now - (await stat(claimPath)).ctimeMs > (options.claimStaleMillis ?? SPOOL_CLAIM_STALE_MILLIS)
-        ) {
-          await rename(claimPath, path.join(queueDir, entry.slice(0, marker)));
+      const entryPath = path.join(queueDir, entry);
+      if (entry.endsWith(CLAIM_SUFFIX)) {
+        const staleness = await staleClaim(entryPath);
+        if (staleness.stale) {
+          await releaseClaim(entryPath, staleness.token);
         }
-      } catch {
-        // released or finished by its owner meanwhile
+      } else if (entry.endsWith(RELEASING_SUFFIX)) {
+        try {
+          if (now - (await stat(entryPath)).mtimeMs > claimStaleMillis) {
+            await unlink(entryPath);
+          }
+        } catch {
+          // removed by a peer meanwhile
+        }
       }
+    }
+  };
+
+  /** Claim a batch for this drain; the token identifies the claim, undefined if not won. */
+  const claimBatch = async (claimPath: string): Promise<string | undefined> => {
+    const token = randomBytes(16).toString("hex");
+    try {
+      const handle = await open(claimPath, "wx");
+      try {
+        const contents: ClaimContents = { token, pid: process.pid, claimedAt: Date.now() };
+        await handle.writeFile(JSON.stringify(contents), "utf8");
+      } finally {
+        await handle.close();
+      }
+      return token;
+    } catch {
+      // EEXIST: a peer holds it (a stale one was released at the start of this
+      // drain). Anything else — on Windows, EPERM for a claim being deleted — is
+      // not a claim we hold either. The batch stays queued for a later drain.
+      return undefined;
     }
   };
 
@@ -474,23 +589,13 @@ export const createSpoolQueue = <TBatch>(
     let quarantined = 0;
     let index = 0;
 
-    for (; index < files.length && index < cap; index += 1) {
-      const fileName = files[index];
-      if (fileName === undefined) {
-        break;
-      }
-      const queuedPath = path.join(queueDir, fileName);
-      const filePath = path.join(
-        queueDir,
-        `${fileName}${CLAIM_MARKER}${String(process.pid)}-${randomBytes(4).toString("hex")}`,
-      );
-      try {
-        await rename(queuedPath, filePath);
-      } catch {
-        // Claimed, drained or evicted by a concurrent process: not ours to send.
-        continue;
-      }
-
+    /** Read, validate and send one batch this drain holds the claim on. */
+    const sendClaimed = async (
+      fileName: string,
+      filePath: string,
+      claimPath: string,
+      token: string,
+    ): Promise<"next" | "stop"> => {
       /**
        * Move a file out of the queue, or delete it if quarantine is unavailable.
        *
@@ -522,17 +627,17 @@ export const createSpoolQueue = <TBatch>(
         if ((thrown as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
           // A concurrent hook process drained (or evicted) it between our listing
           // and this read: it already left the queue, nothing to quarantine.
-          continue;
+          return "next";
         }
         await quarantine("unreadable");
-        continue;
+        return "next";
       }
       let parsed: unknown;
       try {
         parsed = JSON.parse(text) as unknown;
       } catch {
         await quarantine("unparseable-json");
-        continue;
+        return "next";
       }
 
       const validation = options.validate(parsed, {
@@ -541,7 +646,13 @@ export const createSpoolQueue = <TBatch>(
       });
       if ("rejection" in validation) {
         await quarantine(validation.rejection);
-        continue;
+        return "next";
+      }
+
+      if ((await readClaim(claimPath))?.token !== token) {
+        // Released as stale under us (a send that outlived claimStaleMillis, or a
+        // reclaim race): a peer may be sending it now. Leave it to that peer.
+        return "next";
       }
 
       let delivered: SpoolSendOutcome;
@@ -556,15 +667,39 @@ export const createSpoolQueue = <TBatch>(
         if (await unlink(filePath).then(() => true, () => false)) {
           await recordDrops("rejected", 1);
         }
-        continue;
+        return "next";
       }
       if (delivered) {
         await unlink(filePath).catch(() => undefined);
         drained += 1;
-      } else {
-        // Back in the queue, under its own name, for the next drain.
-        await rename(filePath, queuedPath).catch(() => undefined);
-        failed += 1;
+        return "next";
+      }
+      // Still queued (it never moved): releasing the claim hands it to the next drain.
+      failed += 1;
+      return "stop";
+    };
+
+    for (; index < files.length && index < cap; index += 1) {
+      const fileName = files[index];
+      if (fileName === undefined) {
+        break;
+      }
+      const filePath = path.join(queueDir, fileName);
+      const claimPath = `${filePath}${CLAIM_SUFFIX}`;
+      const token = await claimBatch(claimPath);
+      if (token === undefined) {
+        // Claimed by a concurrent drain: not ours to send.
+        continue;
+      }
+      let outcome: "next" | "stop";
+      try {
+        outcome = await sendClaimed(fileName, filePath, claimPath, token);
+      } finally {
+        // After the batch left the queue (or was left in it), never before: a peer
+        // that claims it next finds it gone, or finds it still undelivered.
+        await releaseClaim(claimPath, token);
+      }
+      if (outcome === "stop") {
         break;
       }
     }
