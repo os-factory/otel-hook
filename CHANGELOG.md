@@ -1,3 +1,11 @@
+## [0.13.2](https://github.com/os-factory/otel-hook/compare/v0.13.1...v0.13.2) (2026-11-26)
+
+
+### Bug Fixes
+
+* claim spool batches with an exclusive claim file, not a rename ([#77](https://github.com/os-factory/otel-hook/issues/77)) ([bfc0a1f](https://github.com/os-factory/otel-hook/commit/bfc0a1fcc311378c392703d06d9f2b8014b3ae94))
+* read Codex token usage from the rollout, and never stall a hook on a down collector ([#75](https://github.com/os-factory/otel-hook/issues/75)) ([5fd660c](https://github.com/os-factory/otel-hook/commit/5fd660c7ce31581ca8c4c0284ae45eaf59add611))
+
 ## [0.13.1](https://github.com/os-factory/otel-hook/compare/v0.13.0...v0.13.1) (2026-11-26)
 
 
