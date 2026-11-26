@@ -79,6 +79,8 @@ export const ENVIRONMENT_VARIABLES = Object.freeze({
   logLevel: "OTEL_HOOK_LOG_LEVEL",
   /** `providers.claudeCode.readTranscriptUsage`; see `providersPolicySchema`. */
   claudeTranscriptUsage: "OTEL_HOOK_CLAUDE_TRANSCRIPT_USAGE",
+  /** `providers.codex.readRolloutUsage`; see `providersPolicySchema`. */
+  codexRolloutUsage: "OTEL_HOOK_CODEX_ROLLOUT_USAGE",
 });
 
 const BOOLEAN_TRUE = new Set(["1", "true", "yes", "on"]);
@@ -362,10 +364,11 @@ export const parseEnvironmentConfig = (env: EnvironmentRecord): EnvironmentConfi
   const diagnostics = logLevel === undefined ? {} : { logLevel };
 
   const claudeTranscriptUsage = readBoolean(ENVIRONMENT_VARIABLES.claudeTranscriptUsage);
-  const providers =
-    claudeTranscriptUsage === undefined
-      ? {}
-      : { claudeCode: { readTranscriptUsage: claudeTranscriptUsage } };
+  const codexRolloutUsage = readBoolean(ENVIRONMENT_VARIABLES.codexRolloutUsage);
+  const providers = {
+    ...(claudeTranscriptUsage === undefined ? {} : { claudeCode: { readTranscriptUsage: claudeTranscriptUsage } }),
+    ...(codexRolloutUsage === undefined ? {} : { codex: { readRolloutUsage: codexRolloutUsage } }),
+  };
 
   const patch: OtelHookConfigPatch = {
     ...(Object.keys(exporter).length === 0 ? {} : { exporter }),

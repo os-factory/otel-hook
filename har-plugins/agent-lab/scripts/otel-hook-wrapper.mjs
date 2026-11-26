@@ -7,7 +7,9 @@
  *
  * 1. Reads the hook payload.
  * 2. Records the event name (never prompt/tool content) to a lab dump.
- * 3. On Stop, attaches the mock's last `usage` object if the host sent none.
+ * 3. On Stop, attaches the mock's last `usage` object if the host sent none
+ *    (not with `--no-usage`: the lab then checks otel-hook's own usage read,
+ *    e.g. `--codex-rollout-usage`).
  * 4. Exec's `otel-hook run` with the (possibly decorated) payload on stdin.
  *
  * With `--gate-dir <dir>` (the concurrency scenarios), each hook first drops an
@@ -106,7 +108,8 @@ const parseFlag = (name) => {
 
 const otelArgv = process.argv.slice(dashDash + 1);
 const dumpPath = parseFlag("--hooks-jsonl") ?? process.env.OTEL_HOOK_LAB_HOOKS_JSONL;
-const mockUrl = parseFlag("--mock-url") ?? process.env.OTEL_HOOK_LAB_MOCK_URL;
+const noUsage = process.argv.slice(2, dashDash).includes("--no-usage");
+const mockUrl = noUsage ? undefined : (parseFlag("--mock-url") ?? process.env.OTEL_HOOK_LAB_MOCK_URL);
 const gateDir = parseFlag("--gate-dir");
 
 const GATE_POLL_MILLIS = 25;

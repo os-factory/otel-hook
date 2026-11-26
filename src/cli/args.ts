@@ -78,6 +78,11 @@ export type CliPolicyFlags = {
    */
   readonly claudeTranscriptUsage?: boolean;
   /**
+   * `providers.codex.readRolloutUsage`: read the Codex rollout at `Stop` for the
+   * session's running token total. Off unless asked for.
+   */
+  readonly codexRolloutUsage?: boolean;
+  /**
    * `sessionContext.dir`: read session context files from this absolute
    * directory (`docs/session-context.md`). Overrides the config file's value.
    */
@@ -217,6 +222,7 @@ const BOOLEAN_FLAGS = new Set([
   "--no-metrics",
   "--no-metrics-session-id",
   "--claude-transcript-usage",
+  "--codex-rollout-usage",
   "--include-experimental",
   "--no-experimental",
   "--dry-run",
@@ -487,6 +493,7 @@ const parsePolicy = (tokens: Tokenized, errors: string[]): CliPolicyFlags => {
     ...(metricsTemporality === undefined ? {} : { metricsTemporality }),
     ...(tokens.booleans.has("--no-metrics-session-id") ? { metricsIncludeSessionId: false } : {}),
     ...(tokens.booleans.has("--claude-transcript-usage") ? { claudeTranscriptUsage: true } : {}),
+    ...(tokens.booleans.has("--codex-rollout-usage") ? { codexRolloutUsage: true } : {}),
     ...(sessionContextDir === undefined || !isAbsolute(sessionContextDir) ? {} : { sessionContextDir }),
   };
 };
@@ -562,6 +569,7 @@ const RUN_FLAGS: ReadonlySet<string> = new Set([
   "--metrics-temporality",
   "--no-metrics-session-id",
   "--claude-transcript-usage",
+  "--codex-rollout-usage",
   "--session-context-dir",
   "--max-input-bytes",
   "--no-export",
@@ -598,6 +606,7 @@ const DOCTOR_FLAGS: ReadonlySet<string> = new Set([
   "--metrics-temporality",
   "--no-metrics-session-id",
   "--claude-transcript-usage",
+  "--codex-rollout-usage",
   "--session-context-dir",
   "--include-experimental",
   "--no-experimental",
@@ -898,6 +907,10 @@ Exporter and runtime policy (never identity):
                              payload names (bounded) for the turn's model and
                              summed token usage. Off by default; also
                              OTEL_HOOK_CLAUDE_TRANSCRIPT_USAGE=1
+  --codex-rollout-usage      Codex only: at Stop, read the session's rollout
+                             (transcript_path; bounded, from a per-session
+                             cursor) for the running token total. Off by
+                             default; also OTEL_HOOK_CODEX_ROLLOUT_USAGE=1
   --session-context-dir <dir>
                              absolute directory of session context files
                              (<dir>/<agent-tool>/<session-id>.json); the

@@ -26,6 +26,19 @@ import {
 } from "./context.js";
 import { autoDetectProvider } from "./detection.js";
 import { providerVisibleEnvironment } from "./environment-view.js";
+
+/**
+ * `$CODEX_HOME/sessions` (Codex's default `CODEX_HOME` is `~/.codex`), for the
+ * rollout lookup by session id. Only absolute paths are used.
+ */
+const codexSessionsRoot = (env: Readonly<Record<string, string | undefined>>): string | undefined => {
+  const codexHome = env.CODEX_HOME;
+  if (codexHome !== undefined && codexHome.length > 0) {
+    return path.isAbsolute(codexHome) ? path.join(codexHome, "sessions") : undefined;
+  }
+  const home = env.HOME;
+  return home !== undefined && path.isAbsolute(home) ? path.join(home, ".codex", "sessions") : undefined;
+};
 import { claimFromIdentityFile, claimFromIdentityFlags } from "./identity.js";
 import { readBoundedJson } from "./stdin.js";
 
@@ -241,6 +254,7 @@ export const runHookCommand = async (command: CliRunCommand, io: CliIo): Promise
   identityClaims.push(...fromFlags.claims);
 
   const headers = resolveCliExporterHeaders(command.policy, io);
+  const codexSessions = codexSessionsRoot(io.env);
   const runtime = createHookRuntime({
     // Detection policy narrowed to the selected adapter; everything else is the
     // resolved configuration exactly as it stands.
@@ -262,6 +276,7 @@ export const runHookCommand = async (command: CliRunCommand, io: CliIo): Promise
       ? {}
       : { flushTimeoutMillis: command.policy.flushTimeoutMillis }),
     ...(command.policy.spoolDisabled === true ? { enableSpool: false } : {}),
+    ...(codexSessions === undefined ? {} : { codexSessionsRoot: codexSessions }),
     ...(command.requireCallbackId === true ? { requireCallbackId: true } : {}),
     ...(command.noDeriveCallbackId === true ? { deriveDeliveryIdentity: false } : {}),
   });

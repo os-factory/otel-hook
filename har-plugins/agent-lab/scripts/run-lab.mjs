@@ -206,6 +206,8 @@ const main = async () => {
     quote(mock.url),
     "--hooks-jsonl",
     quote(hooksJsonl),
+    // A provider whose usage otel-hook reads itself gets no wrapper-attached usage.
+    ...(provider.usageFlag === undefined ? [] : ["--no-usage"]),
     "--",
     process.execPath,
     quote(CLI_PATH),
@@ -220,6 +222,7 @@ const main = async () => {
     // Hook-derived metrics to the default destination (issue #69); the URL is
     // derived from --endpoint (/v1/traces -> /v1/metrics).
     "--metrics",
+    ...(provider.usageFlag === undefined ? [] : [provider.usageFlag]),
     "--config-file",
     quote(exporterConfigFile),
     "--state-dir",

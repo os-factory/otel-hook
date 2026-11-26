@@ -13,6 +13,7 @@ import type { CanonicalEvent } from "../model/events.js";
 import type { Clock, Logger, TelemetryEmitResult, TelemetrySink } from "../runtime/ports.js";
 import type { DurableLogSpool, LogSpoolBatch, SerializedLogRecord } from "./durable-log-spool.js";
 import { isPermanentExportFailure } from "./export-failure.js";
+import { boundedExporterOptions, guardExport, type EndpointHealth } from "./endpoint-health.js";
 import type { SpoolSendOutcome } from "./spool-queue.js";
 import {
   agreedContextAttributes,
@@ -196,6 +197,11 @@ export type OtlpLogSinkOptions = {
   readonly correlate?: SpanCorrelationResolver;
   /** Export destination this sink delivers to; see `OtlpTraceSinkOptions.destination`. */
   readonly destination?: string;
+  /**
+   * What is known about each endpoint's reachability (see `endpoint-health.ts`).
+   * Absent, every batch is sent, however recently its endpoint was unreachable.
+   */
+  readonly endpointHealth?: EndpointHealth;
 };
 
 export interface OtlpLogTelemetrySink extends TelemetrySink {
@@ -327,14 +333,19 @@ export const createOtlpLogSink = (options: OtlpLogSinkOptions): OtlpLogTelemetry
   const exporter = new OTLPLogExporter({
     url: deliverability.endpoint,
     headers: { ...options.headers },
-    timeoutMillis: options.exporter.timeoutMillis,
+    ...boundedExporterOptions(options.exporter),
   });
+  const gate = options.endpointHealth?.gateFor(deliverability.endpoint);
   let shutdownCompleted = false;
 
   const exportRecords = (records: readonly ReadableLogRecord[]): Promise<ExportResult> =>
-    new Promise((resolve) => {
-      exporter.export([...records], (result: ExportResult) => resolve(result));
-    });
+    guardExport(
+      gate,
+      () =>
+        new Promise((resolve) => {
+          exporter.export([...records], (result: ExportResult) => resolve(result));
+        }),
+    );
 
   const toSpoolBatch = (records: readonly ReadableLogRecord[], batchResource: Resource): LogSpoolBatch => ({
     providerId: options.providerId,
@@ -467,6 +478,10 @@ export const createOtlpLogSink = (options: OtlpLogSinkOptions): OtlpLogTelemetry
   ): Promise<{ readonly drained: number; readonly remaining: number; readonly failed: number }> => {
     if (options.spool === undefined) {
       return { drained: 0, remaining: 0, failed: 0 };
+    }
+    if (gate !== undefined && !(await gate.available())) {
+      // Marked down: the drain would only fail, after paying for the attempt.
+      return { drained: 0, remaining: await options.spool.size().catch(() => 0), failed: 0 };
     }
     const result = await options.spool.drain(sendSerializedBatch, {
       ...(maxBatches === undefined ? {} : { maxBatches }),

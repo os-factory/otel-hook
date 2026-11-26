@@ -1,0 +1,12 @@
+{
+  "fixture": "rollout-0163-tool-turn.json",
+  "sourceContract": "Codex CLI rollout JSONL ($CODEX_HOME/sessions/YYYY/MM/DD/rollout-*-<session-id>.jsonl) written by a real `codex exec` run, one record per array entry: session_meta, turn_context, response_item, token_usage_record, and event_msg token_count / task_started / task_complete",
+  "provider": "codex",
+  "providerVersionObserved": "0.163.0",
+  "capturedDate": "2026-11-26",
+  "author": "otel-hook rollout-usage owner (agent)",
+  "sanitization": "Captured from Codex 0.163.0 driven by the agent lab's scripted Responses mock (no real model, no real prompt): every token counter is the mock's frozen scenario value. Paths rebased onto a fictional /workspace tree; every string longer than 40 characters that is not an id, type or model (instructions, prompts, tool arguments and output, the synthetic widget contents) replaced by <omitted>; the world_state payload dropped. No credentials, hostnames or personal data.",
+  "licenseBasis": "Field names and record layout reproduce a third-party tool's on-disk format; every value is either this repository's own mock scenario or a placeholder.",
+  "sha256": "acff4545a1caa339c1bf56370187877b48affff91079660d7d06b69ccdcde53a",
+  "notes": "One turn, two model requests (a tool call, then the final answer). token_count.info.total_token_usage and token_usage_record.thread_token_usage carry the thread's running total, cache_write_input_tokens included; Stop carries no usage. Exercised by tests/providers/codex/rollout-usage-enricher.test.ts."
+}

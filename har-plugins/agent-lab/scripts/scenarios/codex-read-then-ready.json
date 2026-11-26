@@ -12,6 +12,7 @@
     "toolTurn": {
       "input_tokens": 100,
       "cached_input_tokens": 0,
+      "cache_write_input_tokens": 40,
       "output_tokens": 24,
       "reasoning_output_tokens": 8,
       "total_tokens": 124
@@ -19,6 +20,7 @@
     "finalTurn": {
       "input_tokens": 180,
       "cached_input_tokens": 80,
+      "cache_write_input_tokens": 20,
       "output_tokens": 8,
       "reasoning_output_tokens": 0,
       "total_tokens": 188
@@ -26,6 +28,7 @@
     "cumulativeFinal": {
       "input_tokens": 280,
       "cached_input_tokens": 80,
+      "cache_write_input_tokens": 60,
       "output_tokens": 32,
       "reasoning_output_tokens": 8,
       "total_tokens": 312
@@ -34,6 +37,7 @@
   "agentPrintUsage": {
     "input_tokens": 280,
     "cached_input_tokens": 80,
+    "cache_write_input_tokens": 60,
     "output_tokens": 32,
     "reasoning_output_tokens": 8
   },
@@ -41,7 +45,7 @@
     "temporality": "delta",
     "inputTokens": 280,
     "cachedInputTokens": 80,
-    "cacheCreationInputTokens": 0,
+    "cacheCreationInputTokens": 60,
     "outputTokens": 32,
     "reasoningOutputTokens": 8
   },

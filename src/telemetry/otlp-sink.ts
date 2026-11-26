@@ -11,6 +11,7 @@ import type { CanonicalEvent } from "../model/events.js";
 import type { Clock, Logger, TelemetryEmitResult, TelemetrySink } from "../runtime/ports.js";
 import type { DurableSpool, SerializedSpan, SpoolBatch } from "./durable-spool.js";
 import { isPermanentExportFailure } from "./export-failure.js";
+import { boundedExporterOptions, guardExport, type EndpointHealth } from "./endpoint-health.js";
 import type { SpoolSendOutcome } from "./spool-queue.js";
 import {
   agreedContextAttributes,
@@ -96,6 +97,11 @@ export type OtlpTraceSinkOptions = {
    * exactly what a single-destination installation has always produced.
    */
   readonly destination?: string;
+  /**
+   * What is known about each endpoint's reachability (see `endpoint-health.ts`).
+   * Absent, every batch is sent, however recently its endpoint was unreachable.
+   */
+  readonly endpointHealth?: EndpointHealth;
 };
 
 export interface OtlpTelemetrySink extends TelemetrySink {
@@ -165,14 +171,19 @@ export const createOtlpTraceSink = (options: OtlpTraceSinkOptions): OtlpTelemetr
   const exporter = new OTLPTraceExporter({
     url: options.exporter.endpoint,
     headers: { ...options.headers },
-    timeoutMillis: options.exporter.timeoutMillis,
+    ...boundedExporterOptions(options.exporter),
   });
+  const gate = options.endpointHealth?.gateFor(options.exporter.endpoint);
   let shutdownCompleted = false;
 
   const exportSpans = (spans: readonly ReadableSpan[]): Promise<ExportResult> =>
-    new Promise((resolve) => {
-      exporter.export([...spans], (result: ExportResult) => resolve(result));
-    });
+    guardExport(
+      gate,
+      () =>
+        new Promise((resolve) => {
+          exporter.export([...spans], (result: ExportResult) => resolve(result));
+        }),
+    );
 
   const toSpoolBatch = (spans: readonly ReadableSpan[], batchResource: Resource): SpoolBatch => ({
     providerId: options.providerId,
@@ -298,6 +309,10 @@ export const createOtlpTraceSink = (options: OtlpTraceSinkOptions): OtlpTelemetr
   ): Promise<{ readonly drained: number; readonly remaining: number; readonly failed: number }> => {
     if (options.spool === undefined) {
       return { drained: 0, remaining: 0, failed: 0 };
+    }
+    if (gate !== undefined && !(await gate.available())) {
+      // Marked down: the drain would only fail, after paying for the attempt.
+      return { drained: 0, remaining: await options.spool.size().catch(() => 0), failed: 0 };
     }
     const result = await options.spool.drain(sendSerializedBatch, { ...(maxBatches === undefined ? {} : { maxBatches }) });
     if (result.drained > 0) {

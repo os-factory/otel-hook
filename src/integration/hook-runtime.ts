@@ -1,4 +1,9 @@
-import { readsClaudeTranscriptUsage, sessionContextDir, type OtelHookConfig } from "../config/schema.js";
+import {
+  readsClaudeTranscriptUsage,
+  readsCodexRolloutUsage,
+  sessionContextDir,
+  type OtelHookConfig,
+} from "../config/schema.js";
 import { summarizeHealth, type DeliveryHealthSnapshot, type OverallHealth } from "../diagnostics/health.js";
 import { createErrorInfo, errorInfoFromThrown, type OtelHookErrorInfo } from "../errors/index.js";
 import type { CanonicalEvent } from "../model/events.js";
@@ -17,6 +22,7 @@ import {
 } from "../lifecycle/usage-accumulator.js";
 import { createPrivacyService, type PrivacyService } from "../privacy/service.js";
 import { createClaudeTranscriptUsageEnricher } from "../providers/claude/transcript.js";
+import { createCodexRolloutUsageEnricher } from "../providers/codex/rollout-usage.js";
 import type { ProviderRegistry } from "../providers/registry.js";
 import { createSystemClock } from "../runtime/clock.js";
 import {
@@ -377,10 +383,17 @@ export type HookRuntimeOptions = {
   /**
    * Payload enrichers run before the adapter parses (see `PayloadEnricher`).
    * When absent, the configuration decides: `providers.claudeCode.readTranscriptUsage`
-   * adds the Claude Code transcript-usage enricher, and nothing else is added.
-   * Pass `[]` to run none regardless of configuration.
+   * adds the Claude Code transcript-usage enricher, `providers.codex.readRolloutUsage`
+   * the Codex rollout-usage enricher, and nothing else is added. Pass `[]` to run
+   * none regardless of configuration.
    */
   readonly payloadEnrichers?: readonly PayloadEnricher[];
+  /**
+   * `$CODEX_HOME/sessions`, where the Codex rollout-usage enricher looks a
+   * rollout up by session id when a payload names no `transcript_path`. Absent,
+   * such payloads get no usage. The runtime never derives it from the environment.
+   */
+  readonly codexSessionsRoot?: string;
   /**
    * Reads session context files (`docs/session-context.md`). When absent, the
    * configuration decides: `sessionContext.dir` adds the directory reader, and
@@ -630,7 +643,16 @@ export const createHookRuntime = (options: HookRuntimeOptions): HookRuntime => {
     installationId: options.installationId,
     payloadEnrichers:
       options.payloadEnrichers ??
-      (readsClaudeTranscriptUsage(options.config) ? [createClaudeTranscriptUsageEnricher()] : []),
+      [
+        ...(readsClaudeTranscriptUsage(options.config) ? [createClaudeTranscriptUsageEnricher()] : []),
+        ...(readsCodexRolloutUsage(options.config)
+          ? [
+              createCodexRolloutUsageEnricher(
+                options.codexSessionsRoot === undefined ? {} : { sessionsRoot: options.codexSessionsRoot },
+              ),
+            ]
+          : []),
+      ],
     ...(() => {
       if (options.sessionContextReader === null) {
         return {};

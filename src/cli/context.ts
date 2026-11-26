@@ -120,8 +120,13 @@ export const policyFlagsToPatch = (policy: CliPolicyFlags): OtelHookConfigPatch 
     ...(Object.keys(exporter).length === 0 ? {} : { exporter }),
     ...(Object.keys(privacy).length === 0 ? {} : { privacy }),
     ...(Object.keys(diagnostics).length === 0 ? {} : { diagnostics }),
-    ...(policy.claudeTranscriptUsage === true
-      ? { providers: { claudeCode: { readTranscriptUsage: true } } }
+    ...(policy.claudeTranscriptUsage === true || policy.codexRolloutUsage === true
+      ? {
+          providers: {
+            ...(policy.claudeTranscriptUsage === true ? { claudeCode: { readTranscriptUsage: true } } : {}),
+            ...(policy.codexRolloutUsage === true ? { codex: { readRolloutUsage: true } } : {}),
+          },
+        }
       : {}),
     ...(policy.sessionContextDir === undefined ? {} : { sessionContext: { dir: policy.sessionContextDir } }),
   } as OtelHookConfigPatch;

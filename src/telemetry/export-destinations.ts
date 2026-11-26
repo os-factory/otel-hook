@@ -7,7 +7,7 @@ import {
   type ExportDestination,
 } from "../config/destinations.js";
 import { siblingSignalEndpoint } from "../config/otlp-endpoint.js";
-import { effectiveMetricsPolicy, type ExporterPolicy } from "../config/schema.js";
+import { effectiveExportTimeoutMillis, effectiveMetricsPolicy, type ExporterPolicy } from "../config/schema.js";
 import type { DeliveryHealthSnapshot } from "../diagnostics/health.js";
 import { createHealthTracker } from "../diagnostics/health.js";
 import { errorInfoFromThrown, type OtelHookErrorInfo } from "../errors/index.js";
@@ -16,6 +16,7 @@ import type { Clock, Logger, TelemetryEmitResult } from "../runtime/ports.js";
 import { createFileDurableLogSpool, type DurableLogSpool } from "./durable-log-spool.js";
 import { createFileDurableMetricSpool, type DurableMetricSpool } from "./durable-metric-spool.js";
 import { createFileDurableSpool, type DurableSpool } from "./durable-spool.js";
+import { createEndpointHealth, type EndpointHealth } from "./endpoint-health.js";
 import type { LogContentPolicy } from "./log-records.js";
 import {
   createOtlpLogSink,
@@ -156,6 +157,12 @@ export type ExportDestinationsOptions = {
   /** Whether the logs signal gets a spool at all; it is only built when logs are on. */
   readonly logContent: LogContentPolicy;
   readonly correlate?: SpanCorrelationResolver;
+  /**
+   * Shared reachability marks (`endpoint-health.ts`). Default: one built over
+   * `spoolRootDir` (in-process only without it), shared by every destination and
+   * signal of this call.
+   */
+  readonly endpointHealth?: EndpointHealth;
 };
 
 /**
@@ -201,6 +208,15 @@ export const createExportDestinationSinks = (
   const spoolPolicy = effectiveSpoolPolicy(options.exporter);
   const destinations: ExportDestinationSinks[] = [];
   const skipped: SkippedExportDestination[] = [];
+  const endpointHealth =
+    options.endpointHealth ??
+    createEndpointHealth({
+      ...(options.spoolRootDir === undefined ? {} : { rootDir: options.spoolRootDir }),
+      clock: options.clock,
+      ...(options.logger === undefined ? {} : { logger: options.logger }),
+      ...(options.exporter.endpointDownMillis === undefined ? {} : { downMillis: options.exporter.endpointDownMillis }),
+      probeMillis: effectiveExportTimeoutMillis(options.exporter) + 1_000,
+    });
 
   for (const destination of resolveExportDestinations(options.exporter)) {
     let headers: Readonly<Record<string, string>> | undefined;
@@ -278,6 +294,7 @@ export const createExportDestinationSinks = (
     const sinkShared = {
       exporter: policy,
       ...shared,
+      endpointHealth,
       ...(options.correlate === undefined ? {} : { correlate: options.correlate }),
       ...(label === undefined ? {} : { destination: label }),
     };
@@ -300,6 +317,7 @@ export const createExportDestinationSinks = (
       ? createOtlpMetricSink({
           exporter: policy,
           ...shared,
+          endpointHealth,
           ...(label === undefined ? {} : { destination: label }),
           ...(headers === undefined || Object.keys(headers).length === 0 ? {} : { headers }),
           ...(metricSpool === undefined ? {} : { spool: metricSpool }),

@@ -53,6 +53,19 @@ export {
 export { createCodexAdapter, CODEX_CAPABILITIES } from "./codex/adapter.js";
 export { CODEX_ADAPTER_VERSION, CODEX_PROVIDER_ID } from "./codex/version.js";
 export { CODEX_HOOK_EVENT_NAMES, type CodexHookEventName } from "./codex/payload.js";
+// The host half of Codex usage (`providers.codex.readRolloutUsage`): Codex puts
+// no counters on hook stdin, so the runtime reads the rollout. Never the adapter.
+export {
+  createCodexRolloutUsageEnricher,
+  readCodexRolloutUsage,
+  CODEX_ROLLOUT_USAGE_ENRICHER_ID,
+  DEFAULT_CODEX_ROLLOUT_RANGE_BYTES,
+  DEFAULT_CODEX_ROLLOUT_SETTLE_MILLIS,
+  DEFAULT_CODEX_ROLLOUT_TAIL_BYTES,
+  DEFAULT_CODEX_ROLLOUT_TIMEOUT_MILLIS,
+  type CodexRolloutSnapshot,
+  type CodexRolloutUsageEnricherOptions,
+} from "./codex/rollout-usage.js";
 
 export {
   createGeminiCliAdapter,

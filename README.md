@@ -940,6 +940,34 @@ const enriched = await attachClaudeTranscriptTurn(hookPayload);
 
 See [finding 8](docs/claude-code-usage-contract.md#finding-8-the-model-is-on-sessionstart-and-in-the-transcript-never-on-stop).
 
+#### Codex: token usage
+
+Codex (observed on 0.163) puts no token counters on any hook payload; they exist
+only in the rollout file Codex writes per session
+(`$CODEX_HOME/sessions/YYYY/MM/DD/rollout-…-<session-id>.jsonl`, named by the
+payload's `transcript_path`). The same kind of opt-in reads them:
+
+```bash
+otel-hook run --provider codex --codex-rollout-usage
+# or: OTEL_HOOK_CODEX_ROLLOUT_USAGE=1
+# or, in --config-file: { "providers": { "codex": { "readRolloutUsage": true } } }
+```
+
+At `Stop`, otel-hook reads the rollout from where the previous `Stop` ended
+(capped at 8 MiB and 500 ms, fail-open) and attaches the last `token_count`
+running total, plus the turn's model when the payload names none. Codex's
+counters are a running total for the session, so every read is exact on its own:
+a turn whose total was not on disk yet is counted by the next `Stop`, never twice
+and never lost, and there is no partial marking. The generation span carries the
+running total (`otelhook.usage.temporality=cumulative`, as before); the derived
+per-turn delta is what metrics and accounting see. Cache writes
+(`cache_write_input_tokens`, Codex 0.163+) become
+`gen_ai.usage.cache_creation.input_tokens`; like cache reads they are part of
+`gen_ai.usage.input_tokens` ([usage semantics](docs/usage-semantics.md)). When a
+payload names no `transcript_path`, the rollout is looked up by session id in the
+last seven date directories under `$CODEX_HOME/sessions` (default `~/.codex`),
+never recursively.
+
 #### Session context
 
 A session's environment is fixed when the agent starts, but the work it does is
@@ -967,9 +995,9 @@ Code strips `OTEL_*` variables from hooks. Format and rules:
 `exporter.destinations` sends every batch to several OTLP endpoints at once — a
 local Langfuse and a team Collector, say — with no proxy or Collector in between.
 otel-hook is a short-lived process, so it does the fan-out itself: each enabled
-destination is sent the same spans in parallel, each bounded by the exporter's
-`timeoutMillis`, and whatever a destination could not take is kept in that
-destination's own disk spool for the next hook event.
+destination is sent the same spans in parallel, each bounded by the export budget
+below, and whatever a destination could not take is kept in that destination's
+own disk spool for the next hook event.
 
 A standalone configuration, Langfuse plus a local Collector:
 
@@ -1050,6 +1078,26 @@ what keep a backend that answers 500 forever from holding batches forever. Eithe
 way the hook exits 0 with a diagnostic on stderr, and the other destinations are
 unaffected. A callback that reached at least one destination (or a spool) is
 committed — retrying it would duplicate spans at the destinations that accepted.
+
+**A down destination does not stall the agent.** The host agent waits for its
+hooks, so a hook spends at most `exporter.exportBudgetMillis` (default 1500 ms)
+trying an endpoint: every OTLP request, connection setup included, is capped at
+that budget (it caps `timeoutMillis`), and the exporter's own retries happen
+inside it. An endpoint that gave no HTTP answer at all (connection refused or
+reset, no answer to the connection or the request in time, name not resolved) is
+then marked down in the state directory (`<state-dir>/endpoint-health/`, keyed by
+a digest of the endpoint's origin, no URL stored) for
+`exporter.endpointDownMillis` (default 30000; 0 turns the window off): every hook
+in that window spools for it without trying and skips its drain. When the window
+ends, the first hook to notice claims a short probe and tries again; a success
+clears the mark and the spool drains as before. Any HTTP answer, even a 503, means
+the endpoint is up and never starts a window.
+
+| Measured, one `otel-hook run` (`--logs --metrics`) | Before | After |
+| --- | --- | --- |
+| Destination on a closed port | ~20 s (28 s with `--timeout-ms 15000`) | ~1.2 s, then ~0.3 s while marked down |
+| Destination that accepts and never answers | ~22 s | ~1.8 s, then ~0.3 s |
+| Unroutable destination (SYN never answered) | > 60 s (kernel connect timeout) | ~1.8 s, then ~0.3 s |
 
 **Spools are per destination and bounded.** Every destination queues under
 `<state-dir>/<provider>/<installation>/destinations/<name>/` (`default` keeps the
