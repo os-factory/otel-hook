@@ -1,6 +1,7 @@
 import { lstat, open, stat } from "node:fs/promises";
 import * as path from "node:path";
 
+import { normalizeRepositoryKey } from "../config/repository-key.js";
 import type { LocatedWorktree, WorktreeLocator } from "./ports.js";
 
 /**
@@ -34,6 +35,14 @@ import type { LocatedWorktree, WorktreeLocator } from "./ports.js";
  * does not skip past it to an enclosing repository that the event did not
  * target. A repository that cannot be named costs only `mainRoot`.
  *
+ * The repository's `origin` remote is read on request only
+ * ({@link WorktreeLocator.originRepositoryKey}), from the `config` file of the
+ * repository's common git dir — the git dir itself when there is no `commondir`.
+ * It is reduced to its repository key at once (`normalizeRepositoryKey`), so the
+ * URL itself, with any credentials in it, never leaves this module. Includes,
+ * `insteadOf` rewrites and per-worktree config are not followed: a remote that
+ * needs them names no key, which is the safe answer for routing.
+ *
  * Everything is bounded: walk depth, bytes read per file, and cache size. Every
  * failure is `undefined`; nothing throws.
  */
@@ -46,23 +55,33 @@ const MAX_GIT_FILE_BYTES = 4096;
 const MAX_CACHE_ENTRIES = 1024;
 /** Default lifetime of a cached probe. Short: a branch can be switched. */
 export const DEFAULT_WORKTREE_CACHE_TTL_MILLIS = 5_000;
+/** Bytes read from a repository `config`; `[remote "origin"]` sits near its top. */
+const MAX_GIT_CONFIG_BYTES = 64 * 1024;
 /** Longest branch name accepted; git refs are far shorter in practice. */
 const MAX_BRANCH_NAME_LENGTH = 255;
 
 type Probe =
   | { readonly kind: "absent" }
-  | { readonly kind: "worktree"; readonly located: LocatedWorktree }
+  | {
+      readonly kind: "worktree";
+      readonly located: LocatedWorktree;
+      /** Git dir whose `config` holds the repository's remotes. Never exported. */
+      readonly configDir: string;
+    }
   | { readonly kind: "invalid" };
 
 const ABSENT: Probe = Object.freeze({ kind: "absent" });
 const INVALID: Probe = Object.freeze({ kind: "invalid" });
 
-const readBounded = async (filePath: string): Promise<string | undefined> => {
+const readBounded = async (
+  filePath: string,
+  maxBytes: number = MAX_GIT_FILE_BYTES,
+): Promise<string | undefined> => {
   let handle;
   try {
     handle = await open(filePath, "r");
-    const buffer = Buffer.alloc(MAX_GIT_FILE_BYTES);
-    const { bytesRead } = await handle.read(buffer, 0, MAX_GIT_FILE_BYTES, 0);
+    const buffer = Buffer.alloc(maxBytes);
+    const { bytesRead } = await handle.read(buffer, 0, maxBytes, 0);
     return buffer.subarray(0, bytesRead).toString("utf8");
   } catch {
     return undefined;
@@ -111,6 +130,73 @@ export const parseGitDirFile = (content: string, worktreeRoot: string): string |
 export const parseCommonDirFile = (content: string, gitDir: string): string | undefined =>
   resolveGitPath(firstLine(content), gitDir);
 
+const unquoteConfigValue = (raw: string): string | undefined => {
+  let value = "";
+  let quoted = false;
+  for (let index = 0; index < raw.length; index += 1) {
+    const char = raw[index];
+    if (char === "\\") {
+      const next = raw[index + 1];
+      if (next === undefined) {
+        // A continuation line: not worth following for a remote URL.
+        return undefined;
+      }
+      value += next === "n" ? "\n" : next === "t" ? "\t" : next;
+      index += 1;
+    } else if (char === '"') {
+      quoted = !quoted;
+    } else if (!quoted && (char === "#" || char === ";")) {
+      break;
+    } else {
+      value += char;
+    }
+  }
+  return quoted ? undefined : value.trim();
+};
+
+/**
+ * The first `url` of `[remote "origin"]` in a git `config` file's text, or
+ * `undefined`. Section and key names are case-insensitive as in git; the
+ * subsection name is not. A final line without its newline may be cut by the
+ * read bound, so it is not trusted.
+ */
+export const parseOriginRemoteUrl = (content: string): string | undefined => {
+  const lines = content.split(/\r?\n/);
+  if (!content.endsWith("\n")) {
+    lines.pop();
+  }
+  let inOrigin = false;
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (line.startsWith("[")) {
+      const close = line.indexOf("]");
+      const header = close === -1 ? "" : line.slice(1, close).trim();
+      const rest = close === -1 ? "" : line.slice(close + 1).trim();
+      // `[remote "origin"]`, or the deprecated `[remote.origin]`.
+      inOrigin =
+        (/^remote\s+"origin"$/i.test(header) && header.endsWith('"origin"')) ||
+        header.toLowerCase() === "remote.origin";
+      if (!inOrigin || rest.length === 0 || rest.startsWith("#") || rest.startsWith(";")) {
+        continue;
+      }
+      // `[remote "origin"] url = …` on one line: read the rest as an entry.
+      const entry = /^url\s*=(.*)$/i.exec(rest);
+      if (entry !== null) {
+        return unquoteConfigValue(entry[1] ?? "");
+      }
+      continue;
+    }
+    if (!inOrigin) {
+      continue;
+    }
+    const entry = /^url\s*=(.*)$/i.exec(line);
+    if (entry !== null) {
+      return unquoteConfigValue(entry[1] ?? "");
+    }
+  }
+  return undefined;
+};
+
 const isMissing = async (filePath: string): Promise<boolean> => {
   try {
     await lstat(filePath);
@@ -129,7 +215,10 @@ const isDirectory = async (directory: string): Promise<boolean> => {
   }
 };
 
-type Repository = Pick<LocatedWorktree, "kind" | "mainRoot">;
+type Repository = Pick<LocatedWorktree, "kind" | "mainRoot"> & {
+  /** Where the repository's `config` is; absent when it cannot be named. */
+  readonly configDir?: string;
+};
 
 /** Kind and main worktree for a `.git` file's git dir; see the module note. */
 const repositoryOf = async (worktreeRoot: string, gitDir: string): Promise<Repository> => {
@@ -138,14 +227,20 @@ const repositoryOf = async (worktreeRoot: string, gitDir: string): Promise<Repos
   if (content === undefined) {
     // Only a missing file makes this a main worktree. An unreadable one is still
     // a linked worktree's, of a repository it cannot name.
-    return (await isMissing(commonDirFile)) ? { kind: "main", mainRoot: worktreeRoot } : { kind: "linked" };
+    return (await isMissing(commonDirFile))
+      ? { kind: "main", mainRoot: worktreeRoot, configDir: gitDir }
+      : { kind: "linked" };
   }
   const commonDir = parseCommonDirFile(content, gitDir);
   const mainRoot =
     commonDir !== undefined && path.basename(commonDir) === ".git" && (await isDirectory(commonDir))
       ? path.dirname(commonDir)
       : undefined;
-  return { kind: "linked", ...(mainRoot === undefined ? {} : { mainRoot }) };
+  return {
+    kind: "linked",
+    ...(mainRoot === undefined ? {} : { mainRoot }),
+    ...(commonDir === undefined ? {} : { configDir: commonDir }),
+  };
 };
 
 const probeDirectory = async (directory: string): Promise<Probe> => {
@@ -173,13 +268,24 @@ const probeDirectory = async (directory: string): Promise<Probe> => {
   }
   const branch = parseHeadBranch(head);
   // A `.git` directory is always a main worktree's git dir: nothing more to read.
-  const repository: Repository = info.isDirectory()
-    ? { kind: "main", mainRoot: directory }
+  const { configDir, ...repository }: Repository = info.isDirectory()
+    ? { kind: "main", mainRoot: directory, configDir: gitDir }
     : await repositoryOf(directory, gitDir);
   return {
     kind: "worktree",
     located: { root: directory, ...(branch === undefined ? {} : { branch }), ...repository },
+    configDir: configDir ?? "",
   };
+};
+
+/** The repository key of the `origin` remote in `<configDir>/config`, or `undefined`. */
+const readOriginRepositoryKey = async (configDir: string): Promise<string | undefined> => {
+  if (configDir.length === 0) {
+    return undefined;
+  }
+  const content = await readBounded(path.join(configDir, "config"), MAX_GIT_CONFIG_BYTES);
+  const url = content === undefined ? undefined : parseOriginRemoteUrl(content);
+  return url === undefined ? undefined : normalizeRepositoryKey(url);
 };
 
 export type FilesystemWorktreeLocatorOptions = {
@@ -213,31 +319,61 @@ export const createFilesystemWorktreeLocator = (
     return probe;
   };
 
-  const locate = async (absolutePath: string): Promise<LocatedWorktree | undefined> => {
-    try {
-      if (!path.isAbsolute(absolutePath) || absolutePath.includes("\u0000")) {
+  const remoteCache = new Map<string, { readonly at: number; readonly key: Promise<string | undefined> }>();
+  const cachedOriginKey = (configDir: string): Promise<string | undefined> => {
+    const hit = remoteCache.get(configDir);
+    const at = now();
+    if (hit !== undefined && at - hit.at <= ttl) {
+      return hit.key;
+    }
+    if (remoteCache.size >= MAX_CACHE_ENTRIES) {
+      remoteCache.clear();
+    }
+    const key = readOriginRepositoryKey(configDir).catch((): undefined => undefined);
+    remoteCache.set(configDir, { at, key });
+    return key;
+  };
+
+  const findWorktree = async (
+    absolutePath: string,
+  ): Promise<Extract<Probe, { kind: "worktree" }> | undefined> => {
+    if (!path.isAbsolute(absolutePath) || absolutePath.includes("\u0000")) {
+      return undefined;
+    }
+    let directory = path.resolve(absolutePath);
+    for (let depth = 0; depth < MAX_WORKTREE_WALK_DEPTH; depth += 1) {
+      const probe = await cachedProbe(directory);
+      if (probe.kind === "worktree") {
+        return probe;
+      }
+      if (probe.kind === "invalid") {
         return undefined;
       }
-      let directory = path.resolve(absolutePath);
-      for (let depth = 0; depth < MAX_WORKTREE_WALK_DEPTH; depth += 1) {
-        const probe = await cachedProbe(directory);
-        if (probe.kind === "worktree") {
-          return probe.located;
-        }
-        if (probe.kind === "invalid") {
-          return undefined;
-        }
-        const parent = path.dirname(directory);
-        if (parent === directory) {
-          return undefined;
-        }
-        directory = parent;
+      const parent = path.dirname(directory);
+      if (parent === directory) {
+        return undefined;
       }
-      return undefined;
+      directory = parent;
+    }
+    return undefined;
+  };
+
+  const locate = async (absolutePath: string): Promise<LocatedWorktree | undefined> => {
+    try {
+      return (await findWorktree(absolutePath))?.located;
     } catch {
       return undefined;
     }
   };
 
-  return { locate };
+  const originRepositoryKey = async (absolutePath: string): Promise<string | undefined> => {
+    try {
+      const probe = await findWorktree(absolutePath);
+      return probe === undefined ? undefined : await cachedOriginKey(probe.configDir);
+    } catch {
+      return undefined;
+    }
+  };
+
+  return { locate, originRepositoryKey };
 };

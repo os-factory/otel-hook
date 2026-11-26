@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -7,14 +7,15 @@ import { afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import type { ExportDestinationConfig } from "../../src/config/destinations.js";
 import { DEFAULT_CONFIG, DEFAULT_EXPORTER_POLICY, type ExporterPolicy } from "../../src/config/schema.js";
-import { createHookRuntime, type HookRuntime } from "../../src/integration/hook-runtime.js";
+import { createHookRuntime, type HookRuntime, type HookRuntimeOptions } from "../../src/integration/hook-runtime.js";
 import { parseCanonicalEvent, type CanonicalEvent } from "../../src/model/events.js";
 import { CANONICAL_SCHEMA_VERSION } from "../../src/model/version.js";
 import { DEFAULT_PRIVACY_POLICY } from "../../src/privacy/policy.js";
 import { createPrivacyService } from "../../src/privacy/service.js";
 import { createClaudeCodeAdapter } from "../../src/providers/claude/adapter.js";
 import { createProviderRegistry } from "../../src/providers/registry.js";
-import { createSystemClock } from "../../src/runtime/clock.js";
+import { createFixedClock, createSystemClock } from "../../src/runtime/clock.js";
+import { createFilesystemWorktreeLocator } from "../../src/runtime/git-worktree.js";
 import { createRecordingLogger } from "../../src/runtime/memory.js";
 import type { SessionContextReader } from "../../src/runtime/ports.js";
 import { createDestinationFanout, createExportDestinationSinks } from "../../src/telemetry/export-destinations.js";
@@ -80,6 +81,7 @@ const buildRuntime = async (
   exporter: Partial<ExporterPolicy>,
   repositories: Readonly<Record<string, string>>,
   resourceAttributes: Readonly<Record<string, string>> = {},
+  overrides: Partial<HookRuntimeOptions> = {},
 ): Promise<{ readonly runtime: HookRuntime; readonly stateRootDir: string }> => {
   const stateRootDir = await scratchDir();
   const runtime = createHookRuntime({
@@ -103,6 +105,7 @@ const buildRuntime = async (
     logger: createRecordingLogger("debug"),
     sessionContextReader: contextReader(repositories),
     worktreeLocator: null,
+    ...overrides,
   });
   cleanups.push(async () => {
     await runtime.shutdown();
@@ -110,28 +113,40 @@ const buildRuntime = async (
   return { runtime, stateRootDir };
 };
 
-const prompt = (sessionId: string): Record<string, unknown> => ({
+const SYNTHETIC_CWD = "/workspace/synthetic";
+
+const prompt = (sessionId: string, cwd = SYNTHETIC_CWD): Record<string, unknown> => ({
   hook_event_name: "UserPromptSubmit",
   session_id: sessionId,
   transcript_path: "/tmp/synthetic/transcript.jsonl",
-  cwd: "/workspace/synthetic",
+  cwd,
   prompt: `deploy with ${SECRET} now`,
 });
 
-const sessionStart = (sessionId: string): Record<string, unknown> => ({
+const sessionStart = (sessionId: string, cwd = SYNTHETIC_CWD): Record<string, unknown> => ({
   hook_event_name: "SessionStart",
   session_id: sessionId,
   transcript_path: "/tmp/synthetic/transcript.jsonl",
-  cwd: "/workspace/synthetic",
+  cwd,
   source: "startup",
   model: "synthetic-model",
 });
 
-const postToolUse = (sessionId: string): Record<string, unknown> => ({
+const preToolUse = (sessionId: string, cwd = SYNTHETIC_CWD): Record<string, unknown> => ({
+  hook_event_name: "PreToolUse",
+  session_id: sessionId,
+  transcript_path: "/tmp/synthetic/transcript.jsonl",
+  cwd,
+  tool_use_id: `toolu_${sessionId}`,
+  tool_name: "Bash",
+  tool_input: { command: "true" },
+});
+
+const postToolUse = (sessionId: string, cwd = SYNTHETIC_CWD): Record<string, unknown> => ({
   hook_event_name: "PostToolUse",
   session_id: sessionId,
   transcript_path: "/tmp/synthetic/transcript.jsonl",
-  cwd: "/workspace/synthetic",
+  cwd,
   tool_use_id: `toolu_${sessionId}`,
   tool_name: "Bash",
   tool_response: "ok",
@@ -328,6 +343,209 @@ describe("hook runtime: destination scopes", () => {
     expect(all).toContain("synthetic-org/repo-a");
     expect(all).not.toContain("synthetic-org/repo-b");
     expect(all).not.toContain(SECRET);
+  });
+});
+
+/**
+ * A checkout as git leaves it on disk: `.git/HEAD`, and a `config` naming the
+ * `origin` remote when one is given. The directory name says nothing about the
+ * repository, so a payload that mentions it would show up in the assertions.
+ */
+const checkout = async (originUrl?: string): Promise<string> => {
+  const dir = path.join(await scratchDir(), "checkout");
+  await mkdir(path.join(dir, ".git"), { recursive: true });
+  await mkdir(path.join(dir, "src"), { recursive: true });
+  await writeFile(path.join(dir, ".git", "HEAD"), "ref: refs/heads/main\n");
+  if (originUrl !== undefined) {
+    await writeFile(
+      path.join(dir, ".git", "config"),
+      `[core]\n\tbare = false\n[remote "origin"]\n\turl = ${originUrl}\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n`,
+    );
+  }
+  return dir;
+};
+
+/** Session context that can appear mid-session, as a launch writes it. */
+const mutableContextReader = (): {
+  readonly reader: SessionContextReader;
+  readonly set: (sessionId: string, repository: string) => void;
+} => {
+  const repositories = new Map<string, string>();
+  return {
+    reader: {
+      read: (request) => {
+        const repository = repositories.get(request.sessionId);
+        return Promise.resolve(
+          repository === undefined
+            ? undefined
+            : [{ from: 0, to: null, attributes: { "vcs.repository.url.full": repository } }],
+        );
+      },
+    },
+    set: (sessionId, repository) => {
+      repositories.set(sessionId, repository);
+    },
+  };
+};
+
+const bodiesText = (target: CapturingCollector): string =>
+  target.requests.map((request) => request.body.toString("latin1")).join("\n");
+
+describe("hook runtime: routing by the session workspace's own remote", () => {
+  const ORIGIN_A = "git@github.com:synthetic-org/repo-a.git";
+
+  const threeDestinations = (
+    local: CapturingCollector,
+    hostedA: CapturingCollector,
+    hostedB: CapturingCollector,
+  ): ExportDestinationConfig[] => [
+    { name: "local", endpoint: local.url, signals: ["traces", "logs", "metrics"] },
+    { name: "hosted-a", endpoint: hostedA.url, signals: ["traces", "logs", "metrics"], scopes: [{ repositories: [REPO_A] }] },
+    { name: "hosted-b", endpoint: hostedB.url, signals: ["traces", "logs", "metrics"], scopes: [{ repositories: [REPO_B] }] },
+  ];
+
+  it("sends a session with no context to the destination scoped to its checkout's origin, and no other", async () => {
+    const local = await collector();
+    const hostedA = await collector();
+    const hostedB = await collector();
+    const cwd = await checkout(ORIGIN_A);
+    const { runtime } = await buildRuntime(
+      { destinations: threeDestinations(local, hostedA, hostedB) },
+      {},
+      {},
+      { worktreeLocator: createFilesystemWorktreeLocator() },
+    );
+    const sessionId = "ses-workspace-a";
+    for (const payload of [sessionStart(sessionId, cwd), prompt(sessionId, cwd), postToolUse(sessionId, cwd)]) {
+      const outcome = await send(runtime, payload);
+      expect(outcome.ingest.durability).toBe("delivered");
+      expect(outcome.ingest.workspaceRepositoryKey).toBe("github.com/synthetic-org/repo-a");
+    }
+    await runtime.shutdown();
+
+    const spanNames = (target: CapturingCollector) =>
+      decodeAllExportedSpans(target.bodiesFor("/v1/traces"))
+        .map((span) => span.name)
+        .sort();
+    expect(spanNames(hostedA).length).toBeGreaterThan(0);
+    expect(spanNames(hostedA)).toEqual(spanNames(local));
+    expect(decodeAllExportedLogRecords(hostedA.bodiesFor("/v1/logs")).map((record) => record.body)).toContain(
+      `deploy with ${SECRET} now`,
+    );
+    expect(decodeAllExportedMetrics(hostedA.bodiesFor("/v1/metrics")).length).toBeGreaterThan(0);
+    expect(hostedB.requests).toHaveLength(0);
+    // Routing only: the remote is in no record, scoped or not.
+    for (const target of [local, hostedA]) {
+      expect(bodiesText(target)).not.toContain("repo-a");
+      expect(bodiesText(target)).not.toContain("vcs.repository.url.full");
+    }
+  });
+
+  it("lets the session context win over the checkout's origin", async () => {
+    const local = await collector();
+    const hostedA = await collector();
+    const hostedB = await collector();
+    const cwd = await checkout(ORIGIN_A);
+    const { runtime } = await buildRuntime(
+      { destinations: threeDestinations(local, hostedA, hostedB) },
+      { "ses-stamped-b": REPO_B },
+      {},
+      { worktreeLocator: createFilesystemWorktreeLocator() },
+    );
+    await send(runtime, prompt("ses-stamped-b", cwd));
+    await runtime.shutdown();
+
+    expect(hostedA.requests).toHaveLength(0);
+    expect(repositoriesIn(decodeAllExportedSpans(hostedB.bodiesFor("/v1/traces")))).toEqual([REPO_B]);
+  });
+
+  it("drops a session whose checkout has no usable origin for scoped destinations, and keeps it for the rest", async () => {
+    for (const origin of [undefined, "/srv/git/repo-a.git"]) {
+      const local = await collector();
+      const hostedA = await collector();
+      const hostedB = await collector();
+      const cwd = await checkout(origin);
+      const { runtime } = await buildRuntime(
+        { destinations: threeDestinations(local, hostedA, hostedB) },
+        {},
+        {},
+        { worktreeLocator: createFilesystemWorktreeLocator() },
+      );
+      const outcome = await send(runtime, prompt("ses-no-origin", cwd));
+      expect(outcome.ingest.workspaceRepositoryKey).toBeUndefined();
+      await runtime.shutdown();
+
+      expect(decodeAllExportedSpans(local.bodiesFor("/v1/traces")).length).toBeGreaterThan(0);
+      expect(hostedA.requests).toHaveLength(0);
+      expect(hostedB.requests).toHaveLength(0);
+    }
+  });
+
+  it("leaves an unscoped destination's payload byte-identical", async () => {
+    const cwd = await checkout(ORIGIN_A);
+    const run = async (readsRemote: boolean): Promise<readonly string[]> => {
+      const local = await collector();
+      const hostedA = await collector();
+      const fsLocator = createFilesystemWorktreeLocator();
+      const { runtime } = await buildRuntime(
+        {
+          destinations: [
+            { name: "local", endpoint: local.url, signals: ["traces", "logs", "metrics"] },
+            { name: "hosted-a", endpoint: hostedA.url, scopes: [{ repositories: [REPO_A] }] },
+          ],
+        },
+        {},
+        {},
+        {
+          clock: createFixedClock({ startMillis: 1_700_000_100_000 }),
+          // Without `originRepositoryKey` the locator still resolves targets, but
+          // nothing is routed by remote: the payload as it was before this existed.
+          worktreeLocator: readsRemote ? fsLocator : { locate: (target) => fsLocator.locate(target) },
+        },
+      );
+      const sessionId = "ses-identical";
+      for (const payload of [sessionStart(sessionId, cwd), prompt(sessionId, cwd), postToolUse(sessionId, cwd)]) {
+        await send(runtime, payload);
+      }
+      await runtime.shutdown();
+      expect(hostedA.requests.length > 0).toBe(readsRemote);
+      return local.requests.map((request) => `${request.path} ${request.body.toString("base64")}`).sort();
+    };
+    const before = await run(false);
+    expect(before.length).toBeGreaterThan(0);
+    expect(await run(true)).toEqual(before);
+  });
+
+  it("gets the prompt to the scoped destination when the session context only appears later (launch mid-session)", async () => {
+    const local = await collector();
+    const hostedA = await collector();
+    const hostedB = await collector();
+    const cwd = await checkout(ORIGIN_A);
+    const context = mutableContextReader();
+    const { runtime } = await buildRuntime(
+      { destinations: threeDestinations(local, hostedA, hostedB) },
+      {},
+      {},
+      { worktreeLocator: createFilesystemWorktreeLocator(), sessionContextReader: context.reader },
+    );
+    const sessionId = "ses-launch-later";
+    // Before the launch: no session context, as in the end-to-end capture.
+    await send(runtime, sessionStart(sessionId, cwd));
+    await send(runtime, prompt(sessionId, cwd));
+    await send(runtime, preToolUse(sessionId, cwd));
+    // The agent ran the launch: from here on every event is stamped.
+    context.set(sessionId, REPO_A);
+    await send(runtime, postToolUse(sessionId, cwd));
+    await runtime.shutdown();
+
+    const hostedLogs = decodeAllExportedLogRecords(hostedA.bodiesFor("/v1/logs"));
+    expect(hostedLogs.map((record) => record.body)).toContain(`deploy with ${SECRET} now`);
+    const hostedSpans = decodeAllExportedSpans(hostedA.bodiesFor("/v1/traces"));
+    const localSpans = decodeAllExportedSpans(local.bodiesFor("/v1/traces"));
+    expect(hostedSpans.map((span) => span.spanId).sort()).toEqual(localSpans.map((span) => span.spanId).sort());
+    // Stamped records carry the stamp; the earlier ones carry nothing new.
+    expect(repositoriesIn(hostedSpans)).toEqual(repositoriesIn(localSpans));
+    expect(hostedB.requests).toHaveLength(0);
   });
 });
 

@@ -432,6 +432,7 @@ export const createGeminiCliAdapter = (options: GeminiAdapterOptions = {}): Prov
       status: "parsed",
       events: factory.events(),
       ...(warnings.length === 0 ? {} : { warnings }),
+      ...(payload.cwd === undefined || payload.cwd.length === 0 ? {} : { workspaceDirectory: payload.cwd }),
     };
   };
 

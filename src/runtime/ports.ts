@@ -183,8 +183,21 @@ export type TelemetryEmitResult = {
  * The sink receives canonical events only — never provider payloads — so an
  * exporter cannot become a second, unaudited disclosure path.
  */
+/**
+ * What a sink may know about a batch beyond its events, for routing only.
+ * Nothing here is exported: it decides where a record may go, never what it says.
+ */
+export type TelemetryEmitOptions = {
+  /**
+   * Repository key of the session workspace's `origin` remote. Scoped
+   * destinations route an event without a context stamp of its own by it,
+   * ahead of the exporter Resource's repository.
+   */
+  readonly workspaceRepositoryKey?: string;
+};
+
 export interface TelemetrySink {
-  emit(events: readonly CanonicalEvent[]): Promise<TelemetryEmitResult>;
+  emit(events: readonly CanonicalEvent[], options?: TelemetryEmitOptions): Promise<TelemetryEmitResult>;
   flush(): Promise<void>;
   shutdown(): Promise<void>;
 }
@@ -240,6 +253,14 @@ export type LocatedWorktree = {
  */
 export interface WorktreeLocator {
   locate(absolutePath: string): Promise<LocatedWorktree | undefined>;
+  /**
+   * The repository key (`normalizeRepositoryKey`) of the `origin` remote of the
+   * repository whose worktree contains the path, or `undefined` when there is
+   * none, it is a local path, or it cannot be read. Used for routing only: the
+   * key decides which scoped destinations may receive a record and is never
+   * exported. Optional: a locator without it routes nothing by remote.
+   */
+  originRepositoryKey?(absolutePath: string): Promise<string | undefined>;
 }
 
 /** Where an enricher stopped reading a session's source; see the `read-cursor` state value. */

@@ -258,6 +258,13 @@ export type ProviderParseResult =
        * the event's `target` and discards it. Use `EventFactory.targetHints()`.
        */
       readonly targetHints?: ReadonlyMap<EventId, TargetHint>;
+      /**
+       * The session's own directory (the payload's `cwd` or single workspace
+       * root), absolute. **A local path, in-process only**: the core reads the
+       * `origin` remote of the repository it sits in to route records without a
+       * context stamp to scoped destinations, then discards it. Never exported.
+       */
+      readonly workspaceDirectory?: string;
     }
   /** The input was recognized but carries no telemetry. Not an error. */
   | { readonly status: "ignored"; readonly reason: string }

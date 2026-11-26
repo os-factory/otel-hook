@@ -19,11 +19,20 @@ import { spanEndEdgesOf } from "./semconv.js";
  * map, send, and spool exactly what they are given, so a scoped destination's
  * spool only ever holds what passed its filter.
  *
- * The repository is read the way the record will carry it on the wire: the
- * session context stamped on the event wins over the exporter Resource (the
- * launcher's `OTEL_RESOURCE_ATTRIBUTES`), as it does in `profileAttributes`.
+ * The repository is, in order:
+ *
+ * 1. the session context stamped on the event (`vcs.repository.url.full`) — it
+ *    always wins, since a slot worktree can sit under another checkout;
+ * 2. else the `origin` remote of the session directory's own repository
+ *    (`workspaceRepositoryKey`, read by the hook) — so a session's records before
+ *    any context exists (its start, its first prompt) reach the destination
+ *    scoped to the repository it runs in;
+ * 3. else the exporter Resource (the launcher's `OTEL_RESOURCE_ATTRIBUTES`);
+ * 4. else none, and no scope takes the record.
+ *
  * A context value that does not parse as a repository URL names no repository —
- * it is not silently replaced by the Resource's.
+ * it is not silently replaced by a fallback. The workspace key is routing-only:
+ * it decides where a record may go and is never added to what is sent.
  */
 
 const DISCLOSURE_RANK: Readonly<Record<ContentFact["disclosure"], number>> = Object.freeze({
@@ -122,6 +131,11 @@ export type ScopedBatch = {
 export type RouteEventsOptions = {
   /** Repository key of the exporter Resource, for events with no stamp of their own. */
   readonly resourceRepositoryKey?: string;
+  /**
+   * Repository key of the session directory's `origin` remote; for events with no
+   * stamp of their own, ahead of {@link resourceRepositoryKey}. Never exported.
+   */
+  readonly workspaceRepositoryKey?: string;
   readonly restrict: ContentRestrictor;
 };
 
@@ -139,12 +153,13 @@ export const routeEventsToScopes = (
   options: RouteEventsOptions,
 ): ScopedBatch => {
   const ends = spanEndEdgesOf(events);
+  const fallbackKey = options.workspaceRepositoryKey ?? options.resourceRepositoryKey;
   const traces: CanonicalEvent[] = [];
   const logs: CanonicalEvent[] = [];
   let unchanged = true;
   for (const event of events) {
     const anchor = ends.get(event.eventId) ?? event;
-    const scope = matchDestinationScope(scopes, eventRepositoryKey(anchor, options.resourceRepositoryKey));
+    const scope = matchDestinationScope(scopes, eventRepositoryKey(anchor, fallbackKey));
     if (scope === undefined || !scope.signals.traces || !scope.signals.logs) {
       unchanged = false;
     }
@@ -180,7 +195,7 @@ export const routePointsToScopes = (
   scopes: readonly DestinationScope[],
   pointsFor: (includeSessionId: boolean) => readonly MetricPoint[] | undefined,
   options: {
-    /** Repository key for points with no stamp of their own (context, then Resource). */
+    /** Repository key for points with no stamp of their own (workspace remote, then Resource). */
     readonly fallbackKey: string | undefined;
     /** The installation's `exporter.metrics.includeSessionId`; a scope can only turn it off. */
     readonly includeSessionId: boolean;

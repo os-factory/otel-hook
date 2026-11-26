@@ -197,6 +197,59 @@ describe("routeEventsToScopes", () => {
   });
 });
 
+describe("routeEventsToScopes: the session workspace's own remote", () => {
+  const WORKSPACE_A = "github.com/acme/widget";
+
+  it("routes an unstamped event by the workspace remote: to A's scope, not B's", () => {
+    const unstamped = prompt(undefined);
+    const options = { restrict, workspaceRepositoryKey: WORKSPACE_A };
+    expect(routeEventsToScopes([unstamped], scopesOf([{ repositories: [REPO_A] }]), options).traces).toEqual([
+      unstamped,
+    ]);
+    const toB = routeEventsToScopes([unstamped], scopesOf([{ repositories: [REPO_B] }]), options);
+    expect(toB.traces).toEqual([]);
+    expect(toB.logs).toEqual([]);
+  });
+
+  it("lets a context stamp win over the workspace remote", () => {
+    const stampedB = prompt(REPO_B);
+    const options = { restrict, workspaceRepositoryKey: WORKSPACE_A };
+    expect(routeEventsToScopes([stampedB], scopesOf([{ repositories: [REPO_A] }]), options).traces).toEqual([]);
+    expect(routeEventsToScopes([stampedB], scopesOf([{ repositories: [REPO_B] }]), options).traces).toEqual([
+      stampedB,
+    ]);
+    // A stamp that names no repository is not replaced by the workspace's either.
+    const garbled = prompt("not a url at all");
+    expect(routeEventsToScopes([garbled], scopesOf([{ repositories: "*" }]), options).traces).toEqual([]);
+  });
+
+  it("puts the workspace remote ahead of the Resource's repository", () => {
+    const unstamped = prompt(undefined);
+    const routed = routeEventsToScopes([unstamped], scopesOf([{ repositories: [REPO_B] }]), {
+      restrict,
+      workspaceRepositoryKey: WORKSPACE_A,
+      resourceRepositoryKey: "github.com/acme/gadget",
+    });
+    expect(routed.traces).toEqual([]);
+  });
+
+  it("drops an unstamped event without a workspace remote", () => {
+    const unstamped = prompt(undefined);
+    expect(routeEventsToScopes([unstamped], scopesOf([{ repositories: "*" }]), { restrict }).traces).toEqual([]);
+  });
+
+  it("judges a span by its end edge with the same fallback", () => {
+    const start = build({ type: "tool.start", toolCallId: "call-w", toolName: "Bash", toolKind: "execute" });
+    const end = build({ type: "tool.end", toolCallId: "call-w", toolName: "Bash", outcome: "ok" }, REPO_B);
+    const routed = routeEventsToScopes([start, end], scopesOf([{ repositories: [REPO_A] }]), {
+      restrict,
+      workspaceRepositoryKey: WORKSPACE_A,
+    });
+    // The unstamped start is judged by its stamped end, which names B.
+    expect(routed.traces).toEqual([]);
+  });
+});
+
 describe("routePointsToScopes", () => {
   const point = (repository: string | undefined, sessionId?: string): MetricPoint => ({
     instrument: "otelhook.tool.calls",

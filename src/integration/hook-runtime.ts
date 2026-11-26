@@ -677,6 +677,11 @@ export const createHookRuntime = (options: HookRuntimeOptions): HookRuntime => {
             options.worktreeLocator ??
             createFilesystemWorktreeLocator({ monotonicMillis: () => clock.monotonicMillis() }),
         }),
+    // Only a scoped destination routes by repository, so only then is the session
+    // directory's remote read at all.
+    routeByWorkspaceRepository: exportDestinations.destinations.some(
+      (destination) => destination.scopes !== undefined,
+    ),
   };
   const hook = createOtelHook({ ...hookDeps, sink });
 
@@ -791,14 +796,25 @@ export const createHookRuntime = (options: HookRuntimeOptions): HookRuntime => {
       // One set of points per `session.id` variant some destination needs: the
       // installation's own for unscoped destinations, and the session-less one
       // for a scope that turns it off. Usually just the first, computed once.
-      const scopedRepositoryFallback =
+      // Every point of one callback is from its session, so a point with no stamp
+      // of its own routes like that session's unstamped events: by the session
+      // directory's remote, then the Resource.
+      const resourceFallback =
         scopedMetricDestinations.length === 0 ? undefined : resourceRepositoryKey(metricResource.attributes);
+      const scopedRepositoryFallback =
+        scopedMetricDestinations.length === 0
+          ? undefined
+          : (ingest.workspaceRepositoryKey ?? resourceFallback);
       // With a scoped destination, a point must carry the repository it is routed
       // by: a series that is not per session would otherwise merge sessions of
-      // different repositories under one Resource-less identity.
+      // different repositories under one Resource-less identity. Only the
+      // Resource's URL is copied onto points (it is on every record already); the
+      // workspace remote never is, so when it routes there is nothing to copy.
       const resourceRepository = metricResource.attributes[ATTR_VCS_REPOSITORY_URL_FULL];
       const metricEvents =
-        scopedRepositoryFallback === undefined || typeof resourceRepository !== "string"
+        resourceFallback === undefined ||
+        ingest.workspaceRepositoryKey !== undefined ||
+        typeof resourceRepository !== "string"
           ? ingest.events
           : ingest.events.map((event): CanonicalEvent =>
               event.contextAttributes?.[ATTR_VCS_REPOSITORY_URL_FULL] === undefined

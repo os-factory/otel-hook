@@ -18,6 +18,7 @@ import {
   parseCommonDirFile,
   parseGitDirFile,
   parseHeadBranch,
+  parseOriginRemoteUrl,
 } from "../../src/runtime/git-worktree.js";
 import type { LocatedWorktree, WorktreeLocator } from "../../src/runtime/ports.js";
 import { resolveEventTargets } from "../../src/runtime/target-resolution.js";
@@ -57,6 +58,29 @@ describe("git file parsing", () => {
     expect(parseCommonDirFile("/srv/bare.git\n", "/x")).toBe(path.resolve("/srv/bare.git"));
     expect(parseCommonDirFile("\n", "/x")).toBeUndefined();
     expect(parseCommonDirFile("a\u0000b\n", "/x")).toBeUndefined();
+  });
+
+  it("reads the origin remote's url from a config file, and nothing else", () => {
+    const config = [
+      "[core]",
+      "\tbare = false",
+      '[remote "upstream"]',
+      "\turl = https://github.com/acme/upstream.git",
+      '[remote "origin"]',
+      "\tfetch = +refs/heads/*:refs/remotes/origin/*",
+      "\tURL = git@github.com:acme/widget.git ; a comment",
+      "\turl = https://github.com/acme/second.git",
+      "",
+    ].join("\n");
+    expect(parseOriginRemoteUrl(config)).toBe("git@github.com:acme/widget.git");
+    expect(parseOriginRemoteUrl('[remote "origin"]\n\turl = "https://h/a b.git"\n')).toBe("https://h/a b.git");
+    expect(parseOriginRemoteUrl("[remote.origin]\nurl=https://h/legacy\n")).toBe("https://h/legacy");
+    // The subsection name is case-sensitive in git.
+    expect(parseOriginRemoteUrl('[remote "Origin"]\nurl = https://h/x\n')).toBeUndefined();
+    expect(parseOriginRemoteUrl('[remote "upstream"]\nurl = https://h/x\n')).toBeUndefined();
+    // A last line the read bound may have cut is not trusted.
+    expect(parseOriginRemoteUrl('[remote "origin"]\nurl = https://h/cut')).toBeUndefined();
+    expect(parseOriginRemoteUrl("")).toBeUndefined();
   });
 });
 
@@ -214,6 +238,48 @@ describe("filesystem worktree locator", () => {
     expect(await locator.locate("/bad\u0000path")).toBeUndefined();
   });
 
+  it("reads the origin remote's key from the repository's common config, never its URL", async () => {
+    const locator = createFilesystemWorktreeLocator();
+    const config = path.join(main, ".git", "config");
+    // Credentials and the scheme never reach the key.
+    await writeFile(
+      config,
+      '[core]\n\tbare = false\n[remote "origin"]\n\turl = https://user:tok3n@GitHub.com/Acme/Widget.git\n',
+    );
+    try {
+      expect(await locator.originRepositoryKey?.(path.join(main, "src", "deep"))).toBe("github.com/acme/widget");
+      // A linked worktree's remote is its repository's: read through `commondir`.
+      expect(await locator.originRepositoryKey?.(path.join(linked, "src"))).toBe("github.com/acme/widget");
+      // A submodule is its own repository, with its own (here: no) config.
+      expect(await locator.originRepositoryKey?.(submodule)).toBeUndefined();
+      expect(await locator.originRepositoryKey?.(orphan)).toBeUndefined();
+      expect(await locator.originRepositoryKey?.(root)).toBeUndefined();
+      expect(await locator.originRepositoryKey?.("relative/path")).toBeUndefined();
+    } finally {
+      await rm(config, { force: true });
+    }
+  });
+
+  it("names no key for a missing, local-path, or unparsable origin", async () => {
+    const config = path.join(main, ".git", "config");
+    try {
+      for (const content of [
+        '[remote "upstream"]\n\turl = https://github.com/acme/widget\n',
+        '[remote "origin"]\n\turl = /srv/git/widget.git\n',
+        '[remote "origin"]\n\turl = ../widget\n',
+        '[remote "origin"]\n\turl = file:///srv/git/widget.git\n',
+        '[remote "origin"]\n\turl = \n',
+        '[remote "origin"]\n\turl = "unterminated\n',
+      ]) {
+        await writeFile(config, content);
+        // A fresh locator per case: the cache would otherwise answer.
+        expect(await createFilesystemWorktreeLocator().originRepositoryKey?.(main)).toBeUndefined();
+      }
+    } finally {
+      await rm(config, { force: true });
+    }
+  });
+
   it("caches a probe for its TTL, then sees a switched branch", async () => {
     let now = 0;
     const locator = createFilesystemWorktreeLocator({ monotonicMillis: () => now, cacheTtlMillis: 100 });
@@ -294,6 +360,14 @@ describe("filesystem worktree locator", () => {
         branch: "bare-agent",
         kind: "linked",
       });
+
+      // The origin remote, as `git remote add` writes it, from a main and a linked worktree.
+      git(repo, "remote", "add", "origin", "git@github.com:Acme/Checkout.git");
+      const fresh = createFilesystemWorktreeLocator();
+      expect(await fresh.originRepositoryKey?.(path.join(repo, "README.md"))).toBe("github.com/acme/checkout");
+      expect(await fresh.originRepositoryKey?.(path.join(worktree, "src"))).toBe("github.com/acme/checkout");
+      // The submodule's origin is the local path it was added from: no key.
+      expect(await fresh.originRepositoryKey?.(submodule)).toBeUndefined();
     } finally {
       await rm(realRoot, { recursive: true, force: true });
     }

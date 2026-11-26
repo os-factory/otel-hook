@@ -227,7 +227,15 @@ export const createAntigravityAdapter = (
         };
     }
 
-    return { status: "parsed", events: factory.events() };
+    // One workspace names the session's directory; several name none for routing.
+    const [onlyWorkspacePath, ...otherWorkspacePaths] = payload.workspacePaths;
+    return {
+      status: "parsed",
+      events: factory.events(),
+      ...(onlyWorkspacePath === undefined || onlyWorkspacePath.length === 0 || otherWorkspacePaths.length > 0
+        ? {}
+        : { workspaceDirectory: onlyWorkspacePath }),
+    };
   };
 
   const hookResponse = (): ProviderHookResponse => SILENT_HOOK_RESPONSE;
