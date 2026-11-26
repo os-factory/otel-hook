@@ -334,7 +334,8 @@ describe("delivery deduplication: usage accounting is applied at most once", () 
     const { runtime } = buildRuntime(options);
     const rollup = await runtime.usageAccumulator.read({
       sessionId: "ses-usage",
-      scope: "subagent",
+      // The subagent's tokens are its generation's (issue #68).
+      scope: "generation",
       scopeKey: first.usageRollups[0]?.scopeKey ?? "",
     });
     expect(rollup?.total.inputTokens).toBe(accounted);
@@ -833,7 +834,7 @@ describe("delivery deduplication: the crash window is at-least-once, and the dup
     const { runtime } = buildRuntime(options);
     const rollup = await runtime.usageAccumulator.read({
       sessionId: "ses-crash-usage",
-      scope: "subagent",
+      scope: "generation",
       scopeKey,
     });
     await runtime.shutdown();

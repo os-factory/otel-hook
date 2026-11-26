@@ -128,6 +128,34 @@ describe("deriveMetricObservations", () => {
     ).toEqual([]);
   });
 
+  it("counts a subagent's generation tokens, but never times it from the parent's prompt (issue #68)", () => {
+    const end = build({
+      type: "generation.end",
+      generationId: "g-sub",
+      subagentId: "agent-1",
+      model: { modelId: "subagent-model" },
+      outcome: "ok",
+      usage: usage(40, 8),
+    });
+    const observations = deriveMetricObservations({
+      events: [end],
+      usage: [{ eventId: end.eventId, scope: "generation", delta: usage(40, 8) }],
+      resource,
+      turnStart: () => end.occurredAt - 7_000,
+    });
+    expect(
+      observations.map((observation) => [
+        observation.instrument,
+        observation.attributes["gen_ai.token.type"] ?? "",
+        observation.value,
+        observation.attributes["gen_ai.response.model"],
+      ]),
+    ).toEqual([
+      ["gen_ai.client.token.usage", "input", 40, "subagent-model"],
+      ["gen_ai.client.token.usage", "output", 8, "subagent-model"],
+    ]);
+  });
+
   it("ignores session and subagent usage scopes, which restate generation spend", () => {
     const end = build({ type: "session.end", reason: "completed", usage: normalizeUsageOrThrow({ temporality: "cumulative", inputTokens: 5 }) });
     const observations = deriveMetricObservations({

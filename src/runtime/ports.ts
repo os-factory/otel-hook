@@ -253,7 +253,7 @@ export type ReadCursor = {
 export type PayloadEnrichmentInput = {
   readonly payload: unknown;
   readonly sessionId: string;
-  /** The cursor this enricher stored for this session last time, if any. */
+  /** The cursor this enricher stored for this session (and cursor scope) last time, if any. */
   readonly cursor?: ReadCursor;
 };
 
@@ -282,6 +282,13 @@ export interface PayloadEnricher {
   readonly id: string;
   /** The provider whose payloads it enriches. Others are never passed to it. */
   readonly providerId: string;
+  /**
+   * Which of the session's cursors this payload reads, when a session has more
+   * than one source (Claude Code writes each subagent to its own transcript).
+   * `undefined`, or no function, selects the session's own cursor. A scope is
+   * part of a state key, never exported; it must not hold a path.
+   */
+  cursorScope?(payload: unknown): string | undefined;
   enrich(input: PayloadEnrichmentInput): Promise<PayloadEnrichment>;
 }
 

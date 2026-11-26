@@ -263,6 +263,191 @@ describe("Claude Code transcript usage: turn totals from a cursor", () => {
   });
 });
 
+/**
+ * Issue #68: a subagent's requests live in its own transcript
+ * (`agent_transcript_path`, every record `isSidechain`), so the parent's `Stop`
+ * never counts them. `SubagentStop` sums them from a cursor of their own and
+ * reports them on the subagent's generation, never on the parent turn.
+ */
+describe("Claude Code transcript usage: subagent requests", () => {
+  const SUBAGENT_FIXTURE = path.resolve(path.dirname(FIXTURE), "subagent-transcript-turn.json");
+  const AGENT = "agent-contract-0001";
+  /** The fixture's two subagent requests, summed. */
+  const SUBAGENT_TOTAL = {
+    inputTokens: 7 + 2_000 + 500 + (4 + 2_600 + 300),
+    cachedInputTokens: 2_000 + 2_600,
+    cacheCreationInputTokens: 500 + 300,
+    outputTokens: 30 + 250,
+  };
+  const SUBAGENT_LAST_REQUEST = {
+    inputTokens: 4 + 2_600 + 300,
+    cachedInputTokens: 2_600,
+    cacheCreationInputTokens: 300,
+    outputTokens: 250,
+  };
+
+  const subagentLines = async (agentId = AGENT): Promise<string[]> => {
+    const { records } = JSON.parse(await readFile(SUBAGENT_FIXTURE, "utf8")) as { records: Record<string, unknown>[] };
+    return records.map((record) => JSON.stringify({ ...record, agentId }));
+  };
+
+  const agentTranscript = (main: string, agentId = AGENT): string =>
+    path.join(path.dirname(main), `agent-${agentId}.jsonl`);
+
+  const subagentGeneration = (events: readonly CanonicalEvent[], agentId = AGENT) => {
+    const end = events.find((event) => event.type === "generation.end" && event.subagentId === agentId);
+    return end?.type === "generation.end" ? end : undefined;
+  };
+
+  const subagentEnd = (events: readonly CanonicalEvent[]) => {
+    const end = events.find((event) => event.type === "subagent.end");
+    if (end?.type !== "subagent.end") {
+      throw new Error(`expected subagent.end, got ${events.map((event) => event.type).join(", ")}`);
+    }
+    return end;
+  };
+
+  const subagentStop = (agentTranscriptPath: string, agentId = AGENT, extra: Record<string, unknown> = {}) => ({
+    hook_event_name: "SubagentStop",
+    agent_id: agentId,
+    agent_type: "Explore",
+    agent_transcript_path: agentTranscriptPath,
+    stop_hook_active: false,
+    ...extra,
+  });
+
+  it("reports the subagent's requests on its own generation and leaves the parent turn unchanged", async () => {
+    const file = await tempTranscript();
+    const agentFile = agentTranscript(file);
+    const { start, send, stop } = session(file);
+    await start();
+    await send({ hook_event_name: "SubagentStart", agent_id: AGENT, agent_type: "Explore" });
+    await appendTurn(agentFile, await subagentLines());
+    const outcome = await send(subagentStop(agentFile));
+
+    const generation = subagentGeneration(outcome.events);
+    expect(generation?.model.modelId).toBe("claude-synthetic-haiku-9");
+    expect(generation?.usage).toMatchObject({ temporality: "delta", ...SUBAGENT_TOTAL });
+    expect(generation?.usagePartial).toBe(false);
+    const generationStart = outcome.events.find((event) => event.type === "generation.start");
+    expect(generationStart?.subagentId).toBe(AGENT);
+    // Not restated on the subagent span: one record carries the subagent's tokens.
+    expect(subagentEnd(outcome.events).usage).toBeUndefined();
+
+    // The parent's turn, written meanwhile, is counted exactly as without a subagent.
+    await appendTurn(file, await turnLines());
+    const parent = await stop("p1");
+    expect(parent.subagentId).toBeUndefined();
+    expect(parent.model.modelId).toBe("claude-synthetic-opus-9");
+    expect(parent.usage).toMatchObject(TURN_TOTAL);
+    expect(parent.usagePartial).toBe(false);
+  });
+
+  it("a subagent's model never renames the session's own generations", async () => {
+    const file = await tempTranscript();
+    const agentFile = agentTranscript(file);
+    const { start, send, stop } = session(file);
+    await start();
+    await appendTurn(agentFile, await subagentLines());
+    await send(subagentStop(agentFile));
+    // A turn with no transcript records falls back to the session's model.
+    const parent = await stop("p1");
+    expect(parent.model.modelId).toBe("claude-synthetic-opus-9");
+  });
+
+  it("a redelivered SubagentStop counts nothing again; a continued one counts only what is new", async () => {
+    const file = await tempTranscript();
+    const agentFile = agentTranscript(file);
+    const { start, send } = session(file);
+    await start();
+    const lines = await subagentLines();
+    await appendTurn(agentFile, lines.slice(0, 2));
+    const first = await send(subagentStop(agentFile));
+    expect(subagentGeneration(first.events)?.usage).toMatchObject({ outputTokens: 30 });
+
+    const redelivered = await send(subagentStop(agentFile), true);
+    expect(subagentGeneration(redelivered.events)?.usage).toBeUndefined();
+
+    // A hook-continued stop of the same subagent: only the requests since the last one.
+    await appendTurn(agentFile, lines.slice(2));
+    const continued = await send(subagentStop(agentFile, AGENT, { stop_hook_active: true }));
+    expect(subagentGeneration(continued.events)?.usage).toMatchObject(SUBAGENT_LAST_REQUEST);
+    expect(subagentGeneration(continued.events)?.usagePartial).toBe(false);
+
+    const idle = await send(subagentStop(agentFile, AGENT, { stop_hook_active: true }));
+    expect(subagentGeneration(idle.events)).toBeUndefined();
+    expect(subagentEnd(idle.events).usage).toBeUndefined();
+  });
+
+  it("keeps one cursor per subagent, apart from the session's", async () => {
+    const file = await tempTranscript();
+    const firstAgent = agentTranscript(file, "agent-contract-0001");
+    const secondAgent = agentTranscript(file, "agent-contract-0002");
+    const { start, send, stop } = session(file);
+    await start();
+    await appendTurn(firstAgent, await subagentLines("agent-contract-0001"));
+    await appendTurn(secondAgent, await subagentLines("agent-contract-0002"));
+    await appendTurn(file, await turnLines());
+    const first = await send(subagentStop(firstAgent, "agent-contract-0001"));
+    const second = await send(subagentStop(secondAgent, "agent-contract-0002"));
+    expect(subagentGeneration(first.events, "agent-contract-0001")?.usage).toMatchObject(SUBAGENT_TOTAL);
+    expect(subagentGeneration(second.events, "agent-contract-0002")?.usage).toMatchObject(SUBAGENT_TOTAL);
+    expect((await stop("p1")).usage).toMatchObject(TURN_TOTAL);
+  });
+
+  it("skips records of another agent in the same file", async () => {
+    const file = await tempTranscript();
+    const agentFile = agentTranscript(file);
+    const { start, send } = session(file);
+    await start();
+    await appendTurn(agentFile, [
+      ...(await subagentLines()),
+      ...(await subagentLines("agent-contract-other")).map((line) => line.replaceAll("msg_contract_sub_", "msg_other_")),
+    ]);
+    const outcome = await send(subagentStop(agentFile));
+    expect(subagentGeneration(outcome.events)?.usage).toMatchObject(SUBAGENT_TOTAL);
+  });
+
+  it("a subagent transcript over the cap falls back to its last request, partial", async () => {
+    const file = await tempTranscript();
+    const agentFile = agentTranscript(file);
+    const { start, send } = session(file, { maxRangeBytes: 65_536 });
+    await start();
+    const filler = JSON.stringify({ type: "user", isSidechain: true, message: { content: "x".repeat(1_000) } });
+    await appendTurn(agentFile, [...Array.from({ length: 100 }, () => filler), ...(await subagentLines())]);
+    const outcome = await send(subagentStop(agentFile));
+    expect(subagentGeneration(outcome.events)?.usage).toMatchObject(SUBAGENT_LAST_REQUEST);
+    expect(subagentGeneration(outcome.events)?.usagePartial).toBe(true);
+  });
+
+  it("without agent_transcript_path, or with an unusable one, attaches nothing", async () => {
+    const file = await tempTranscript();
+    const { start, send } = session(file);
+    await start();
+    const withoutPath: Record<string, unknown> = subagentStop("/unused.jsonl");
+    delete withoutPath.agent_transcript_path;
+    const bare = await send(withoutPath);
+    expect(subagentGeneration(bare.events)).toBeUndefined();
+    expect(subagentEnd(bare.events).usage).toBeUndefined();
+    const relative = await send(subagentStop("relative/agent.jsonl", "agent-contract-0002"));
+    expect(subagentGeneration(relative.events, "agent-contract-0002")).toBeUndefined();
+  });
+
+  it("usage a wrapper attached to SubagentStop is reported on the subagent's generation too", async () => {
+    const file = await tempTranscript();
+    const agentFile = agentTranscript(file);
+    const { start, send } = session(file);
+    await start();
+    await appendTurn(agentFile, await subagentLines());
+    const outcome = await send(subagentStop(agentFile, AGENT, { usage: { input_tokens: 1, output_tokens: 2 } }));
+    expect(subagentGeneration(outcome.events)?.usage).toMatchObject({ inputTokens: 1, outputTokens: 2 });
+    expect(subagentEnd(outcome.events).usage).toBeUndefined();
+    // The wrapper's figure covered the file so far: the next stop does not count it again.
+    const next = await send(subagentStop(agentFile, AGENT, { stop_hook_active: true }));
+    expect(subagentGeneration(next.events)).toBeUndefined();
+  });
+});
+
 describe("readClaudeTranscriptRange", () => {
   it("sums distinct main-thread requests and reports where it stopped", async () => {
     const file = await tempTranscript();
@@ -278,6 +463,25 @@ describe("readClaudeTranscriptRange", () => {
     if (range.status !== "found") throw new Error("unreachable");
     expect(range.endOffset).toBe(Buffer.byteLength(`${lines.join("\n")}\n`));
     expect(JSON.stringify(range)).not.toContain("Synthetic placeholder");
+  });
+
+  it("reads a subagent's sidechain records only when asked to, for that agent", async () => {
+    const file = await tempTranscript();
+    const { records } = JSON.parse(
+      await readFile(path.resolve(path.dirname(FIXTURE), "subagent-transcript-turn.json"), "utf8"),
+    ) as { records: unknown[] };
+    await appendTurn(file, records.map((record) => JSON.stringify(record)));
+    expect(await readClaudeTranscriptRange(file, 0)).toMatchObject({ status: "found", requestCount: 0 });
+    expect(await readClaudeTranscriptRange(file, 0, { agentId: "agent-contract-0001" })).toMatchObject({
+      status: "found",
+      model: "claude-synthetic-haiku-9",
+      requestCount: 2,
+      usage: { input_tokens: 11, output_tokens: 280, cache_read_input_tokens: 4_600, cache_creation_input_tokens: 800 },
+    });
+    expect(await readClaudeTranscriptRange(file, 0, { agentId: "agent-contract-other" })).toMatchObject({
+      status: "found",
+      requestCount: 0,
+    });
   });
 
   it("reports truncation, the cap, bad offsets, and missing files", async () => {

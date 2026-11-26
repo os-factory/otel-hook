@@ -273,7 +273,14 @@ them makes the adapter read a file:
    - a timeout or an unreadable file attaches nothing and keeps the cursor, so
      the next turn's range includes the tokens: late, never twice;
    - a payload that already carries `usage` is left alone, and the cursor moves
-     past it.
+     past it;
+   - `SubagentStop` does the same over the subagent's own transcript
+     (`agent_transcript_path`), with one cursor per subagent
+     (`cursor:claude-transcript-usage:<sessionId>:agent-<digest of agent_id>`).
+     It sums that agent's sidechain records (a record naming another `agentId`
+     is skipped). A subagent with no cursor yet is read from the start of its
+     file, which holds that subagent alone, so its first stop is exact too
+     (issue #68).
    The generation span carries `otelhook.usage.partial` (`false` for a turn
    total, `true` for the fallback).
 3. **Harness-attached (library helper).** A wrapper can instead attach
@@ -301,11 +308,25 @@ Why turn totals and not the last request: in agentic use most turns contain
 several model requests (one per tool round trip), so the last request alone
 reports only a small share of the turn's billed input and output tokens. A cursor gives
 the exact turn without a bounded tail ever having to find where the turn began.
-Subagent requests are not in the sum: Claude Code writes them to the subagent's
-own transcript, and `SubagentStop` carries no usage.
+Subagent requests are not in the turn's sum: Claude Code writes them to the
+subagent's own transcript, and the parent's transcript marks any it holds
+`isSidechain`. They are counted once, at `SubagentStop`, on a generation inside
+the subagent: `generation.start` / `generation.end` with `subagentId` set (exported
+as `otelhook.subagent.id`), the subagent's own model, and the summed usage. The
+`subagent.end` event carries no usage, so nothing restates it, and a subagent's
+model never becomes the session's model. The generation id is
+`(session_id, agent_id)` for the once-per-run stop, which delivery deduplicates on,
+and adds the sequence for a hook-continued stop, whose cursor counts only the
+requests written since the previous one. Usage a wrapper attaches to
+`SubagentStop` is reported the same way.
+
+Without the setting a subagent exports no generation at all, as before. A
+subagent whose cursor was lost (an expired store) and that a hook then continues
+is read from the start of its file again, so that one stop can recount its earlier
+requests; a fresh subagent cannot hit this.
 
 The synthetic tail in `fixtures/contracts/claude-code/transcript-tail-turn.json`
-pins this shape. `tests/providers/claude/transcript.test.ts` covers the helper and
+pins this shape, and `subagent-transcript-turn.json` pins a subagent's own file. `tests/providers/claude/transcript.test.ts` covers the helper and
 the session model, `tests/providers/claude/transcript-usage-enricher.test.ts`
 the cursor and the setting, and `tests/e2e-proof/proof-run.test.ts` shows that
 `check-evidence.mjs` `token-usage` passes for Claude Code both ways.
