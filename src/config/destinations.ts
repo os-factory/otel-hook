@@ -1,7 +1,9 @@
 import { z } from "zod";
 
+import { contentModeSchema, type ContentMode } from "../privacy/policy.js";
 import { isUnsafeHeaderValue } from "./header-value.js";
 import { MAX_OTLP_HEADERS } from "./otlp-headers.js";
+import { MAX_REPOSITORY_REFERENCE_LENGTH, normalizeRepositoryKey } from "./repository-key.js";
 import type { ExporterPolicy } from "./schema.js";
 
 /**
@@ -68,6 +70,48 @@ const headerValueSchema = z
 
 const endpointSchema = z.string().url().max(2048);
 
+export const MAX_DESTINATION_SCOPES = 64;
+export const MAX_SCOPE_REPOSITORIES = 256;
+
+/** Every repository, as a scope's `repositories`. */
+export const ALL_REPOSITORIES = "*";
+
+const repositoryReferenceSchema = z
+  .string()
+  .min(1)
+  .max(MAX_REPOSITORY_REFERENCE_LENGTH)
+  .refine(
+    (value) => normalizeRepositoryKey(value) !== undefined,
+    "not a repository URL: use https://host/owner/repo, git@host:owner/repo.git, or host/owner/repo",
+  );
+
+/**
+ * What one destination receives for a set of repositories.
+ *
+ * A scope can only *restrict* what the destination would otherwise get: its
+ * signals are intersected with the destination's, its content mode can only
+ * lower the disclosure the installation's `privacy.contentMode` produced, and
+ * `includeSessionId: false` only removes `session.id` from metric points.
+ */
+export const destinationScopeSchema = z.strictObject({
+  /**
+   * Repository URLs (any spelling of the remote; compared by host and path,
+   * case-insensitively, without `.git`), or `"*"` for every record that names
+   * a repository. A record that names none never matches a scope.
+   */
+  repositories: z.union([
+    z.literal(ALL_REPOSITORIES),
+    z.array(repositoryReferenceSchema).min(1).max(MAX_SCOPE_REPOSITORIES).readonly(),
+  ]),
+  /** Signals sent for these repositories. Default: every signal the destination takes. */
+  signals: z.array(exportSignalSchema).min(1).max(3).readonly().optional(),
+  /** Content disclosure for these repositories, never above `privacy.contentMode`. Default: unchanged. */
+  contentMode: contentModeSchema.optional(),
+  /** False leaves `session.id` off metric data points for these repositories. Default true. */
+  includeSessionId: z.boolean().optional(),
+});
+export type DestinationScopeConfig = z.infer<typeof destinationScopeSchema>;
+
 export const exportDestinationSchema = z
   .strictObject({
     /** Unique, lowercase, filesystem-safe. `default` is reserved for the single-endpoint settings. */
@@ -108,6 +152,14 @@ export const exportDestinationSchema = z
      * default: a destination receives hook-derived metrics only when it lists them.
      */
     signals: z.array(exportSignalSchema).min(1).max(3).readonly().optional(),
+    /**
+     * Per-repository filter. Absent: every record goes to this destination, as
+     * before scopes existed. Present: a record goes only when its repository
+     * (`vcs.repository.url.full`) matches a scope — the first matching scope
+     * decides its signals, content mode, and session id — and a record that
+     * names no repository is not sent here at all.
+     */
+    scopes: z.array(destinationScopeSchema).min(1).max(MAX_DESTINATION_SCOPES).readonly().optional(),
   })
   .refine(
     (destination) =>
@@ -200,6 +252,63 @@ export type ExportDestination = {
   readonly metricsEndpoint?: string;
   readonly signals: { readonly traces: boolean; readonly logs: boolean; readonly metrics: boolean };
   readonly headers: Readonly<Record<string, string>>;
+  /** Per-repository filter; absent sends every record (see {@link destinationScopeSchema}). */
+  readonly scopes?: readonly DestinationScope[];
+};
+
+/** Signal flags, as a destination or a scope holds them. */
+export type SignalFlags = { readonly traces: boolean; readonly logs: boolean; readonly metrics: boolean };
+
+/** One scope as the runtime applies it: keys normalized, signals already intersected. */
+export type DestinationScope = {
+  /** Normalized repository keys, or every repository. */
+  readonly repositories: typeof ALL_REPOSITORIES | ReadonlySet<string>;
+  readonly signals: SignalFlags;
+  readonly contentMode?: ContentMode;
+  readonly includeSessionId: boolean;
+};
+
+/** Resolve configured scopes against the destination's own signals. */
+export const resolveDestinationScopes = (
+  scopes: readonly DestinationScopeConfig[],
+  destinationSignals: SignalFlags,
+): readonly DestinationScope[] =>
+  scopes.map((scope) => {
+    const listed: readonly ExportSignal[] = scope.signals ?? exportSignalSchema.options;
+    return {
+      repositories:
+        scope.repositories === ALL_REPOSITORIES
+          ? ALL_REPOSITORIES
+          : new Set(
+              scope.repositories.flatMap((reference) => {
+                const key = normalizeRepositoryKey(reference);
+                return key === undefined ? [] : [key];
+              }),
+            ),
+      signals: {
+        traces: destinationSignals.traces && listed.includes("traces"),
+        logs: destinationSignals.logs && listed.includes("logs"),
+        metrics: destinationSignals.metrics && listed.includes("metrics"),
+      },
+      ...(scope.contentMode === undefined ? {} : { contentMode: scope.contentMode }),
+      includeSessionId: scope.includeSessionId ?? true,
+    };
+  });
+
+/**
+ * The scope a repository key falls in: the first that lists it (or lists `*`).
+ * `undefined` — not sent — for a record with no repository key, or one no scope lists.
+ */
+export const matchDestinationScope = (
+  scopes: readonly DestinationScope[],
+  repositoryKey: string | undefined,
+): DestinationScope | undefined => {
+  if (repositoryKey === undefined) {
+    return undefined;
+  }
+  return scopes.find(
+    (scope) => scope.repositories === ALL_REPOSITORIES || scope.repositories.has(repositoryKey),
+  );
 };
 
 const legacyDestination = (exporter: ExporterPolicy): ExportDestination => ({
@@ -245,6 +354,11 @@ export const resolveExportDestinations = (
       continue;
     }
     const signals: readonly ExportSignal[] = destination.signals ?? DEFAULT_DESTINATION_SIGNALS;
+    const flags: SignalFlags = {
+      traces: signals.includes("traces"),
+      logs: exporter.logs.enabled && signals.includes("logs"),
+      metrics: signals.includes("metrics"),
+    };
     resolved.push({
       name: destination.name,
       source: "destinations",
@@ -257,12 +371,11 @@ export const resolveExportDestinations = (
       ...(destination.metricsEndpoint === undefined
         ? {}
         : { metricsEndpoint: destination.metricsEndpoint }),
-      signals: {
-        traces: signals.includes("traces"),
-        logs: exporter.logs.enabled && signals.includes("logs"),
-        metrics: signals.includes("metrics"),
-      },
+      signals: flags,
       headers: { ...(destination.headers ?? {}) },
+      ...(destination.scopes === undefined
+        ? {}
+        : { scopes: resolveDestinationScopes(destination.scopes, flags) }),
     });
   }
   return resolved;
@@ -329,7 +442,24 @@ export type DestinationDescription = {
   readonly headerNames: readonly string[];
   /** Environment variables this destination's headers reference. */
   readonly headerVariables: readonly string[];
+  /** Per-repository filter, as configured (repositories normalized); absent when unscoped. */
+  readonly scopes?: readonly DestinationScopeDescription[];
 };
+
+export type DestinationScopeDescription = {
+  readonly repositories: typeof ALL_REPOSITORIES | readonly string[];
+  readonly signals: readonly ExportSignal[];
+  readonly contentMode?: ContentMode;
+  readonly includeSessionId: boolean;
+};
+
+const describeScope = (scope: DestinationScope): DestinationScopeDescription => ({
+  repositories:
+    scope.repositories === ALL_REPOSITORIES ? ALL_REPOSITORIES : [...scope.repositories].sort(),
+  signals: exportSignalSchema.options.filter((signal) => scope.signals[signal]),
+  ...(scope.contentMode === undefined ? {} : { contentMode: scope.contentMode }),
+  includeSessionId: scope.includeSessionId,
+});
 
 export const endpointOrigin = (endpoint: string | undefined): string | undefined => {
   if (endpoint === undefined) {
@@ -379,6 +509,7 @@ export const describeExportDestinations = (
           ? [...exporter.headerNames].sort()
           : Object.keys(destination.headers).sort(),
       headerVariables: [...new Set(variables)].sort(),
+      ...(destination.scopes === undefined ? {} : { scopes: destination.scopes.map(describeScope) }),
     };
   };
   const enabled = resolveExportDestinations(exporter).map((destination) =>
@@ -395,6 +526,15 @@ export const describeExportDestinations = (
           ...(destination.endpoint === undefined ? {} : { endpoint: destination.endpoint }),
           signals: { traces: false, logs: false, metrics: false },
           headers: { ...(destination.headers ?? {}) },
+          ...(destination.scopes === undefined
+            ? {}
+            : {
+                scopes: resolveDestinationScopes(destination.scopes, {
+                  traces: true,
+                  logs: true,
+                  metrics: true,
+                }),
+              }),
         },
         false,
       ),

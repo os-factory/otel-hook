@@ -134,6 +134,7 @@ export const runAgentSession = async (ctx, options) => {
       collector: ctx.collector,
       stateDir: ctx.stateDir,
       sessionsDir: ctx.sessionsDir,
+      configFile: options.configFile,
     }).map(quote),
   ].join(" ");
 

@@ -150,6 +150,7 @@ writer of the context files) on PATH; `AGENT_LAB_HAR` points at another `har`
 | s5 | The context file rewritten 200 times while 50 hook processes read it (atomic and torn writers) |
 | s6 | One session id under `claude_code` and `codex`; two `har` processes launching one session at once |
 | s7 | 20 concurrent hook processes over 4 sessions (start and end of one tool at the same instant): latency with and without context, with one destination down, then concurrent drains: every record once, Resource intact |
+| s9 | Two repositories in parallel (as s1), every hook also sending to a hosted-like destination scoped to repository A without `session.id` on metrics: the hosted collector gets A's spans, logs and metric points only, never B's or the stale Resource repository, with the span ids the unscoped collector got |
 
 s7's down destination is a closed port. Its config sets
 `exporter.endpointDownMillis: 2000` and the lab waits that long after reviving

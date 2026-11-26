@@ -13,6 +13,7 @@ import {
 import {
   CONTENT_MODE_DISCLOSURE,
   resolvePrivacyPolicy,
+  type ContentMode,
   type PrivacyLimits,
   type PrivacyPolicy,
 } from "./policy.js";
@@ -90,7 +91,40 @@ export interface PrivacyService {
   sanitizeExtensions(value: Readonly<Record<string, unknown>>): SanitizeExtensionsResult;
   /** Bound a string to the policy limit, reporting whether it was cut. */
   boundString(value: string): { readonly text: string; readonly truncated: boolean };
+  /**
+   * The same fact disclosed at most at `mode` (a per-destination restriction).
+   * Never raises disclosure: a fact already at or below `mode` is returned as is.
+   */
+  restrictContent(fact: ContentFact, mode: ContentMode): ContentFact;
 }
+
+/** Disclosure levels from least to most revealing. */
+const DISCLOSURE_RANK: Readonly<Record<ContentFact["disclosure"], number>> = Object.freeze({
+  omitted: 0,
+  masked: 1,
+  redacted: 2,
+  raw: 3,
+});
+
+/**
+ * Text cut by the length bound may end inside a secret that is now too short
+ * for a value pattern to recognize. Before redacting such text, its trailing
+ * run of non-whitespace — where a cut secret would sit — is dropped.
+ */
+const WHITESPACE = /\s/u;
+const withoutTrailingToken = (text: string): string => {
+  // A linear scan, not `/\S+$/`: that pattern backtracks quadratically on a long
+  // run of non-whitespace that is not at the end (CodeQL js/polynomial-redos).
+  let end = text.length;
+  while (end > 0) {
+    // Step back one code point, so a surrogate pair is never split.
+    const low = text.charCodeAt(end - 1);
+    const width = end >= 2 && low >= 0xdc00 && low <= 0xdfff ? 2 : 1;
+    if (WHITESPACE.test(text.slice(end - width, end))) break;
+    end -= width;
+  }
+  return text.slice(0, end);
+};
 
 const compilePatterns = (sources: readonly string[], flags: string): readonly RegExp[] => {
   const compiled: RegExp[] = [];
@@ -485,5 +519,30 @@ export const createPrivacyService = (policyInput: PrivacyPolicy): PrivacyService
     sanitizeAttributes,
     sanitizeExtensions,
     boundString,
+    restrictContent: (fact: ContentFact, mode: ContentMode): ContentFact => {
+      const target = CONTENT_MODE_DISCLOSURE[mode];
+      if (fact.text === undefined || DISCLOSURE_RANK[fact.disclosure] <= DISCLOSURE_RANK[target]) {
+        return fact;
+      }
+      const { text, ...rest } = fact;
+      switch (target) {
+        case "omitted":
+          return { ...rest, disclosure: "omitted", truncated: false };
+        case "masked":
+          return { ...rest, disclosure: "masked", text: maskText(text) };
+        case "redacted": {
+          const redacted = redactSecretSpans(fact.truncated ? withoutTrailingToken(text) : text);
+          return {
+            ...rest,
+            disclosure: "redacted",
+            text: redacted.text,
+            secretsRedacted: fact.secretsRedacted + redacted.count,
+          };
+        }
+        case "raw":
+          // Unreachable: nothing ranks above raw.
+          return fact;
+      }
+    },
   };
 };

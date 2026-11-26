@@ -930,6 +930,25 @@ const resumedSessionParent = (
 ): SpanScopeRef | undefined =>
   ref.family === "session" && correlation?.runSpanIdDiscriminator !== undefined ? ref : undefined;
 
+/**
+ * For each lifecycle edge whose span also *ends* in this batch, that end edge.
+ *
+ * A span belongs to what was in force when it ended, so a filter that decides
+ * per record (a destination scope) decides a start edge by its end when both
+ * are in the batch — otherwise one destination could get half of a span.
+ */
+export const spanEndEdgesOf = (events: readonly CanonicalEvent[]): ReadonlyMap<string, CanonicalEvent> => {
+  const layout = layoutBatch(events);
+  const ends = new Map<string, CanonicalEvent>();
+  for (const [eventId, groupKey] of layout.groupOf) {
+    const end = layout.groups.get(groupKey)?.end;
+    if (end !== undefined) {
+      ends.set(eventId, end);
+    }
+  }
+  return ends;
+};
+
 /** Trace and span a record derived from one canonical event belongs to. */
 export type EventTraceIdentity = {
   readonly traceId: string;

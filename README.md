@@ -1117,6 +1117,49 @@ later refuses with a non-retryable status is dropped instead of blocking the
 queue behind it. Every drop is counted on disk, by reason, and `otel-hook doctor`
 reports each destination's queued batches, bytes, and drops.
 
+#### Per-repository scopes
+
+A `destinations[]` entry may carry `scopes`, which turn it from "every record"
+into "only these repositories, at this detail" — for example a hosted receiver
+that should see two repositories, one of them without content:
+
+```json
+{
+  "name": "hosted",
+  "endpoint": "https://ingest.example/v1/traces",
+  "headers": { "authorization": "env:HOSTED_TOKEN" },
+  "signals": ["traces", "logs", "metrics"],
+  "scopes": [
+    { "repositories": ["https://github.com/acme/widget"], "contentMode": "redact" },
+    {
+      "repositories": ["git@github.com:acme/gadget.git"],
+      "signals": ["traces", "metrics"],
+      "contentMode": "omit",
+      "includeSessionId": false
+    }
+  ]
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `repositories` | Repository URLs in any remote spelling (HTTPS, `git@host:path`, `ssh://`, or `host/path`), compared by lowercased host and path without credentials, port or `.git`; or `"*"` for every record that names a repository. |
+| `signals` | Signals sent for these repositories, intersected with the destination's own `signals`. Default: all of the destination's. |
+| `contentMode` | `omit`, `mask`, `redact` or `raw`. Lowers the disclosure `privacy.contentMode` produced, for this destination only; never raises it (`exporter.logs.includeContent` still gates log bodies). |
+| `includeSessionId` | `false` leaves `session.id` off this destination's metric points for these repositories (cumulative series are then kept across sessions). Default true; cannot turn on what `exporter.metrics.includeSessionId` turned off. |
+
+A record's repository is its `vcs.repository.url.full`: the session context
+stamp (`sessionContext.dir`) for the event, else the exporter Resource
+(`--resource-attr` / `OTEL_RESOURCE_ATTRIBUTES`). The **first** scope listing it
+decides; a record that names no repository, or one no scope lists, is **not
+sent** to a scoped destination. A span is judged by its end edge when the end is
+in the same batch. Metric points are filtered point by point, so one callback's
+points can split across destinations. Filtering happens before mapping, so a
+scoped destination's spool only ever holds what passed its scopes. A destination
+without `scopes`, and the `default` destination, keep receiving everything.
+`otel-hook doctor` lists each destination's scopes; the exported configuration
+snapshot carries only their count.
+
 ### Resource attributes
 
 `exporter.resourceAttributes` adds custom attributes to the OTLP Resource every
