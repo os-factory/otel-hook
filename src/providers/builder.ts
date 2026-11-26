@@ -32,6 +32,7 @@ type ManagedFields =
   | "workspace"
   | "extensions"
   | "subagentId"
+  | "contextAttributes"
   | "target"
   | "occurredAt";
 
@@ -117,6 +118,8 @@ export const createEventFactory = (input: EventFactoryInput): EventFactory => {
       const rest: Omit<typeof drafted, "target" | "subagentId"> = { ...drafted };
       delete (rest as { target?: unknown }).target;
       delete (rest as { subagentId?: unknown }).subagentId;
+      // Session context is stamped by the core after parsing, never by an adapter.
+      delete (rest as { contextAttributes?: unknown }).contextAttributes;
 
       const sanitized =
         extensions === undefined

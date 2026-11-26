@@ -10,6 +10,7 @@
 | [0006](0006-injected-state-and-telemetry.md)   | State, telemetry, clock, ids, and logging are injected       |
 | [0007](0007-replay-stable-delivery-deduplication.md) | Replay-stable delivery deduplication, at most once     |
 | [0008](0008-per-event-worktree-target.md)      | The core resolves which git worktree (and repository) a tool event targeted |
+| [0009](0009-session-context-is-a-core-step.md) | Session context is a core step, and overrides the Resource  |
 
 Related references: [usage semantics](../usage-semantics.md),
 [registration evidence](../registration-evidence.md).

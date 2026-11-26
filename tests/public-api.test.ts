@@ -56,6 +56,13 @@ describe("public surface", () => {
       "readClaudeTranscriptTurn",
       "readClaudeTranscriptRange",
       "createClaudeTranscriptUsageEnricher",
+      // Session context (docs/session-context.md): the directory reader and the
+      // pure pieces a host can reuse.
+      "createDirectorySessionContextReader",
+      "parseSessionContextFile",
+      "segmentInForce",
+      "stampSessionContext",
+      "SESSION_CONTEXT_AGENT_TOOLS",
       "createCursorAdapter",
       "createCodexAdapter",
       "createGeminiCliAdapter",

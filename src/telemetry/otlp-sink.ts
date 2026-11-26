@@ -12,7 +12,12 @@ import type { Clock, Logger, TelemetryEmitResult, TelemetrySink } from "../runti
 import type { DurableSpool, SerializedSpan, SpoolBatch } from "./durable-spool.js";
 import { isPermanentExportFailure } from "./export-failure.js";
 import type { SpoolSendOutcome } from "./spool-queue.js";
-import { replayResource, resourceFromExporterPolicy } from "./exporter-resource.js";
+import {
+  agreedContextAttributes,
+  replayResource,
+  resourceFromExporterPolicy,
+  resourceWithContext,
+} from "./exporter-resource.js";
 import {
   assembleReadableSpan,
   canonicalEventsToReadableSpans,
@@ -169,10 +174,10 @@ export const createOtlpTraceSink = (options: OtlpTraceSinkOptions): OtlpTelemetr
       exporter.export([...spans], (result: ExportResult) => resolve(result));
     });
 
-  const toSpoolBatch = (spans: readonly ReadableSpan[]): SpoolBatch => ({
+  const toSpoolBatch = (spans: readonly ReadableSpan[], batchResource: Resource): SpoolBatch => ({
     providerId: options.providerId,
     installationId: options.installationId,
-    resourceAttributes: { ...resource.attributes },
+    resourceAttributes: { ...batchResource.attributes },
     instrumentationScope: { name: scope.name, ...(scope.version === undefined ? {} : { version: scope.version }) },
     spans: spans.map(serializeSpan),
     enqueuedAt: options.clock.now(),
@@ -222,8 +227,11 @@ export const createOtlpTraceSink = (options: OtlpTraceSinkOptions): OtlpTelemetr
       return { accepted: 0, rejected: 0, errors: [] };
     }
     const resolved = await resolveCorrelations(events);
+    // Session context overrides the same keys on the Resource for this batch, so
+    // a backend reading the Resource sees what the records say.
+    const batchResource = resourceWithContext(resource, agreedContextAttributes(events));
     const spans = canonicalEventsToReadableSpans(events, {
-      resource,
+      resource: batchResource,
       instrumentationScope: scope,
       correlations: resolved.correlations,
       ...(resolved.available === undefined ? {} : { correlationAvailable: resolved.available }),
@@ -256,7 +264,7 @@ export const createOtlpTraceSink = (options: OtlpTraceSinkOptions): OtlpTelemetr
       health.recordFailure("telemetry-export-failure", batch.length, options.clock.now());
       const permanent = isPermanentExportFailure(result);
       if (options.spool !== undefined && !permanent) {
-        const spoolResult = await options.spool.enqueue(toSpoolBatch(batch)).catch(() => ({
+        const spoolResult = await options.spool.enqueue(toSpoolBatch(batch, batchResource)).catch(() => ({
           spooled: false as const,
           reason: "capacity-exceeded" as const,
         }));

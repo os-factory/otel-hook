@@ -207,3 +207,21 @@ describe("CLI argument parsing", () => {
     expect(parseCliArgs(["run", "--help"])).toEqual({ status: "help", topic: "run" });
   });
 });
+
+describe("--session-context-dir", () => {
+  it("takes an absolute directory and maps it to sessionContext.dir, on run and doctor", async () => {
+    const { policyFlagsToPatch } = await import("../../src/cli/context.js");
+    const run = expectRun(["run", "--session-context-dir", "/var/lib/sessions"]);
+    expect(run.policy.sessionContextDir).toBe("/var/lib/sessions");
+    expect(policyFlagsToPatch(run.policy).sessionContext).toEqual({ dir: "/var/lib/sessions" });
+    expect(policyFlagsToPatch(expectRun(["run"]).policy).sessionContext).toBeUndefined();
+    const doctor = parseCliArgs(["doctor", "--session-context-dir", "/var/lib/sessions"]);
+    expect(doctor.status).toBe("command");
+  });
+
+  it("refuses a relative directory", () => {
+    expect(expectErrors(["run", "--session-context-dir", "relative/sessions"])).toEqual([
+      "flag --session-context-dir expects an absolute path",
+    ]);
+  });
+});

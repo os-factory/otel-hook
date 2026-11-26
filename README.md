@@ -286,7 +286,7 @@ otel-hook doctor --json
 
 Reports the version, an attribute-safe configuration snapshot, a real
 write/read/delete probe of the state directory, spool depth, exporter
-configuration, privacy mode, and the adapter count. With
+configuration, privacy mode, [session context](docs/session-context.md), and the adapter count. With
 [multiple destinations](#multiple-destinations) it also reports each one: its
 signals and endpoint origins, the environment variables its headers reference (by
 name — never a value), any that are missing, and its spool depth and drops. Exits 1 when any check fails,
@@ -938,6 +938,28 @@ const enriched = await attachClaudeTranscriptTurn(hookPayload);
 
 See [finding 8](docs/claude-code-usage-contract.md#finding-8-the-model-is-on-sessionstart-and-in-the-transcript-never-on-stop).
 
+#### Session context
+
+A session's environment is fixed when the agent starts, but the work it does is
+not: it can start in the main checkout and move into a slot later. A harness can
+write what the session is working on to a **session context** file, and
+otel-hook puts it on every span, log record and metric point from then on:
+
+```bash
+otel-hook run --provider claude-code --session-context-dir /home/dev/.har/sessions
+# or, in --config-file: { "sessionContext": { "dir": "/home/dev/.har/sessions" } }
+```
+
+The hook reads `<dir>/<agent-tool>/<session-id>.json` (`claude_code`, `codex`,
+`cursor`, …), picks the segment in force at each event's time, and applies its
+attributes. They override the same keys from the Resource, on records and on the
+Resource itself, so a stale `factory.attempt.id` from the environment is not
+exported. Subagent events use their parent session's file. `factory.local.*` is
+never applied. No file, an invalid one, or no segment in force: nothing is added,
+and the hook never fails. There is no environment variable for it, because Claude
+Code strips `OTEL_*` variables from hooks. Format and rules:
+[docs/session-context.md](docs/session-context.md).
+
 ### Multiple destinations
 
 `exporter.destinations` sends every batch to several OTLP endpoints at once — a
@@ -1123,6 +1145,9 @@ these namespaces are therefore also copied onto every span and log record:
 `session.id` is not copied as-is: it is the externally supplied session key
 described above, resolved (and trimmed) on its own. Other attributes, such as
 `deployment.environment`, stay on the Resource only.
+
+[Session context](#session-context) attributes are layered over these on every
+record, and override the same keys on the Resource.
 
 Diagnostics report resource attribute **names** only — `doctor --json` shows
 `exporter.resource_attribute_names`. A name is already on the wire in every

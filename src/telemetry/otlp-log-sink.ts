@@ -14,7 +14,12 @@ import type { Clock, Logger, TelemetryEmitResult, TelemetrySink } from "../runti
 import type { DurableLogSpool, LogSpoolBatch, SerializedLogRecord } from "./durable-log-spool.js";
 import { isPermanentExportFailure } from "./export-failure.js";
 import type { SpoolSendOutcome } from "./spool-queue.js";
-import { replayResource, resourceFromExporterPolicy } from "./exporter-resource.js";
+import {
+  agreedContextAttributes,
+  replayResource,
+  resourceFromExporterPolicy,
+  resourceWithContext,
+} from "./exporter-resource.js";
 import {
   canonicalEventsToLogRecords,
   NO_LOG_CONTENT,
@@ -331,10 +336,10 @@ export const createOtlpLogSink = (options: OtlpLogSinkOptions): OtlpLogTelemetry
       exporter.export([...records], (result: ExportResult) => resolve(result));
     });
 
-  const toSpoolBatch = (records: readonly ReadableLogRecord[]): LogSpoolBatch => ({
+  const toSpoolBatch = (records: readonly ReadableLogRecord[], batchResource: Resource): LogSpoolBatch => ({
     providerId: options.providerId,
     installationId: options.installationId,
-    resourceAttributes: { ...resource.attributes },
+    resourceAttributes: { ...batchResource.attributes },
     instrumentationScope: {
       name: scope.name,
       ...(scope.version === undefined ? {} : { version: scope.version }),
@@ -382,8 +387,10 @@ export const createOtlpLogSink = (options: OtlpLogSinkOptions): OtlpLogTelemetry
       return { accepted: 0, rejected: 0, errors: [] };
     }
     const resolved = await resolveCorrelations(events);
+    // Session context overrides the same keys on the Resource for this batch.
+    const batchResource = resourceWithContext(resource, agreedContextAttributes(events));
     const mapped = canonicalEventsToLogRecords(events, {
-      resource,
+      resource: batchResource,
       instrumentationScope: scope,
       content,
       correlations: resolved.correlations,
@@ -422,7 +429,7 @@ export const createOtlpLogSink = (options: OtlpLogSinkOptions): OtlpLogTelemetry
       health.recordFailure("telemetry-export-failure", batch.length, options.clock.now());
       const permanent = isPermanentExportFailure(result);
       if (options.spool !== undefined && !permanent) {
-        const spoolResult = await options.spool.enqueue(toSpoolBatch(batch)).catch(() => ({
+        const spoolResult = await options.spool.enqueue(toSpoolBatch(batch, batchResource)).catch(() => ({
           spooled: false as const,
           reason: "capacity-exceeded" as const,
         }));

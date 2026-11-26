@@ -327,5 +327,7 @@ export const describeResolvedConfig = (config: OtelHookConfig): Attributes => {
     "detection.allow_ambiguous_fallback": config.detection.allowAmbiguousFallback,
     "diagnostics.log_level": config.diagnostics.logLevel,
     "diagnostics.emit_error_events": config.diagnostics.emitErrorEvents,
+    // Whether, never where: the directory is a local path.
+    "session_context.enabled": config.sessionContext?.dir !== undefined,
   };
 };

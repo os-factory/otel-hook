@@ -123,6 +123,7 @@ export const policyFlagsToPatch = (policy: CliPolicyFlags): OtelHookConfigPatch 
     ...(policy.claudeTranscriptUsage === true
       ? { providers: { claudeCode: { readTranscriptUsage: true } } }
       : {}),
+    ...(policy.sessionContextDir === undefined ? {} : { sessionContext: { dir: policy.sessionContextDir } }),
   } as OtelHookConfigPatch;
 };
 
