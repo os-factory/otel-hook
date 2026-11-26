@@ -88,6 +88,30 @@ describe("Claude Code adapter: lifecycle mapping", () => {
     expect(event.outcome).toBe("error");
   });
 
+  it("PostToolUseFailure with Claude Code 2.1.x's `error` field -> tool.end with outcome error", async () => {
+    // Observed live: the failure message arrives as `error`, not `tool_error`.
+    const { tool_error: message, ...rest } = fixtures.postToolUseFailure;
+    const { run } = ingest({ ...rest, error: message, is_interrupt: false });
+    const outcome = await run();
+    expect(outcome.attribution).toBe("attributed");
+    const event = eventOfType(outcome.events, "tool.end");
+    if (event.type !== "tool.end") throw new Error("unreachable");
+    expect(event.outcome).toBe("error");
+    expect(event.toolCallId).toBe("toolu_synthetic_0002");
+    // Content is still omitted by default whichever spelling carried it.
+    expect(JSON.stringify(outcome.events)).not.toContain("synthetic-widget-loader");
+  });
+
+  it("PostToolUseFailure without any error message still ends the tool call", async () => {
+    const rest: Record<string, unknown> = { ...fixtures.postToolUseFailure };
+    delete rest.tool_error;
+    const { run } = ingest(rest);
+    const outcome = await run();
+    const event = eventOfType(outcome.events, "tool.end");
+    if (event.type !== "tool.end") throw new Error("unreachable");
+    expect(event.outcome).toBe("error");
+  });
+
   it("PermissionRequest is recognized but carries no telemetry", async () => {
     const { run } = ingest(fixtures.permissionRequest);
     const outcome = await run();

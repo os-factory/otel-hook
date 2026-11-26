@@ -91,7 +91,24 @@ export const normalizeClaudeHookPayload = (payload: unknown): unknown => {
   if (record === undefined) {
     return payload;
   }
-  return applyUsageShape(applyPrintResultShape(applyFieldAliases(record)));
+  return applyUsageShape(applyToolFailureShape(applyPrintResultShape(applyFieldAliases(record))));
+};
+
+/**
+ * Claude Code 2.1.x sends a failed tool's message as `error` on
+ * `PostToolUseFailure` (observed in the agent lab), not the `tool_error` an
+ * earlier contract named. Fold it onto `tool_error` for that event only, so the
+ * failure still ends its tool span; `tool_error` wins when both are present.
+ */
+const applyToolFailureShape = (record: Record<string, unknown>): Record<string, unknown> => {
+  if (
+    record.hook_event_name !== "PostToolUseFailure" ||
+    record.tool_error !== undefined ||
+    record.error === undefined
+  ) {
+    return record;
+  }
+  return { ...record, tool_error: record.error };
 };
 
 /**

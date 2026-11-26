@@ -38,6 +38,13 @@ export type SpanCorrelationFacts = {
   readonly endedAt?: number;
   readonly parent?: SpanScopeRef;
   readonly attributes?: SpanAttributes;
+  /**
+   * Set when this record is a *new run* of a scope whose span was already
+   * exported (a resumed Claude Code session fires `SessionStart` again for the
+   * same session id): the run's start event id, mixed into its span id so the
+   * second run never re-uses the id already on the wire.
+   */
+  readonly runKey?: string;
 };
 
 export type SpanStartInput = {
@@ -180,6 +187,8 @@ type SpanRecord = {
   readonly endedAt?: number;
   readonly parent?: SpanScopeRef;
   readonly attributes?: SpanAttributes;
+  /** See {@link SpanCorrelationFacts.runKey}. */
+  readonly runKey?: string;
   /**
    * True once an OTLP record has been produced for this scope under its derived
    * span id.
@@ -267,6 +276,7 @@ const encodeRecord = (record: SpanRecord): StateValue => ({
     ...(record.endEventId === undefined ? {} : { endEventId: record.endEventId }),
     ...(record.endedAt === undefined ? {} : { endedAt: record.endedAt }),
     ...(record.exported === true ? { exported: true } : {}),
+    ...(record.runKey === undefined ? {} : { runKey: record.runKey }),
     ...(record.parent === undefined
       ? {}
       : { parentFamily: record.parent.family, parentScopeKey: record.parent.scopeKey }),
@@ -296,6 +306,7 @@ const decodeRecord = (attributes: Attributes): DecodedRecord => {
     return { kind: "corrupt" };
   }
   const exported = attributes["exported"] === true;
+  const runKey = optionalString(attributes["runKey"]);
   const parentFamily = attributes["parentFamily"];
   const parentScopeKey = optionalString(attributes["parentScopeKey"]);
   const parent =
@@ -313,6 +324,7 @@ const decodeRecord = (attributes: Attributes): DecodedRecord => {
       ...(endedAt === undefined ? {} : { endedAt }),
       ...(parent === undefined ? {} : { parent }),
       ...(exported ? { exported: true } : {}),
+      ...(runKey === undefined ? {} : { runKey }),
       ...(decodedAttributes === undefined ? {} : { attributes: decodedAttributes }),
     },
   };
@@ -323,6 +335,7 @@ const factsOf = (record: SpanRecord): SpanCorrelationFacts => ({
   ...(record.endedAt === undefined ? {} : { endedAt: record.endedAt }),
   ...(record.parent === undefined ? {} : { parent: record.parent }),
   ...(record.attributes === undefined ? {} : { attributes: record.attributes }),
+  ...(record.runKey === undefined ? {} : { runKey: record.runKey }),
 });
 
 /**
@@ -333,11 +346,12 @@ const factsOf = (record: SpanRecord): SpanCorrelationFacts => ({
 const correlationTimesOf = (
   facts: SpanCorrelationFacts,
   options: { readonly withStart: boolean } = { withStart: true },
-): Pick<SpanCorrelation, "startMillis" | "endMillis" | "parent" | "attributes"> => ({
+): Pick<SpanCorrelation, "startMillis" | "endMillis" | "parent" | "attributes" | "runSpanIdDiscriminator"> => ({
   ...(facts.startedAt === undefined || !options.withStart ? {} : { startMillis: facts.startedAt }),
   ...(facts.endedAt === undefined ? {} : { endMillis: facts.endedAt }),
   ...(facts.parent === undefined ? {} : { parent: facts.parent }),
   ...(facts.attributes === undefined ? {} : { attributes: facts.attributes }),
+  ...(facts.runKey === undefined ? {} : { runSpanIdDiscriminator: facts.runKey }),
 });
 
 const orphanClassificationOf = (reason: SpanEndOrphanReason): SpanOrphanClassification => {
@@ -435,11 +449,15 @@ export const createSpanCorrelator = (deps: SpanCorrelatorDependencies): SpanCorr
       }
 
       // Either nothing was recorded, or a *different* start claims this scope
-      // key: the previous span is superseded rather than merged into.
+      // key: the previous span is superseded rather than merged into. When the
+      // previous span was already exported under the scope's derived id (a
+      // resumed session starting a second run), this run gets its own id.
+      const previouslyExported = decoded.kind === "present" && decoded.record.exported === true;
       const fresh: SpanRecord = {
         providerId: input.providerId,
         startEventId: input.eventId,
         startedAt: input.occurredAt,
+        ...(previouslyExported ? { runKey: input.eventId } : {}),
         ...(input.parent === undefined ? {} : { parent: input.parent }),
         ...(input.attributes === undefined ? {} : { attributes: input.attributes }),
       };

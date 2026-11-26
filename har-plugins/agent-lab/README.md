@@ -18,6 +18,7 @@ Run:
 ```bash
 npm run lab:claude
 npm run lab:codex
+npm run lab:concurrency   # session context: many repos, slots, agents (needs har)
 node har-plugins/agent-lab/scripts/run-lab.mjs --provider claude-code
 node har-plugins/agent-lab/scripts/run-lab.mjs --provider codex
 ```

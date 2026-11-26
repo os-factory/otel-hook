@@ -246,4 +246,25 @@ describe("a poisoned file cannot wedge the queue head", () => {
     expect(result.drained).toBe(1);
     expect(result.remaining).toBe(0);
   });
+
+  it("skips a batch a concurrent drain took between the listing and the read", async () => {
+    // Two hook processes drain one queue (many sessions on one machine): the
+    // second lists a file the first has already delivered and unlinked. That is
+    // not a corrupt batch and must not be counted or logged as one.
+    await plant("1", goodBatch());
+    await plant("2", goodBatch());
+    let first = true;
+    const result = await makeSpool().drain(async () => {
+      if (first) {
+        first = false;
+        await rm(path.join(spoolDir(), `${"2".padStart(16, "0")}-planted.json`));
+      }
+      return true;
+    });
+    expect(result.quarantined).toBe(0);
+    expect(result.drained).toBe(1);
+    expect(result.remaining).toBe(0);
+    const corrupt = path.join(rootDir, sanitizeSegment(PROVIDER), INSTALLATION, "spool-corrupt");
+    expect(await readdir(corrupt).catch(() => [])).toEqual([]);
+  });
 });

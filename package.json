@@ -15,6 +15,7 @@
     "lab": "node har-plugins/agent-lab/scripts/run-lab.mjs",
     "lab:claude": "node har-plugins/agent-lab/scripts/run-lab.mjs --provider claude-code",
     "lab:codex": "node har-plugins/agent-lab/scripts/run-lab.mjs --provider codex",
+    "lab:concurrency": "node har-plugins/agent-lab/scripts/run-lab.mjs --scenario concurrency",
     "release": "semantic-release"
   },
   "keywords": [],

@@ -13,6 +13,7 @@ export const claudeCodeProvider = {
   bin: "claude",
   binEnv: "CLAUDE_BIN",
   otelProviderId: "claude-code",
+  agentTool: "claude_code",
   settingsRel: [".claude", "settings.json"],
   scenarioRel: ["scripts", "scenarios", "claude-read-then-ready.json"],
   usageContract:

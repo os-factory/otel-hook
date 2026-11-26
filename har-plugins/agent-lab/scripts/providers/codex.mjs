@@ -39,6 +39,7 @@ export const codexProvider = {
   bin: "codex",
   binEnv: "CODEX_BIN",
   otelProviderId: "codex",
+  agentTool: "codex",
   settingsRel: [".codex", "hooks.json"],
   mirrorProjectHooksToConfigDir: false,
   scenarioRel: ["scripts", "scenarios", "codex-read-then-ready.json"],

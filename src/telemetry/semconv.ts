@@ -183,6 +183,14 @@ export type SpanCorrelation = {
    * discriminator keeps them from claiming the same span id.
    */
   readonly spanIdDiscriminator?: string;
+  /**
+   * Set for a later *run* of a scope whose first run was already exported (a
+   * resumed session): mixed into the span id of this run's record, on the
+   * deferred start as well as on the end, so both edges agree and the id differs
+   * from the first run's. A resumed session span hangs under the first run's
+   * session span, so the trace stays one tree.
+   */
+  readonly runSpanIdDiscriminator?: string;
   /** Start recovered from state; authoritative over the batch's own start edge. */
   readonly startMillis?: number;
   /** End recovered from state; authoritative so a redelivered end re-exports an identical span. */
@@ -534,8 +542,9 @@ const buildLifecycleSpan = (
   const resolved = resolvePairing(group, anchor, correlation);
   const traceId = plan.traceId;
   const spanId = plan.spanId;
+  const parentRef = resolved.parent ?? resumedSessionParent(group.ref, correlation);
   const parentSpanId =
-    resolved.parent === undefined ? undefined : deriveSpanId(providerId, sessionId, resolved.parent);
+    parentRef === undefined ? undefined : deriveSpanId(providerId, sessionId, parentRef);
 
   let name: string = group.ref.family;
   let kind: SpanKind = SpanKind.INTERNAL;
@@ -881,7 +890,9 @@ const planGroup = (
   // end edge will publish. Only a record actually going out now may claim a
   // discriminated one.
   const effective = durablyRecorded ? correlation : effectiveCorrelation(group, correlation);
-  const discriminator = durablyRecorded ? undefined : effective?.spanIdDiscriminator;
+  const discriminator = durablyRecorded
+    ? runDiscriminatorOf(correlation)
+    : (effective?.spanIdDiscriminator ?? runDiscriminatorOf(effective));
 
   return {
     group,
@@ -905,6 +916,19 @@ const planGroup = (
           ),
   };
 };
+
+const runDiscriminatorOf = (correlation: SpanCorrelation | undefined): string | undefined =>
+  correlation?.runSpanIdDiscriminator === undefined ? undefined : `run:${correlation.runSpanIdDiscriminator}`;
+
+/**
+ * The parent of a later run of a session (see `runSpanIdDiscriminator`): the
+ * session's first-run span, which children of every run already point at.
+ */
+const resumedSessionParent = (
+  ref: SpanScopeRef,
+  correlation: SpanCorrelation | undefined,
+): SpanScopeRef | undefined =>
+  ref.family === "session" && correlation?.runSpanIdDiscriminator !== undefined ? ref : undefined;
 
 /** Trace and span a record derived from one canonical event belongs to. */
 export type EventTraceIdentity = {
@@ -959,7 +983,8 @@ export const canonicalEventTraceIdentities = (
       });
       continue;
     }
-    const parent = plan.correlation?.parent ?? parentScopeRefOf(event);
+    const parent =
+      plan.correlation?.parent ?? parentScopeRefOf(event) ?? resumedSessionParent(plan.group.ref, plan.correlation);
     identities.set(event.eventId, {
       traceId: plan.traceId,
       spanId: plan.spanId,

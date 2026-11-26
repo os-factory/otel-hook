@@ -96,6 +96,8 @@ export type SpoolQueueOptions<TBatch> = StoreNamespace & {
   readonly maxAgeMillis?: number;
   /** Default `refuse-new`. */
   readonly overflow?: SpoolOverflowPolicy;
+  /** Age after which a claim left by a dead drain is put back. Default {@link SPOOL_CLAIM_STALE_MILLIS}. */
+  readonly claimStaleMillis?: number;
   /**
    * Directory holding the queue, under the identity namespace. One name per
    * signal, so a batch of one signal can never be drained by the other's sender —
@@ -202,6 +204,33 @@ export const readSpoolQueueStats = async (queueDir: string): Promise<SpoolStats>
 
 /** Default bound on a single drain pass, so one invocation's flush stays short. */
 export const DEFAULT_DRAIN_MAX_BATCHES = 20;
+
+/**
+ * A drain claims a batch (renames it out of the queue) before sending it, so two
+ * hook processes draining one queue at once — many sessions on one machine —
+ * never deliver the same batch twice. The claim names its process: a claim whose
+ * process is gone (a hook that exited at its flush deadline mid-send) is put back
+ * by the next drain; one whose process cannot be checked is put back once it is
+ * this old.
+ */
+export const SPOOL_CLAIM_STALE_MILLIS = 5 * 60 * 1000;
+const CLAIM_MARKER = ".claimed-";
+
+/** Whether the process that made a claim still runs; unknown counts as alive. */
+const isClaimOwnerAlive = (pid: number): boolean => {
+  if (!Number.isSafeInteger(pid) || pid <= 0) {
+    return true;
+  }
+  if (pid === process.pid) {
+    return true;
+  }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (thrown) {
+    return (thrown as NodeJS.ErrnoException | undefined)?.code !== "ESRCH";
+  }
+};
 
 const isErrnoException = (thrown: unknown, code: string): boolean =>
   thrown instanceof Error && (thrown as NodeJS.ErrnoException).code === code;
@@ -387,12 +416,42 @@ export const createSpoolQueue = <TBatch>(
     return { spooled: true };
   };
 
+  /** Put back claims a crashed drain left behind (rename sets ctime: the claim's age). */
+  const releaseStaleClaims = async (): Promise<void> => {
+    let entries: string[];
+    try {
+      entries = await readdir(queueDir);
+    } catch {
+      return;
+    }
+    const now = Date.now();
+    for (const entry of entries) {
+      const marker = entry.lastIndexOf(CLAIM_MARKER);
+      if (marker <= 0) {
+        continue;
+      }
+      const claimPath = path.join(queueDir, entry);
+      const owner = Number.parseInt(entry.slice(marker + CLAIM_MARKER.length), 10);
+      try {
+        if (
+          !isClaimOwnerAlive(owner) ||
+          now - (await stat(claimPath)).ctimeMs > (options.claimStaleMillis ?? SPOOL_CLAIM_STALE_MILLIS)
+        ) {
+          await rename(claimPath, path.join(queueDir, entry.slice(0, marker)));
+        }
+      } catch {
+        // released or finished by its owner meanwhile
+      }
+    }
+  };
+
   const drain = async (
     send: (batch: TBatch) => Promise<SpoolSendOutcome>,
     drainOptions?: { readonly maxBatches?: number },
   ): Promise<SpoolDrainResult> => {
     await ensureDirs();
     const cap = drainOptions?.maxBatches ?? DEFAULT_DRAIN_MAX_BATCHES;
+    await releaseStaleClaims();
     let files = await listSorted();
     if (options.maxAgeMillis !== undefined) {
       // Expired batches are dropped, not sent: a collector would place them far in
@@ -420,7 +479,17 @@ export const createSpoolQueue = <TBatch>(
       if (fileName === undefined) {
         break;
       }
-      const filePath = path.join(queueDir, fileName);
+      const queuedPath = path.join(queueDir, fileName);
+      const filePath = path.join(
+        queueDir,
+        `${fileName}${CLAIM_MARKER}${String(process.pid)}-${randomBytes(4).toString("hex")}`,
+      );
+      try {
+        await rename(queuedPath, filePath);
+      } catch {
+        // Claimed, drained or evicted by a concurrent process: not ours to send.
+        continue;
+      }
 
       /**
        * Move a file out of the queue, or delete it if quarantine is unavailable.
@@ -446,9 +515,21 @@ export const createSpoolQueue = <TBatch>(
         }
       };
 
+      let text: string;
+      try {
+        text = await readFile(filePath, "utf8");
+      } catch (thrown) {
+        if ((thrown as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
+          // A concurrent hook process drained (or evicted) it between our listing
+          // and this read: it already left the queue, nothing to quarantine.
+          continue;
+        }
+        await quarantine("unreadable");
+        continue;
+      }
       let parsed: unknown;
       try {
-        parsed = JSON.parse(await readFile(filePath, "utf8")) as unknown;
+        parsed = JSON.parse(text) as unknown;
       } catch {
         await quarantine("unparseable-json");
         continue;
@@ -481,6 +562,8 @@ export const createSpoolQueue = <TBatch>(
         await unlink(filePath).catch(() => undefined);
         drained += 1;
       } else {
+        // Back in the queue, under its own name, for the next drain.
+        await rename(filePath, queuedPath).catch(() => undefined);
         failed += 1;
         break;
       }

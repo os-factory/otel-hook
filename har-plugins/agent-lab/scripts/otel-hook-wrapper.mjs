@@ -10,12 +10,19 @@
  * 3. On Stop, attaches the mock's last `usage` object if the host sent none.
  * 4. Exec's `otel-hook run` with the (possibly decorated) payload on stdin.
  *
+ * With `--gate-dir <dir>` (the concurrency scenarios), each hook first drops an
+ * `arrived` marker naming its session and event, and a hook whose event has a
+ * `hold.<event>` file in that directory waits (bounded) for the lab to write
+ * `<session-id>.<event>.release` before it forwards. That is how the lab runs a
+ * harness command at a precise point of a live session (bind a session that
+ * just started, move a session to another slot between two tool hooks).
+ *
  * Fail-open: any wrapper error still forwards the original payload so the
  * host agent is not blocked.
  */
 
 import { spawn } from "node:child_process";
-import { appendFile, mkdir } from "node:fs/promises";
+import { access, appendFile, mkdir, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 
 const readStdin = async () => {
@@ -100,6 +107,42 @@ const parseFlag = (name) => {
 const otelArgv = process.argv.slice(dashDash + 1);
 const dumpPath = parseFlag("--hooks-jsonl") ?? process.env.OTEL_HOOK_LAB_HOOKS_JSONL;
 const mockUrl = parseFlag("--mock-url") ?? process.env.OTEL_HOOK_LAB_MOCK_URL;
+const gateDir = parseFlag("--gate-dir");
+
+const GATE_POLL_MILLIS = 25;
+const GATE_MAX_WAIT_MILLIS = 25_000;
+const SAFE_NAME = /^[A-Za-z0-9._-]{1,200}$/;
+
+/** Lab-only rendezvous; any failure forwards at once (fail-open, like the hook). */
+const passGate = async (sessionId, eventName) => {
+  if (typeof gateDir !== "string" || !SAFE_NAME.test(sessionId) || !SAFE_NAME.test(eventName)) {
+    return;
+  }
+  try {
+    const stamp = `${String(Date.now())}-${String(process.pid)}`;
+    await writeFile(
+      path.join(gateDir, `${sessionId}.${eventName}.${stamp}.arrived`),
+      `${JSON.stringify({ sessionId, eventName, at: Date.now() })}\n`,
+    );
+    try {
+      await access(path.join(gateDir, `hold.${eventName}`));
+    } catch {
+      return;
+    }
+    const release = path.join(gateDir, `${sessionId}.${eventName}.release`);
+    const deadline = Date.now() + GATE_MAX_WAIT_MILLIS;
+    while (Date.now() < deadline) {
+      try {
+        await access(release);
+        return;
+      } catch {
+        await new Promise((resolve) => setTimeout(resolve, GATE_POLL_MILLIS));
+      }
+    }
+  } catch {
+    // never block the host on lab plumbing
+  }
+};
 
 let raw = "";
 try {
@@ -125,6 +168,7 @@ const dump = {
   had_usage_before_wrapper: hadUsage,
   usage_attached: false,
   ...(typeof payload.tool_name === "string" ? { tool_name: payload.tool_name } : {}),
+  ...(typeof payload.session_id === "string" ? { session_id: payload.session_id } : {}),
 };
 
 try {
@@ -144,6 +188,11 @@ try {
 } catch (error) {
   dump.wrapper_error = error instanceof Error ? error.name : "unknown";
 }
+
+if (typeof payload?.session_id === "string") {
+  await passGate(payload.session_id, eventName);
+}
+dump.forwarded_at = Date.now();
 
 if (typeof dumpPath === "string" && dumpPath.length > 0) {
   try {

@@ -148,6 +148,33 @@ otel-hook does not know whether the work a segment describes has ended. A
 writer that ends that work must close the segment (set `to`); a segment left
 open stays in force.
 
+## Many sessions at once
+
+Each hook process reads the one file of its own event's session, and each export
+batch is built from one invocation's events, so sessions never share a stamp or a
+Resource: two repositories on the same slot number, two agents in one slot, a
+Claude Code and a Codex session that happen to share an id (separate agent-tool
+directories), and batches replayed from a spool (each keeps the Resource it was
+recorded with). The agent lab's concurrency scenarios check all of these on the
+wire with real agents and HAR as the writer (`.har/stages/AGENT-LAB.md`).
+
+What a writer should know:
+
+- **Write atomically** (temp file + rename). A reader that opens a torn or
+  momentarily missing file stamps nothing for that event; it never stamps from a
+  half-written one.
+- **A boundary is as precise as the write.** A writer picks an instant, then
+  writes the file; a hook that reads in between still sees the previous segment
+  open, so an event in that window (a few milliseconds) carries the previous
+  segment. A writer that needs exact boundaries can set `from`/`to` slightly
+  ahead of the write.
+- **Read-modify-write is the writer's to serialize.** otel-hook only reads; two
+  writer processes updating one session's file at once can lose a segment unless
+  the writer locks.
+- **Records before the first segment carry none.** A session that starts before
+  its harness writes the file (an agent whose first act is to launch a slot)
+  exports its first events with no context.
+
 ## Library
 
 `createDirectorySessionContextReader({ dir })` is the filesystem reader the CLI
