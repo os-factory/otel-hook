@@ -634,3 +634,56 @@ describe("cross-process span correlation", () => {
     expect(drained?.durationMillis).toBe(750);
   });
 });
+
+describe("a resumed session (a second run under the same session id)", () => {
+  const sessionStart = (invocationId: string, eventId: string, occurredAt: number): CanonicalEvent =>
+    buildEvent(invocationId, { type: "session.start", eventId, sequence: 0, occurredAt, sessionKind: "non-interactive" });
+  const sessionEnd = (invocationId: string, eventId: string, occurredAt: number): CanonicalEvent =>
+    buildEvent(invocationId, { type: "session.end", eventId, sequence: 0, occurredAt, reason: "completed" });
+
+  it("exports each run's session span under its own span id, in the same trace and tree", async () => {
+    const collector = await withCollector();
+    const rootDir = await withStateRoot();
+
+    // Run 1: SessionStart and SessionEnd in two processes.
+    await startProcess(rootDir, collector.url).emit([sessionStart("inv_1", "evt_start_1", 1_000)]);
+    await startProcess(rootDir, collector.url).emit([sessionEnd("inv_2", "evt_end_1", 2_000)]);
+    // Run 2 (`claude -p --resume`): same session id, new SessionStart / SessionEnd.
+    await startProcess(rootDir, collector.url).emit([sessionStart("inv_3", "evt_start_2", 5_000)]);
+    // A tool of run 2: its parent is the session scope.
+    await startProcess(rootDir, collector.url).emit([
+      toolStartEvent("inv_4", { eventId: "evt_tool_start_2", occurredAt: 5_100, generationId: undefined }),
+    ]);
+    await startProcess(rootDir, collector.url).emit([
+      toolEndEvent("inv_5", { eventId: "evt_tool_end_2", occurredAt: 5_200 }),
+    ]);
+    await startProcess(rootDir, collector.url).emit([sessionEnd("inv_6", "evt_end_2", 6_000)]);
+
+    const spans = exportedSpans(collector);
+    const ids = spans.map((span) => `${span.traceId}:${span.spanId}`);
+    expect(new Set(ids).size).toBe(ids.length);
+
+    const sessions = spans.filter((span) => span.name === "session");
+    expect(sessions).toHaveLength(2);
+    const [first, second] = sessions;
+    expect(first?.startMillis).toBe(1_000);
+    expect(second?.startMillis).toBe(5_000);
+    expect(second?.traceId).toBe(first?.traceId);
+    expect(second?.spanId).not.toBe(first?.spanId);
+    expect(first?.parentSpanId ?? "").toBe("");
+    // The later run hangs under the first run's span, so the trace stays one tree.
+    expect(second?.parentSpanId).toBe(first?.spanId);
+  });
+
+  it("a third run gets yet another id", async () => {
+    const collector = await withCollector();
+    const rootDir = await withStateRoot();
+    for (const [index, at] of [1_000, 5_000, 9_000].entries()) {
+      await startProcess(rootDir, collector.url).emit([sessionStart(`inv_s${String(index)}`, `evt_s${String(index)}`, at)]);
+      await startProcess(rootDir, collector.url).emit([sessionEnd(`inv_e${String(index)}`, `evt_e${String(index)}`, at + 500)]);
+    }
+    const sessions = exportedSpans(collector).filter((span) => span.name === "session");
+    expect(sessions).toHaveLength(3);
+    expect(new Set(sessions.map((span) => span.spanId)).size).toBe(3);
+  });
+});

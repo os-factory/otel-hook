@@ -7,6 +7,11 @@
  * Usage:
  *   node har-plugins/agent-lab/scripts/run-lab.mjs --provider claude-code
  *   node har-plugins/agent-lab/scripts/run-lab.mjs --provider codex
+ *   node har-plugins/agent-lab/scripts/run-lab.mjs --scenario concurrency [--only s1,s4]
+ *
+ * `--scenario concurrency` runs the session-context concurrency scenarios
+ * (scripts/concurrency/): many repositories, slots and agents at once, with real
+ * `claude`, `codex` and `har` (sandbox HOME) — see AGENT-LAB.md.
  *
  * Env:
  *   AGENT_LAB=0        skip (exit 0)
@@ -32,6 +37,7 @@ import { startLabCollector } from "./collector.mjs";
 import { decodeAllExportedLogRecords, decodeAllExportedMetrics, decodeAllExportedSpans } from "./otlp-decode.mjs";
 import { claudeCodeProvider } from "./providers/claude-code.mjs";
 import { codexProvider } from "./providers/codex.mjs";
+import { runConcurrencyLab } from "./concurrency/run-concurrency.mjs";
 
 const PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const REPO_ROOT = path.resolve(PLUGIN_ROOT, "..", "..");
@@ -122,6 +128,10 @@ const skip = (reason) => {
 const main = async () => {
   if (process.env.AGENT_LAB === "0" || process.env.CLAUDE_LIVE_LAB === "0") {
     return skip("AGENT_LAB=0");
+  }
+
+  if ((flagValue("--scenario") ?? process.env.AGENT_LAB_SCENARIO) === "concurrency") {
+    return runConcurrency();
   }
 
   const requested = flagValue("--provider") ?? process.env.AGENT_LAB_PROVIDER ?? "claude-code";
@@ -394,6 +404,41 @@ const main = async () => {
   }
 
   return ok ? 0 : 1;
+};
+
+const ensureBuilt = async () => {
+  try {
+    await access(CLI_PATH);
+  } catch {
+    log("==> building otel-hook CLI");
+    const built = await run(["npm", "run", "build"], { cwd: REPO_ROOT, env: process.env, timeoutMs: 120_000 });
+    if (built.code !== 0) {
+      process.stderr.write(built.stderr);
+      throw new Error("npm run build failed");
+    }
+  }
+};
+
+const runConcurrency = async () => {
+  await ensureBuilt();
+  const labRoot = await mkdtemp(path.join(tmpdir(), "otel-hook-agent-lab-concurrency-"));
+  const report = await runConcurrencyLab({
+    labRoot,
+    pluginRoot: PLUGIN_ROOT,
+    repoRoot: REPO_ROOT,
+    cliPath: CLI_PATH,
+    wrapperPath: WRAPPER_PATH,
+    log,
+    only: flagValue("--only"),
+  });
+  const full = { scenario: "concurrency", labRoot, ...report };
+  await writeFile(path.join(labRoot, "report.json"), `${JSON.stringify(full, null, 2)}\n`);
+  process.stdout.write(`${JSON.stringify(full, null, 2)}\n`);
+  log(`==> lab directory ${labRoot}`);
+  if (process.env.AGENT_LAB_KEEP !== "1" && report.status !== "fail") {
+    await rm(labRoot, { recursive: true, force: true });
+  }
+  return report.status === "fail" ? 1 : 0;
 };
 
 /**

@@ -139,7 +139,10 @@ export const postToolUseFailurePayloadSchema = z.object({
   hook_event_name: z.literal("PostToolUseFailure"),
   tool_name: z.string().min(1),
   tool_input: z.unknown().optional(),
-  tool_error: z.unknown(),
+  // Optional: a failure that names no message still ends its tool call. The
+  // `error` spelling Claude Code 2.1.x sends is folded onto it by
+  // `normalizeClaudeHookPayload`.
+  tool_error: z.unknown().optional(),
   tool_use_id: z.string().min(1),
 });
 export type PostToolUseFailurePayload = z.infer<typeof postToolUseFailurePayloadSchema>;

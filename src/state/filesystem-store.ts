@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { mkdir, open, readFile, readdir, rename, unlink, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 
 import type { Clock, Logger, StateRecord, StateValue } from "../runtime/ports.js";
@@ -35,10 +35,16 @@ type Envelope = { readonly key: string; readonly record: StateRecord };
 const isErrnoException = (thrown: unknown, code: string): boolean =>
   thrown instanceof Error && (thrown as NodeJS.ErrnoException).code === code;
 
+/**
+ * Deliberately *not* `unref`'d (see `src/install/file-lock.ts`). A hook process
+ * waiting for a session lock a peer holds has nothing else on its event loop: an
+ * unref'd poll timer lets Node exit mid-wait ("unsettled top-level await") and
+ * the waiting event is lost. Seen live when Claude Code fired `SubagentStart`
+ * and `PostToolUse` for the same session at once.
+ */
 const sleep = (millis: number): Promise<void> =>
   new Promise((resolve) => {
-    const timer = setTimeout(resolve, millis);
-    timer.unref?.();
+    setTimeout(resolve, millis);
   });
 
 const wrapFsError = (thrown: unknown, operation: string): Error => {
@@ -192,18 +198,35 @@ export const createFilesystemStateStore = (
         }
       }
 
-      const stale = await (async (): Promise<boolean> => {
+      const stale = await (async (): Promise<boolean | "gone"> => {
+        let raw: string;
         try {
-          const raw = await readFile(filePath, "utf8");
+          raw = await readFile(filePath, "utf8");
+        } catch (thrown) {
+          // Released between our `open` and this read: just try again.
+          return isErrnoException(thrown, "ENOENT") ? "gone" : true;
+        }
+        try {
           const parsed = JSON.parse(raw) as { acquiredAt?: unknown };
-          return (
-            typeof parsed.acquiredAt !== "number" ||
-            options.clock.now() - parsed.acquiredAt > lockStaleMillis
-          );
+          if (typeof parsed.acquiredAt === "number") {
+            return options.clock.now() - parsed.acquiredAt > lockStaleMillis;
+          }
         } catch {
-          return true;
+          // fall through to the file's age
+        }
+        // Empty or partial: a peer created the file (`wx`) and has not written its
+        // stamp yet. Reclaiming it now would put two holders in the lock, so an
+        // unreadable lock is only stale once the file itself is old.
+        try {
+          const stats = await stat(filePath);
+          return Date.now() - stats.mtimeMs > lockStaleMillis;
+        } catch {
+          return "gone";
         }
       })();
+      if (stale === "gone") {
+        continue;
+      }
       if (stale) {
         await unlink(filePath).catch(() => undefined);
         continue;
