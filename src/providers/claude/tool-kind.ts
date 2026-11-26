@@ -22,6 +22,8 @@ const BUILT_IN_TOOL_KIND: Readonly<Record<string, ToolKind>> = Object.freeze({
   WebFetch: "network",
   WebSearch: "network",
   Task: "delegate",
+  // Current Claude Code releases (observed on 2.1.332) name the subagent tool `Agent`.
+  Agent: "delegate",
   TodoWrite: "other",
   ExitPlanMode: "other",
   AskUserQuestion: "other",
