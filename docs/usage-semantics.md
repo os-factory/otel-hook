@@ -147,9 +147,32 @@ hook's clock reading otherwise.
 
 | Provider | Usage-bearing callback | Key (`otelhook.generation.id`) | Granularity | Temporality |
 | --- | --- | --- | --- | --- |
-| Codex | `Stop` | `turn_id` (observed on 0.163.0) | turn | `cumulative`: the session-wide running total; diff successive turns, never sum them |
+| Codex | `Stop` (usage read from the rollout with `--codex-rollout-usage`; 0.163 hooks carry none) | `turn_id` (observed on 0.163.0) | turn | `cumulative`: the session-wide running total; diff successive turns, never sum them |
 | Cursor | `stop` | `generation_id` (one per user message; `stop` fires once per generation) | generation | `delta` |
 | Claude Code | none upstream — hooks carry no tokens ([contract](claude-code-usage-contract.md)) | a harness-attached `Stop` usage is keyed by a hash of `session_id` and `prompt_id` | prompt | `delta` |
+
+### Codex input buckets
+
+Codex copies the OpenAI Responses usage onto its rollout `token_count` records
+verbatim (observed on 0.163.0: the mock's per-request `input_tokens`,
+`input_tokens_details.cached_tokens` and `input_tokens_details.cache_write_tokens`
+arrive unchanged as `input_tokens`, `cached_input_tokens` and
+`cache_write_input_tokens`, and `total_token_usage` is their running sum). In the
+Responses API `input_tokens` is the whole prompt and both details are subsets of
+it. That is already the canonical shape:
+
+```text
+canonical inputTokens = input_tokens            (cache reads and writes included)
+canonical cachedInputTokens = cached_input_tokens
+canonical cacheCreationInputTokens = cache_write_input_tokens
+cacheCreationAccounting = included-in-input
+uncachedInputTokens (derived) = input_tokens - cached_input_tokens - cache_write_input_tokens
+```
+
+So `gen_ai.usage.input_tokens` means the same for Codex and Claude Code (whose
+disjoint buckets are folded into it), and a consumer derives fresh input the same
+way for both. A Codex without the cache-write counter (before 0.163) reports
+none, which normalizes to zero with `not-reported`.
 
 Cursor's `afterAgentResponse` reports the same snapshot as `stop` and is
 deliberately not mapped, so one generation yields exactly one usage report.

@@ -4,3 +4,4 @@ export * from "./tool-kind.js";
 export * from "./usage.js";
 export * from "./transcript.js";
 export * from "./adapter.js";
+export * from "./rollout-usage.js";

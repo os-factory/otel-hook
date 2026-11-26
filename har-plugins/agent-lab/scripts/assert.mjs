@@ -85,6 +85,8 @@ export const assertLab = (input) => {
     notes.push(`${stopName} already carried usage; wrapper did not inject`);
   } else if (stop?.usage_attached === true) {
     notes.push(input.provider?.usageContract ?? `wrapper attached mock last-usage onto ${stopName}`);
+  } else if (stop !== undefined && input.provider?.usageFlag !== undefined) {
+    notes.push(input.provider.usageContract ?? `otel-hook read usage itself (${input.provider.usageFlag})`);
   } else if (stop !== undefined) {
     notes.push(`${stopName} had no usage and the wrapper did not attach any; token assertion will fail`);
   }
@@ -132,7 +134,13 @@ export const assertLab = (input) => {
       canonicalTypes: types,
       spanNames: spans.map((span) => span.name),
       stopUsageSource:
-        stop?.had_usage_before_wrapper === true ? "agent" : stop?.usage_attached === true ? "wrapper" : "absent",
+        stop?.had_usage_before_wrapper === true
+          ? "agent"
+          : stop?.usage_attached === true
+            ? "wrapper"
+            : input.provider?.usageFlag !== undefined
+              ? `otel-hook ${input.provider.usageFlag}`
+              : "absent",
       generationUsage: generation === undefined ? null : generation.attributes,
     },
   };

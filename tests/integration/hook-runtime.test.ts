@@ -69,6 +69,8 @@ const buildRuntime = async (
     readonly stateRootDir?: string;
     readonly flushTimeoutMillis?: number;
     readonly enableSpool?: boolean;
+    /** `exporter.endpointDownMillis`; 0 makes every flush try the endpoint again. */
+    readonly endpointDownMillis?: number;
   } = {},
 ): Promise<{ readonly runtime: HookRuntime; readonly logger: ReturnType<typeof createRecordingLogger> }> => {
   const stateRootDir = options.stateRootDir ?? (await scratchDir());
@@ -79,7 +81,13 @@ const buildRuntime = async (
       exporter:
         options.endpoint === undefined
           ? { ...DEFAULT_EXPORTER_POLICY, enabled: false }
-          : { ...DEFAULT_EXPORTER_POLICY, endpoint: options.endpoint, timeoutMillis: 2_000, maxRetryAttempts: 0 },
+          : {
+              ...DEFAULT_EXPORTER_POLICY,
+              endpoint: options.endpoint,
+              timeoutMillis: 2_000,
+              maxRetryAttempts: 0,
+              ...(options.endpointDownMillis === undefined ? {} : { endpointDownMillis: options.endpointDownMillis }),
+            },
       detection: { ...DEFAULT_CONFIG.detection, minimumConfidence: "weak" },
     },
     registry: createProviderRegistry([createClaudeCodeAdapter()]),
@@ -294,6 +302,9 @@ describe("hook runtime: bounded flush and containment", () => {
     const { runtime } = await buildRuntime({
       endpoint: `http://127.0.0.1:${String(address.port)}/v1/traces`,
       flushTimeoutMillis: 250,
+      // Without a down window the flush tries the stalled endpoint again, which
+      // is what the flush bound is for. (With one, it would not even try.)
+      endpointDownMillis: 0,
     });
     await runtime.process({
       payload: claudePayload("ses-stalled"),

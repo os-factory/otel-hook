@@ -4,12 +4,14 @@ import type { CodexUsage } from "./payload.js";
 /**
  * Project a Codex usage snapshot onto a canonical usage report.
  *
- * Codex does not report a distinct cache-*creation* counter (only cache
- * *reads*, `cached_input_tokens`), so `cacheCreationInputTokens` is always
- * omitted here and the adapter declares `cacheCreationAccounting:
- * "not-reported"` in its capabilities. `cached_input_tokens` and
- * `reasoning_output_tokens` are always subsets of the inclusive
- * `input_tokens` / `output_tokens` totals, matching Codex's own accounting.
+ * Codex copies the Responses API usage verbatim, so `input_tokens` is the whole
+ * prompt: `cached_input_tokens` (cache reads) and, from Codex 0.163,
+ * `cache_write_input_tokens` (cache writes) are subsets of it, and
+ * `reasoning_output_tokens` is a subset of `output_tokens`. That is the
+ * canonical shape already (`cacheCreationAccounting: "included-in-input"`), the
+ * same one Claude Code's disjoint buckets are folded into: no arithmetic here.
+ * A Codex that reports no cache-write counter leaves the field absent, which
+ * normalizes to zero with `not-reported`.
  */
 export const codexUsageToReport = (
   usage: CodexUsage,
@@ -20,6 +22,12 @@ export const codexUsageToReport = (
   ...(usage.cached_input_tokens === undefined
     ? {}
     : { cachedInputTokens: usage.cached_input_tokens }),
+  ...(usage.cache_write_input_tokens === undefined
+    ? {}
+    : {
+        cacheCreationInputTokens: usage.cache_write_input_tokens,
+        cacheCreationAccounting: "included-in-input" as const,
+      }),
   ...(usage.output_tokens === undefined ? {} : { outputTokens: usage.output_tokens }),
   ...(usage.reasoning_output_tokens === undefined
     ? {}

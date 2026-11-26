@@ -32,7 +32,10 @@ are opaque, immutable invocation metadata.
   opt-in `providers.claudeCode.readTranscriptUsage` setting (off by default):
   the hook runtime, never the adapter, reads the single Claude Code transcript a
   payload names, bounded and fail-open. See
-  `docs/claude-code-usage-contract.md`, finding 8.
+  `docs/claude-code-usage-contract.md`, finding 8. The opt-in
+  `providers.codex.readRolloutUsage` is the same exception for Codex: the
+  runtime reads the one rollout the payload names (or, without one, finds it by
+  exact session-id file name in a bounded number of date directories).
 - Session context (`sessionContext.dir`, `--session-context-dir`) is a core
   step, never provider code: the hook runtime reads the one
   `<dir>/<agent-tool>/<session-id>.json` of the invocation's session, bounded

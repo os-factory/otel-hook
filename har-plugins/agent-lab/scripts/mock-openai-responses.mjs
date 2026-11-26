@@ -151,13 +151,20 @@ const hookUsage = (usage) => ({
   output_tokens: usage.output_tokens,
   reasoning_output_tokens: usage.reasoning_output_tokens,
   total_tokens: usage.total_tokens,
+  ...(usage.cache_write_input_tokens === undefined ? {} : { cache_write_input_tokens: usage.cache_write_input_tokens }),
 });
 
+// Responses API usage: `input_tokens` is the whole prompt; `cached_tokens` and
+// `cache_write_tokens` are subsets of it. Codex 0.163 copies them onto its
+// rollout `token_count` as `cached_input_tokens` / `cache_write_input_tokens`.
 const responsesUsage = (usage) => ({
   input_tokens: usage.input_tokens,
   output_tokens: usage.output_tokens,
   total_tokens: usage.total_tokens,
-  input_tokens_details: { cached_tokens: usage.cached_input_tokens },
+  input_tokens_details: {
+    cached_tokens: usage.cached_input_tokens,
+    ...(usage.cache_write_input_tokens === undefined ? {} : { cache_write_tokens: usage.cache_write_input_tokens }),
+  },
   output_tokens_details: { reasoning_tokens: usage.reasoning_output_tokens },
 });
 

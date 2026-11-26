@@ -62,8 +62,9 @@ export const CODEX_CAPABILITIES: ProviderCapabilities = Object.freeze({
   // turn; see docs/usage-semantics.md.
   cumulativeUsageSeries: "session-lifetime",
   reportsCachedInput: true,
-  reportsCacheCreation: false,
-  cacheCreationAccounting: "not-reported",
+  // Codex 0.163+ reports `cache_write_input_tokens`, a subset of `input_tokens`.
+  reportsCacheCreation: true,
+  cacheCreationAccounting: "included-in-input",
   reportsReasoningOutput: true,
   reportsProviderTotal: true,
   reportsCost: false,

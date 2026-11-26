@@ -22,10 +22,17 @@ const permissionModeSchema = z.enum([
 ]);
 export type CodexPermissionMode = z.infer<typeof permissionModeSchema>;
 
-/** Mirrors the rollout/exec `total_token_usage` / `last_token_usage` shape. */
+/**
+ * Mirrors the rollout/exec `total_token_usage` / `last_token_usage` shape.
+ *
+ * Codex copies the Responses API counters verbatim: `input_tokens` is the whole
+ * prompt, and `cached_input_tokens` (cache reads) and `cache_write_input_tokens`
+ * (cache writes, Codex 0.163+) are subsets of it. See docs/usage-semantics.md.
+ */
 export const codexUsageSchema = z.object({
   input_tokens: z.number().int().min(0).optional(),
   cached_input_tokens: z.number().int().min(0).optional(),
+  cache_write_input_tokens: z.number().int().min(0).optional(),
   output_tokens: z.number().int().min(0).optional(),
   reasoning_output_tokens: z.number().int().min(0).optional(),
   total_tokens: z.number().int().min(0).optional(),

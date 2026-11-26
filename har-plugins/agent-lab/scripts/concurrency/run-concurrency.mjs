@@ -509,7 +509,12 @@ export const runConcurrencyLab = async ({ labRoot, pluginRoot, repoRoot, cliPath
         const downPort = await freePort();
         const downUrl = `http://127.0.0.1:${String(downPort)}/v1/traces`;
         const configFile = path.join(labRoot, "s7-destinations.json");
-        await writeFile(configFile, `${JSON.stringify({ exporter: { destinations: [{ name: "down", endpoint: downUrl }] } }, null, 2)}\n`);
+        // A short down window, so the drain below does not wait out the default 30 s.
+        const endpointDownMillis = 2_000;
+        await writeFile(
+          configFile,
+          `${JSON.stringify({ exporter: { endpointDownMillis, destinations: [{ name: "down", endpoint: downUrl }] } }, null, 2)}\n`,
+        );
         const stateFilesBefore = await countFiles(ctx.stateDir);
 
         // Latency with every destination up: 20 concurrent hook processes over
@@ -593,6 +598,8 @@ export const runConcurrencyLab = async ({ labRoot, pluginRoot, repoRoot, cliPath
 
         // Bring the destination up and drain with 4 concurrent hook processes per round.
         const revived = await startOtlpReceiver({ port: downPort, captureDir: path.join(labRoot, "capture", "s7-revived") });
+        // Hooks skip an endpoint marked down until the window ends; then one probes it.
+        await new Promise((resolve) => setTimeout(resolve, endpointDownMillis + 250));
         const drainRounds = [];
         try {
           for (let round = 0; round < 12; round += 1) {

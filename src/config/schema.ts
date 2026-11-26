@@ -141,8 +141,32 @@ export const exporterPolicySchema = z.strictObject({
    * bound left unset takes its value from `DEFAULT_SPOOL_POLICY`.
    */
   spool: spoolPolicySchema.partial().optional(),
+  /**
+   * The most time one hook invocation spends trying to reach one endpoint, in
+   * milliseconds: caps `timeoutMillis` for every OTLP request (connection setup
+   * included) and the exporter's own retries inside it. A batch that does not
+   * get through in time is spooled. Default {@link DEFAULT_EXPORT_BUDGET_MILLIS}:
+   * the host agent waits for its hooks, so a down collector must not stall it.
+   */
+  exportBudgetMillis: z.number().int().min(50).max(600_000).optional(),
+  /**
+   * After an endpoint was unreachable (refused, timed out, or answered a
+   * retryable status), every hook spools for it without trying for this long,
+   * in milliseconds; then one hook probes it again. 0 disables the window.
+   * Default {@link DEFAULT_ENDPOINT_DOWN_MILLIS}.
+   */
+  endpointDownMillis: z.number().int().min(0).max(3_600_000).optional(),
 });
 export type ExporterPolicy = z.infer<typeof exporterPolicySchema>;
+
+/** Default `exporter.exportBudgetMillis`. */
+export const DEFAULT_EXPORT_BUDGET_MILLIS = 1_500;
+/** Default `exporter.endpointDownMillis`. */
+export const DEFAULT_ENDPOINT_DOWN_MILLIS = 30_000;
+
+/** The per-request OTLP timeout a hook uses: `timeoutMillis`, capped by the export budget. */
+export const effectiveExportTimeoutMillis = (exporter: ExporterPolicy): number =>
+  Math.min(exporter.timeoutMillis, exporter.exportBudgetMillis ?? DEFAULT_EXPORT_BUDGET_MILLIS);
 
 export const detectionPolicySchema = z.strictObject({
   /** Detections below this confidence resolve to the unknown provider. */
@@ -168,13 +192,24 @@ export type DiagnosticsPolicy = z.infer<typeof diagnosticsPolicySchema>;
  * transcript reads in the hook" (docs/claude-code-usage-contract.md, finding 8).
  * When true, the hook runtime — never the adapter — reads the session transcript
  * named by a Claude Code `Stop` / `StopFailure` payload, bounded, and attaches the
- * turn's model and summed token usage before the adapter parses it. Off by
- * default: without it, otel-hook reads no file a hook payload names.
+ * turn's model and summed token usage before the adapter parses it.
+ *
+ * `codex.readRolloutUsage` is the same exception for Codex, which puts no token
+ * counters on any hook payload: at `Stop` the runtime reads the session's
+ * rollout (`transcript_path`) from a per-session cursor, bounded, and attaches
+ * the thread's running token total (docs/usage-semantics.md).
+ *
+ * Both off by default: without them, otel-hook reads no file a hook payload names.
  */
 export const providersPolicySchema = z.strictObject({
   claudeCode: z
     .strictObject({
       readTranscriptUsage: z.boolean(),
+    })
+    .optional(),
+  codex: z
+    .strictObject({
+      readRolloutUsage: z.boolean(),
     })
     .optional(),
 });
@@ -237,6 +272,7 @@ export const otelHookConfigPatchSchema = z.strictObject({
   providers: z
     .strictObject({
       claudeCode: z.strictObject({ readTranscriptUsage: z.boolean() }).partial().optional(),
+      codex: z.strictObject({ readRolloutUsage: z.boolean() }).partial().optional(),
     })
     .partial()
     .optional(),
@@ -271,6 +307,7 @@ export const DEFAULT_DIAGNOSTICS_POLICY: DiagnosticsPolicy = Object.freeze({
 
 export const DEFAULT_PROVIDERS_POLICY: ProvidersPolicy = Object.freeze({
   claudeCode: Object.freeze({ readTranscriptUsage: false }),
+  codex: Object.freeze({ readRolloutUsage: false }),
 });
 
 export const DEFAULT_CONFIG: OtelHookConfig = Object.freeze({
@@ -284,6 +321,10 @@ export const DEFAULT_CONFIG: OtelHookConfig = Object.freeze({
 /** Whether the runtime may read Claude Code transcripts at `Stop` (default false). */
 export const readsClaudeTranscriptUsage = (config: OtelHookConfig): boolean =>
   config.providers?.claudeCode?.readTranscriptUsage === true;
+
+/** Whether the runtime may read Codex rollouts at `Stop` (default false). */
+export const readsCodexRolloutUsage = (config: OtelHookConfig): boolean =>
+  config.providers?.codex?.readRolloutUsage === true;
 
 /** The session context directory in force, or `undefined` when none is configured. */
 export const sessionContextDir = (config: OtelHookConfig): string | undefined => config.sessionContext?.dir;

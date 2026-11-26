@@ -178,6 +178,9 @@ describe("otel-hook run: multiple destinations", () => {
     const stateDir = await withStateDir();
     const config = await writeConfig(stateDir, {
       exporter: {
+        // Hooks skip an endpoint that refused connections for this long; short
+        // here so the test does not wait out the 30 s default.
+        endpointDownMillis: 500,
         destinations: [
           { name: "healthy", endpoint: healthy.url },
           { name: "flaky", endpoint: `http://127.0.0.1:${String(flakyPort)}/v1/traces` },
@@ -194,9 +197,10 @@ describe("otel-hook run: multiple destinations", () => {
     expect(await queuedFiles(stateDir, "flaky")).toHaveLength(1);
     expect(await queuedFiles(stateDir, "healthy")).toHaveLength(0);
 
-    // The receiver comes back on the same port; the next hook event drains the
-    // spool after sending its own batch.
+    // The receiver comes back on the same port; once the down window is over,
+    // the next hook event probes it, sends its own batch, and drains the spool.
     const back = await withCollector(undefined, flakyPort);
+    await new Promise((resolve) => setTimeout(resolve, 600));
     const up = await runHook(config, stateDir, prompt(session, 2));
     expect(up.code).toBe(0);
 

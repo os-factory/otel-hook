@@ -62,12 +62,16 @@ Skip: `AGENT_LAB=0`. Keep the temp dir: `AGENT_LAB_KEEP=1`.
 - OTLP logs: session.start, prompt.submitted, tool.start, tool.end, generation.end
 - Tool span `Bash` (Codex hook stdin names `exec_command` as `Bash`)
 - Frozen Stop usage on the generation span matches
-  `scripts/scenarios/codex-read-then-ready.json` (`canonicalStopUsage`)
-- Those numbers are the session-lifetime cumulative snapshot after both mock
-  turns (100+180 input, 24+8 output) and match Codex's own `turn.completed`
-  print totals. Live Codex 0.146 does not put counters on hook stdin; the
-  wrapper attaches the mock cumulative. Fixture replay covers two-Stop
-  session-lifetime deltas.
+  `scripts/scenarios/codex-read-then-ready.json` (`canonicalStopUsage`),
+  cache writes included (`gen_ai.usage.cache_creation.input_tokens`)
+- Live Codex 0.163 puts no counters on hook stdin. The hook runs with
+  `--codex-rollout-usage` and the wrapper attaches nothing (`--no-usage`):
+  otel-hook reads the running total from Codex's own rollout
+  (`transcript_path`). The numbers are the session-lifetime cumulative after both
+  mock turns (100+180 input, 0+80 cache reads, 40+20 cache writes, 24+8 output)
+  and match Codex's own `turn.completed` print totals. The mock reports cache
+  writes as Responses `input_tokens_details.cache_write_tokens`, which Codex
+  copies to `cache_write_input_tokens`.
 - Synthetic secret from `widget.txt` is absent from OTLP bytes and hook dumps
 - Default privacy: prompt.submitted log has no body
 
@@ -146,6 +150,15 @@ writer of the context files) on PATH; `AGENT_LAB_HAR` points at another `har`
 | s5 | The context file rewritten 200 times while 50 hook processes read it (atomic and torn writers) |
 | s6 | One session id under `claude_code` and `codex`; two `har` processes launching one session at once |
 | s7 | 20 concurrent hook processes over 4 sessions (start and end of one tool at the same instant): latency with and without context, with one destination down, then concurrent drains: every record once, Resource intact |
+
+s7's down destination is a closed port. Its config sets
+`exporter.endpointDownMillis: 2000` and the lab waits that long after reviving
+the port, because hooks skip an endpoint marked down until its window ends.
+Measured before the export budget and down window (one destination down, 20
+concurrent hooks): p50 18.8 s / p95 32.2 s with context, p50 30.3 s / p95
+32.1 s without. After: p50 1.8 s / p95 2.0 s for the first burst (every process
+tries before any has marked it down), p50 0.8 s / p95 1.0 s for the next one
+(marked down: spooled without trying), the same as with every destination up.
 
 Scenario 8 (exporter isolation) is the Resource check above, applied to every
 scenario's live wire and to the batches replayed from the spool in s7.

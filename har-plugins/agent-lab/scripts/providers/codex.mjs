@@ -43,8 +43,11 @@ export const codexProvider = {
   settingsRel: [".codex", "hooks.json"],
   mirrorProjectHooksToConfigDir: false,
   scenarioRel: ["scripts", "scenarios", "codex-read-then-ready.json"],
+  // Codex 0.163 puts no usage on hook stdin: otel-hook reads the rollout
+  // (`transcript_path`) itself, so the wrapper attaches nothing.
+  usageFlag: "--codex-rollout-usage",
   usageContract:
-    "Codex stamps session-lifetime cumulative totals on usage-bearing hooks; otel-hook diffs them against the previous snapshot in the same session",
+    "Codex puts no usage on Stop; otel-hook read the rollout's running total (--codex-rollout-usage) and diffed it against the previous snapshot in the same session",
   startMock: (options) => startMockServer(options),
   isolateEnv: ({ homeDir, configDir, labRoot, mockUrl, hooksJsonl }) => ({
     PATH: process.env.PATH ?? "",

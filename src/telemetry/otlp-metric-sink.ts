@@ -19,6 +19,7 @@ import { isPermanentExportFailure } from "./export-failure.js";
 import { replayResource, resourceFromExporterPolicy, resourceWithContext } from "./exporter-resource.js";
 import { METRIC_INSTRUMENTS, withoutAccountIdentity, type MetricPoint } from "./metric-model.js";
 import { DEFAULT_INSTRUMENTATION_SCOPE } from "./semconv.js";
+import { boundedExporterOptions, guardExport, type EndpointHealth } from "./endpoint-health.js";
 import type { SpoolSendOutcome } from "./spool-queue.js";
 
 /**
@@ -137,7 +138,11 @@ export type OtlpMetricSinkOptions = {
   readonly spool?: DurableMetricSpool;
   readonly instrumentationScope?: InstrumentationScope;
   /** Export destination this sink delivers to. */
-  readonly destination?: string;
+  readonly destination?: string;  /**
+   * What is known about each endpoint's reachability (see `endpoint-health.ts`).
+   * Absent, every batch is sent, however recently its endpoint was unreachable.
+   */
+  readonly endpointHealth?: EndpointHealth;
 };
 
 const createDisabledMetricSink = (destination?: string): OtlpMetricTelemetrySink => {
@@ -256,11 +261,19 @@ export const createOtlpMetricSink = (options: OtlpMetricSinkOptions): OtlpMetric
   const exporter = new OTLPMetricExporter({
     url: deliverability.endpoint,
     headers: { ...options.headers },
-    timeoutMillis: options.exporter.timeoutMillis,
+    ...boundedExporterOptions(options.exporter),
   });
+  const gate = options.endpointHealth?.gateFor(deliverability.endpoint);
   let shutdownCompleted = false;
 
   const exportResourceMetrics = (
+    points: readonly MetricPoint[],
+    batchResource: Resource,
+    batchScope: InstrumentationScope,
+  ): Promise<ExportResult> =>
+    guardExport(gate, () => sendResourceMetrics(points, batchResource, batchScope));
+
+  const sendResourceMetrics = (
     points: readonly MetricPoint[],
     batchResource: Resource,
     batchScope: InstrumentationScope,
@@ -356,6 +369,10 @@ export const createOtlpMetricSink = (options: OtlpMetricSinkOptions): OtlpMetric
   ): Promise<{ readonly drained: number; readonly remaining: number; readonly failed: number }> => {
     if (options.spool === undefined) {
       return { drained: 0, remaining: 0, failed: 0 };
+    }
+    if (gate !== undefined && !(await gate.available())) {
+      // Marked down: the drain would only fail, after paying for the attempt.
+      return { drained: 0, remaining: await options.spool.size().catch(() => 0), failed: 0 };
     }
     const result = await options.spool.drain(sendSerializedBatch, {
       ...(maxBatches === undefined ? {} : { maxBatches }),
