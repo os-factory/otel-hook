@@ -1,3 +1,10 @@
+# [0.12.0](https://github.com/os-factory/otel-hook/compare/v0.11.0...v0.12.0) (2026-11-26)
+
+
+### Features
+
+* stamp session context from a harness-written directory on every record ([#71](https://github.com/os-factory/otel-hook/issues/71)) ([c44febe](https://github.com/os-factory/otel-hook/commit/c44febee1a254b0c7f223d8f7874715ee865d3ac))
+
 # [0.11.0](https://github.com/os-factory/otel-hook/compare/v0.10.0...v0.11.0) (2026-11-25)
 
 
