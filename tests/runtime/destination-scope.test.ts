@@ -200,12 +200,17 @@ describe("routeEventsToScopes", () => {
 describe("routeEventsToScopes: the session workspace's own remote", () => {
   const WORKSPACE_A = "github.com/acme/widget";
 
-  it("routes an unstamped event by the workspace remote: to A's scope, not B's", () => {
+  it("routes an unstamped event by the workspace remote: to A's scope, stamped, and not to B's", () => {
     const unstamped = prompt(undefined);
     const options = { restrict, workspaceRepositoryKey: WORKSPACE_A };
-    expect(routeEventsToScopes([unstamped], scopesOf([{ repositories: [REPO_A] }]), options).traces).toEqual([
-      unstamped,
-    ]);
+    const toA = routeEventsToScopes([unstamped], scopesOf([{ repositories: [REPO_A] }]), options);
+    for (const routed of [toA.traces, toA.logs]) {
+      expect(routed.map((event) => event.eventId)).toEqual([unstamped.eventId]);
+      // The canonical form of the key the scope matched, never the raw remote.
+      expect(routed[0]?.contextAttributes).toEqual({ "vcs.repository.url.full": "https://github.com/acme/widget" });
+    }
+    // The batch handed in is not touched: unscoped destinations keep it as it was.
+    expect(unstamped.contextAttributes).toBeUndefined();
     const toB = routeEventsToScopes([unstamped], scopesOf([{ repositories: [REPO_B] }]), options);
     expect(toB.traces).toEqual([]);
     expect(toB.logs).toEqual([]);
@@ -221,6 +226,17 @@ describe("routeEventsToScopes: the session workspace's own remote", () => {
     // A stamp that names no repository is not replaced by the workspace's either.
     const garbled = prompt("not a url at all");
     expect(routeEventsToScopes([garbled], scopesOf([{ repositories: "*" }]), options).traces).toEqual([]);
+  });
+
+  it("keeps a record's own stamp as it is, and stamps a Resource-routed one with its key", () => {
+    const stampedA = prompt("git@github.com:Acme/Widget.git");
+    const unstamped = prompt(undefined);
+    const routed = routeEventsToScopes([stampedA, unstamped], scopesOf([{ repositories: [REPO_A] }]), {
+      restrict,
+      resourceRepositoryKey: "github.com/acme/widget",
+    });
+    expect(routed.traces[0]).toBe(stampedA);
+    expect(routed.traces[1]?.contextAttributes?.["vcs.repository.url.full"]).toBe("https://github.com/acme/widget");
   });
 
   it("puts the workspace remote ahead of the Resource's repository", () => {
@@ -271,6 +287,29 @@ describe("routePointsToScopes", () => {
       { fallbackKey: undefined, includeSessionId: true },
     );
     expect(kept).toEqual([withSession[0]]);
+  });
+
+  it("stamps a point routed by the fallback key, on the scoped copy only, and keeps an own stamp", () => {
+    const unstamped = point(undefined, "s");
+    const stampedA = point(REPO_A, "s");
+    const kept = routePointsToScopes(
+      scopesOf([{ repositories: [REPO_A] }]),
+      (variant) => (variant ? [unstamped, stampedA] : undefined),
+      { fallbackKey: "github.com/acme/widget", includeSessionId: true },
+    );
+    expect(kept[0]?.attributes).toEqual({
+      "session.id": "s",
+      "vcs.repository.url.full": "https://github.com/acme/widget",
+    });
+    expect(kept[1]).toBe(stampedA);
+    expect(unstamped.attributes).toEqual({ "session.id": "s" });
+    // Another repository's fallback reaches no A scope at all.
+    expect(
+      routePointsToScopes(scopesOf([{ repositories: [REPO_B] }]), (variant) => (variant ? [unstamped] : undefined), {
+        fallbackKey: "github.com/acme/widget",
+        includeSessionId: true,
+      }),
+    ).toEqual([]);
   });
 
   it("takes each point from the session.id variant its scope asks for", () => {

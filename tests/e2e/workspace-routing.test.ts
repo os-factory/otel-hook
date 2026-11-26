@@ -168,17 +168,28 @@ describe("otel-hook run: routing by the session workspace's own remote", () => {
       expect(eventTypes(hostedA)).toEqual(expected);
       expect(hostedA.text()).toContain("synthetic routed prompt");
       expect(hostedB.requests).toHaveLength(0);
-      // Routing only: the records sent before the context name no repository, anywhere.
-      for (const collector of [local, hostedA]) {
-        const unstamped = decodeAllExportedLogRecords(
-          collector.requests.filter((request) => request.path === "/v1/logs").map((request) => request.body),
-        ).filter((record) => record.attributes["vcs.repository.url.full"] === undefined);
-        expect(unstamped.map((record) => String(record.attributes["otelhook.event.type"])).sort()).toEqual([
-          "prompt.submitted",
-          "session.start",
-          "tool.start",
-        ]);
-      }
+      // The records from before the context: the scoped copies name the
+      // repository they were routed by (canonical `https://<key>`, never the
+      // remote as written); the unscoped destination's name none.
+      const repositoryByType = (collector: Collector): Record<string, unknown> =>
+        Object.fromEntries(
+          decodeAllExportedLogRecords(
+            collector.requests.filter((request) => request.path === "/v1/logs").map((request) => request.body),
+          ).map((record) => [String(record.attributes["otelhook.event.type"]), record.attributes["vcs.repository.url.full"]]),
+        );
+      const canonical = "https://example.test/synthetic-org/routed-repo";
+      expect(repositoryByType(hostedA)).toEqual({
+        "session.start": canonical,
+        "prompt.submitted": canonical,
+        "tool.start": canonical,
+        "tool.end": REPO_A,
+      });
+      expect(repositoryByType(local)).toEqual({
+        "session.start": undefined,
+        "prompt.submitted": undefined,
+        "tool.start": undefined,
+        "tool.end": REPO_A,
+      });
     },
     120_000,
   );

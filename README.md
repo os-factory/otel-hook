@@ -1152,12 +1152,19 @@ A record's repository is, in order: its `vcs.repository.url.full` session
 context stamp (`sessionContext.dir`); else the `origin` remote of the git
 repository the session's own directory is in (read from that repository's
 `.git/config`, no `git` process); else the exporter Resource
-(`--resource-attr` / `OTEL_RESOURCE_ATTRIBUTES`). The session directory's
-remote only routes: it is not added to any record, so what an unscoped
-destination receives does not change, and a session's first records (its start
-and first prompt) reach the destination scoped to the repository it runs in
-even before any session context exists. A local-path, missing or unparsable
-remote names no repository. The **first** scope listing it
+(`--resource-attr` / `OTEL_RESOURCE_ATTRIBUTES`). So a session's first records
+(its start and first prompt) reach the destination scoped to the repository it
+runs in even before any session context exists. A local-path, missing or
+unparsable remote names no repository. A record a scoped destination takes by
+the session directory's remote or the Resource, with no stamp of its own, is
+sent to that destination with `vcs.repository.url.full` set to `https://<key>`:
+the normalized host and path the scope matched, never the remote as written, so
+no credential, port or local path can appear. The destination already names
+that repository in its own scope and the session's later records carry it, so
+this discloses nothing new; it lets the receiver file the session's first
+records under the repository it was opted in for. A record's own stamp is never
+changed, and what an unscoped destination receives does not change. The
+**first** scope listing it
 decides; a record that names no repository, or one no scope lists, is **not
 sent** to a scoped destination. A span is judged by its end edge when the end is
 in the same batch. Metric points are filtered point by point, so one callback's

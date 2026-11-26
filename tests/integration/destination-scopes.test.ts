@@ -434,11 +434,15 @@ describe("hook runtime: routing by the session workspace's own remote", () => {
     );
     expect(decodeAllExportedMetrics(hostedA.bodiesFor("/v1/metrics")).length).toBeGreaterThan(0);
     expect(hostedB.requests).toHaveLength(0);
-    // Routing only: the remote is in no record, scoped or not.
-    for (const target of [local, hostedA]) {
-      expect(bodiesText(target)).not.toContain("repo-a");
-      expect(bodiesText(target)).not.toContain("vcs.repository.url.full");
-    }
+    // The scoped copies name the repository they were routed by, in canonical
+    // form (never the raw `git@` remote); the unscoped destination's do not.
+    const canonicalA = "https://github.com/synthetic-org/repo-a";
+    expect(repositoriesIn(decodeAllExportedSpans(hostedA.bodiesFor("/v1/traces")))).toEqual([canonicalA]);
+    expect(repositoriesIn(decodeAllExportedLogRecords(hostedA.bodiesFor("/v1/logs")))).toEqual([canonicalA]);
+    expect(repositoriesIn(decodeAllExportedMetrics(hostedA.bodiesFor("/v1/metrics")))).toEqual([canonicalA]);
+    expect(bodiesText(hostedA)).not.toContain("git@");
+    expect(bodiesText(local)).not.toContain("repo-a");
+    expect(bodiesText(local)).not.toContain("vcs.repository.url.full");
   });
 
   it("lets the session context win over the checkout's origin", async () => {
@@ -543,8 +547,12 @@ describe("hook runtime: routing by the session workspace's own remote", () => {
     const hostedSpans = decodeAllExportedSpans(hostedA.bodiesFor("/v1/traces"));
     const localSpans = decodeAllExportedSpans(local.bodiesFor("/v1/traces"));
     expect(hostedSpans.map((span) => span.spanId).sort()).toEqual(localSpans.map((span) => span.spanId).sort());
-    // Stamped records carry the stamp; the earlier ones carry nothing new.
-    expect(repositoriesIn(hostedSpans)).toEqual(repositoriesIn(localSpans));
+    // The scoped copies of the records from before the launch name the repository
+    // they were routed by; the unscoped destination's name none.
+    expect(repositoriesIn(localSpans)).toEqual([REPO_A, "undefined"]);
+    expect(repositoriesIn(hostedSpans)).toEqual([REPO_A]);
+    const hostedPrompt = hostedLogs.find((record) => record.body === `deploy with ${SECRET} now`);
+    expect(hostedPrompt?.attributes["vcs.repository.url.full"]).toBe(REPO_A);
     expect(hostedB.requests).toHaveLength(0);
   });
 });
