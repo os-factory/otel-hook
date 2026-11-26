@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 
@@ -58,6 +58,14 @@ const plant = async (order: number, spanId: string): Promise<string> => {
   return name;
 };
 
+/** A claim another drain holds on a queued batch, as `drain` writes it. */
+const claim = (name: string, pid: number, claimedAt: number): Promise<void> =>
+  writeFile(
+    path.join(spoolDir(), `${name}.claim`),
+    JSON.stringify({ token: "0".repeat(32), pid, claimedAt }),
+    { encoding: "utf8", flag: "wx" },
+  );
+
 const makeSpool = (): ReturnType<typeof createFileDurableSpool> =>
   createFileDurableSpool({ rootDir, providerId: PROVIDER, installationId: INSTALLATION, clock: createFixedClock() });
 
@@ -92,7 +100,7 @@ describe("concurrent drains of one spool", () => {
   it("releases a claim a crashed drain left behind once it is stale, and never a fresh one", async () => {
     const name = await plant(1, "00000000000000bb");
     // A drain of a live process (this one) holds it: only age can release it.
-    await rename(path.join(spoolDir(), name), path.join(spoolDir(), `${name}.claimed-${String(process.pid)}-deadbeef`));
+    await claim(name, process.pid, Date.now());
 
     const sent: string[] = [];
     const queue = (claimStaleMillis: number): ReturnType<typeof createSpoolQueue<SpoolBatch>> =>
@@ -123,7 +131,7 @@ describe("concurrent drains of one spool", () => {
   it("releases at once a claim whose process has exited", async () => {
     const name = await plant(1, "00000000000000cc");
     // A hook that exited at its flush deadline while sending: a pid that cannot exist.
-    await rename(path.join(spoolDir(), name), path.join(spoolDir(), `${name}.claimed-2147483646-deadbeef`));
+    await claim(name, 2147483646, Date.now());
     const sent: string[] = [];
     const result = await makeSpool().drain((spooled) => {
       sent.push(...spooled.spans.map((span) => span.spanId));
@@ -131,5 +139,32 @@ describe("concurrent drains of one spool", () => {
     });
     expect(result.drained).toBe(1);
     expect(sent).toEqual(["00000000000000cc"]);
+  });
+
+  it("never sends a batch another live drain holds, and leaves no claim behind", async () => {
+    const held = await plant(1, "00000000000000d1");
+    await plant(2, "00000000000000d2");
+    await claim(held, process.pid, Date.now());
+    const sent: string[] = [];
+    const result = await makeSpool().drain((spooled) => {
+      sent.push(...spooled.spans.map((span) => span.spanId));
+      return Promise.resolve(true);
+    });
+    expect(sent).toEqual(["00000000000000d2"]);
+    expect(result.drained).toBe(1);
+    expect((await readdir(spoolDir())).sort()).toEqual([held, `${held}.claim`].sort());
+  });
+
+  it("removes a stale claim whose batch is already gone, and an old unreadable one", async () => {
+    await mkdir(spoolDir(), { recursive: true });
+    await claim("0000000000000009-gone.json", 2147483646, Date.now());
+    const empty = path.join(spoolDir(), "0000000000000008-gone.json.claim");
+    await writeFile(empty, "", "utf8");
+    const old = new Date(Date.now() - 10 * 60 * 1000);
+    await utimes(empty, old, old);
+    // A claim created a moment ago and not yet written is live, whatever it reads as.
+    await writeFile(path.join(spoolDir(), "0000000000000007-new.json.claim"), "", "utf8");
+    await makeSpool().drain(() => Promise.resolve(true));
+    expect(await readdir(spoolDir())).toEqual(["0000000000000007-new.json.claim"]);
   });
 });
