@@ -13,7 +13,7 @@ import type { DeliveryHealthSnapshot } from "../diagnostics/health.js";
 import { createHealthTracker } from "../diagnostics/health.js";
 import { errorInfoFromThrown, type OtelHookErrorInfo } from "../errors/index.js";
 import type { CanonicalEvent } from "../model/events.js";
-import type { Clock, Logger, TelemetryEmitResult } from "../runtime/ports.js";
+import type { Clock, Logger, TelemetryEmitOptions, TelemetryEmitResult } from "../runtime/ports.js";
 import { createFileDurableLogSpool, type DurableLogSpool } from "./durable-log-spool.js";
 import { createFileDurableMetricSpool, type DurableMetricSpool } from "./durable-metric-spool.js";
 import { createFileDurableSpool, type DurableSpool } from "./durable-spool.js";
@@ -137,8 +137,11 @@ export type ExportDestinationSinks = {
    * destination is sent every record, exactly as before scopes existed.
    */
   readonly scopes?: readonly DestinationScope[];
-  /** Splits a batch by {@link scopes}; present exactly when they are. */
-  readonly route?: (events: readonly CanonicalEvent[]) => ScopedBatch;
+  /**
+   * Splits a batch by {@link scopes}; present exactly when they are. The workspace
+   * key is the batch's `TelemetryEmitOptions.workspaceRepositoryKey`.
+   */
+  readonly route?: (events: readonly CanonicalEvent[], workspaceRepositoryKey?: string) => ScopedBatch;
 };
 
 /** A destination left out of this invocation, and why — by name only. */
@@ -364,9 +367,10 @@ export const createExportDestinationSinks = (
         ? {}
         : {
             scopes: destination.scopes,
-            route: (events: readonly CanonicalEvent[]): ScopedBatch =>
+            route: (events: readonly CanonicalEvent[], workspaceRepositoryKey?: string): ScopedBatch =>
               routeEventsToScopes(events, destination.scopes ?? [], {
                 ...(scopedResourceKey === undefined ? {} : { resourceRepositoryKey: scopedResourceKey }),
+                ...(workspaceRepositoryKey === undefined ? {} : { workspaceRepositoryKey }),
                 restrict,
               }),
           }),
@@ -398,8 +402,8 @@ const createScopedFanout = (
   const none: TelemetryEmitResult = { accepted: 0, rejected: 0, errors: [] };
   return {
     ...unscoped,
-    emit: async (events) => {
-      const batch = route(events);
+    emit: async (events, emitOptions) => {
+      const batch = route(events, emitOptions?.workspaceRepositoryKey);
       if (correlate !== undefined && (batch.traces.length > 0 || batch.logs.length > 0)) {
         // Resolve the whole batch (a memo hit when another destination already
         // did), then let this destination's subsets be served that answer.
@@ -450,10 +454,13 @@ export const createDestinationFanout = (
     return only.sink;
   }
 
-  const emit = async (events: readonly CanonicalEvent[]): Promise<TelemetryEmitResult> => {
+  const emit = async (
+    events: readonly CanonicalEvent[],
+    emitOptions?: TelemetryEmitOptions,
+  ): Promise<TelemetryEmitResult> => {
     const results = await Promise.all(
       fanouts.map((fanout) =>
-        fanout.sink.emit(events).catch(
+        fanout.sink.emit(events, emitOptions).catch(
           (thrown: unknown): TelemetryEmitResult => ({
             accepted: 0,
             rejected: events.length,

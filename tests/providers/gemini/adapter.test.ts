@@ -191,6 +191,11 @@ describe("gemini-cli adapter: parse per event", () => {
     }
   });
 
+  it("names the payload's cwd as the session's directory, for routing only", () => {
+    const result = parseFixture("session-start");
+    expect(result.status === "parsed" ? result.workspaceDirectory : undefined).toBe("/workspace/demo-repo");
+  });
+
   it("parses SessionEnd into session.end with a completed reason", () => {
     const result = parseFixture("session-end");
     expect(result.status).toBe("parsed");

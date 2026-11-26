@@ -19,11 +19,28 @@ import { spanEndEdgesOf } from "./semconv.js";
  * map, send, and spool exactly what they are given, so a scoped destination's
  * spool only ever holds what passed its filter.
  *
- * The repository is read the way the record will carry it on the wire: the
- * session context stamped on the event wins over the exporter Resource (the
- * launcher's `OTEL_RESOURCE_ATTRIBUTES`), as it does in `profileAttributes`.
+ * The repository is, in order:
+ *
+ * 1. the session context stamped on the event (`vcs.repository.url.full`) — it
+ *    always wins, since a slot worktree can sit under another checkout;
+ * 2. else the `origin` remote of the session directory's own repository
+ *    (`workspaceRepositoryKey`, read by the hook) — so a session's records before
+ *    any context exists (its start, its first prompt) reach the destination
+ *    scoped to the repository it runs in;
+ * 3. else the exporter Resource (the launcher's `OTEL_RESOURCE_ATTRIBUTES`);
+ * 4. else none, and no scope takes the record.
+ *
  * A context value that does not parse as a repository URL names no repository —
- * it is not silently replaced by the Resource's.
+ * it is not silently replaced by a fallback.
+ *
+ * A record a scoped destination takes by a fallback key (2 or 3) is sent to it
+ * stamped with that repository — `vcs.repository.url.full = https://<key>`, the
+ * normalized key and never the raw remote, so no credential, port or local path
+ * can appear — on the scoped copy only. The destination names that repository in
+ * its own scope, and the session's later records carry it, so this discloses
+ * nothing new; it lets a receiver file the session's first records under the
+ * repository it was opted in for. A record with its own stamp keeps it, and an
+ * unscoped destination is sent the batch unchanged.
  */
 
 const DISCLOSURE_RANK: Readonly<Record<ContentFact["disclosure"], number>> = Object.freeze({
@@ -60,6 +77,21 @@ const keyOfValue = (value: unknown): string | undefined =>
 export const resourceRepositoryKey = (
   attributes: Readonly<Record<string, unknown>>,
 ): string | undefined => keyOfValue(attributes[ATTR_VCS_REPOSITORY_URL_FULL]);
+
+/** The `vcs.repository.url.full` a scoped copy is stamped with for a fallback key. */
+export const repositoryUrlForKey = (key: string): string => `https://${key}`;
+
+const hasOwnStamp = (attributes: Readonly<Record<string, unknown>> | undefined): boolean =>
+  attributes?.[ATTR_VCS_REPOSITORY_URL_FULL] !== undefined;
+
+/** The event, stamped with a fallback key's repository unless it has a stamp of its own. */
+const withRoutedRepository = (event: CanonicalEvent, key: string): CanonicalEvent =>
+  hasOwnStamp(event.contextAttributes)
+    ? event
+    : {
+        ...event,
+        contextAttributes: { ...event.contextAttributes, [ATTR_VCS_REPOSITORY_URL_FULL]: repositoryUrlForKey(key) },
+      };
 
 /** The repository key one event's records carry. */
 export const eventRepositoryKey = (
@@ -122,6 +154,11 @@ export type ScopedBatch = {
 export type RouteEventsOptions = {
   /** Repository key of the exporter Resource, for events with no stamp of their own. */
   readonly resourceRepositoryKey?: string;
+  /**
+   * Repository key of the session directory's `origin` remote; for events with no
+   * stamp of their own, ahead of {@link resourceRepositoryKey}. Never exported.
+   */
+  readonly workspaceRepositoryKey?: string;
   readonly restrict: ContentRestrictor;
 };
 
@@ -139,20 +176,26 @@ export const routeEventsToScopes = (
   options: RouteEventsOptions,
 ): ScopedBatch => {
   const ends = spanEndEdgesOf(events);
+  const fallbackKey = options.workspaceRepositoryKey ?? options.resourceRepositoryKey;
   const traces: CanonicalEvent[] = [];
   const logs: CanonicalEvent[] = [];
   let unchanged = true;
   for (const event of events) {
     const anchor = ends.get(event.eventId) ?? event;
-    const scope = matchDestinationScope(scopes, eventRepositoryKey(anchor, options.resourceRepositoryKey));
+    const scope = matchDestinationScope(scopes, eventRepositoryKey(anchor, fallbackKey));
     if (scope === undefined || !scope.signals.traces || !scope.signals.logs) {
       unchanged = false;
     }
     if (scope === undefined) {
       continue;
     }
-    const restricted =
+    const lowered =
       scope.contentMode === undefined ? event : restrictEventContent(event, scope.contentMode, options.restrict);
+    // Routed by a fallback (the span's judging edge has no stamp): say so on the copy.
+    const restricted =
+      hasOwnStamp(anchor.contextAttributes) || fallbackKey === undefined
+        ? lowered
+        : withRoutedRepository(lowered, fallbackKey);
     if (restricted !== event) {
       unchanged = false;
     }
@@ -180,7 +223,7 @@ export const routePointsToScopes = (
   scopes: readonly DestinationScope[],
   pointsFor: (includeSessionId: boolean) => readonly MetricPoint[] | undefined,
   options: {
-    /** Repository key for points with no stamp of their own (context, then Resource). */
+    /** Repository key for points with no stamp of their own (workspace remote, then Resource). */
     readonly fallbackKey: string | undefined;
     /** The installation's `exporter.metrics.includeSessionId`; a scope can only turn it off. */
     readonly includeSessionId: boolean;
@@ -195,7 +238,17 @@ export const routePointsToScopes = (
     for (const point of pointsFor(variant) ?? []) {
       const scope = matchDestinationScope(scopes, pointRepositoryKey(point, options.fallbackKey));
       if (scope?.signals.metrics === true && effective(scope) === variant) {
-        kept.push(point);
+        kept.push(
+          hasOwnStamp(point.attributes) || options.fallbackKey === undefined
+            ? point
+            : {
+                ...point,
+                attributes: {
+                  ...point.attributes,
+                  [ATTR_VCS_REPOSITORY_URL_FULL]: repositoryUrlForKey(options.fallbackKey),
+                },
+              },
+        );
       }
     }
   }

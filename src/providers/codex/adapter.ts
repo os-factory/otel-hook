@@ -482,6 +482,7 @@ const parse = (input: ProviderParseInput, context: ProviderContext): ProviderPar
     events: factory.events(),
     ...(warnings.length === 0 ? {} : { warnings }),
     ...(targetHints.size === 0 ? {} : { targetHints }),
+    ...(payload.cwd === undefined || payload.cwd.length === 0 ? {} : { workspaceDirectory: payload.cwd }),
   };
 };
 

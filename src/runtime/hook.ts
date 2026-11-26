@@ -200,6 +200,13 @@ export type HookIngestOutcome = {
   readonly dropped: number;
   readonly hookResponse: ProviderHookResponse;
   readonly diagnostics: readonly OtelHookErrorInfo[];
+  /**
+   * Repository key of the session workspace's `origin` remote, when
+   * `routeByWorkspaceRepository` asked for it and one was found. Routing only —
+   * what the batch's records were routed by when no context stamp named a
+   * repository; never exported. The metrics of this callback route by it too.
+   */
+  readonly workspaceRepositoryKey?: string;
 };
 
 export type HookIngestOptions = {
@@ -277,9 +284,47 @@ export type OtelHookDependencies = {
    * implementation is `createDirectorySessionContextReader`.
    */
   readonly sessionContext?: SessionContextReader;
+  /**
+   * Read the `origin` remote of the session directory's repository through the
+   * {@link worktreeLocator}, and hand its key to the sink as
+   * `TelemetryEmitOptions.workspaceRepositoryKey`. Set when a destination has
+   * scopes; off, nothing extra is read.
+   */
+  readonly routeByWorkspaceRepository?: boolean;
 };
 
 const MAX_ERROR_EVENTS = 8;
+
+/**
+ * The session directory's repository key, or `undefined` — on any failure, no
+ * locator support, or when the budget runs out first. Never throws.
+ */
+const resolveWorkspaceRepositoryKey = async (
+  locator: WorktreeLocator | undefined,
+  directory: string,
+  budgetMillis: number,
+): Promise<string | undefined> => {
+  if (locator?.originRepositoryKey === undefined) {
+    return undefined;
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<undefined>((resolve) => {
+    timer = setTimeout(() => resolve(undefined), Math.max(0, budgetMillis));
+    timer.unref?.();
+  });
+  try {
+    return await Promise.race([
+      locator.originRepositoryKey(directory).catch((): undefined => undefined),
+      deadline,
+    ]);
+  } catch {
+    return undefined;
+  } finally {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+    }
+  }
+};
 
 const collectContentFacts = (event: CanonicalEvent): readonly ContentFact[] => {
   const facts: ContentFact[] = [];
@@ -968,6 +1013,7 @@ export const createOtelHook = (deps: OtelHookDependencies): OtelHook => {
             readonly batch: readonly CanonicalEvent[];
             readonly dropped: number;
             readonly targetHints?: ReadonlyMap<EventId, TargetHint>;
+            readonly workspaceDirectory?: string;
           };
 
       /**
@@ -1162,6 +1208,7 @@ export const createOtelHook = (deps: OtelHookDependencies): OtelHook => {
           batch,
           dropped: screened.dropped,
           ...(parsed.targetHints === undefined ? {} : { targetHints: parsed.targetHints }),
+          ...(parsed.workspaceDirectory === undefined ? {} : { workspaceDirectory: parsed.workspaceDirectory }),
         };
       };
 
@@ -1264,11 +1311,29 @@ export const createOtelHook = (deps: OtelHookDependencies): OtelHook => {
           : undefined,
       );
 
+      // Routing only (scoped destinations): the repository the session's own
+      // directory belongs to, for events no context stamp names one for. Read only
+      // when asked for, bounded like target resolution, and never put on an event.
+      const workspaceRepositoryKey =
+        !suppress &&
+        batch.length > 0 &&
+        deps.routeByWorkspaceRepository === true &&
+        prepared.workspaceDirectory !== undefined
+          ? await resolveWorkspaceRepositoryKey(
+              deps.worktreeLocator,
+              prepared.workspaceDirectory,
+              deps.targetResolutionBudgetMillis ?? DEFAULT_TARGET_RESOLUTION_BUDGET_MILLIS,
+            )
+          : undefined;
+
       let emitted = 0;
       let exportRejected = 0;
       if (!suppress && batch.length > 0) {
         try {
-          const result = await deps.sink.emit(batch);
+          const result = await deps.sink.emit(
+            batch,
+            workspaceRepositoryKey === undefined ? undefined : { workspaceRepositoryKey },
+          );
           emitted = result.accepted;
           exportRejected = result.rejected;
           diagnostics.push(...result.errors);
@@ -1360,6 +1425,7 @@ export const createOtelHook = (deps: OtelHookDependencies): OtelHook => {
         dropped,
         hookResponse: hookResponseFor(adapter, detection, "attributed", undefined, emitted, diagnostics),
         diagnostics,
+        ...(workspaceRepositoryKey === undefined ? {} : { workspaceRepositoryKey }),
       };
     } catch (thrown) {
       // Last line of defence: anything unanticipated becomes a diagnostic.

@@ -161,6 +161,18 @@ const deriveWorkspace = (
 };
 
 /**
+ * The session's one directory, for routing by its repository's remote: the
+ * single workspace root, else `cwd`. Several roots name no one directory.
+ */
+const workspaceDirectoryOf = (payload: CursorPayload): string | undefined => {
+  const roots = (payload.workspace_roots ?? []).filter((root) => root.length > 0);
+  if (roots.length > 0) {
+    return roots.length === 1 ? roots[0] : undefined;
+  }
+  return payload.cwd !== undefined && payload.cwd.length > 0 ? payload.cwd : undefined;
+};
+
+/**
  * Stable per-call uniqueness fed into the invocation id hash. Every value comes
  * from the payload itself, never from process state, so replaying a payload
  * reproduces the same id.
@@ -783,11 +795,13 @@ export const createCursorAdapter = (options: CursorAdapterOptions = {}): Provide
     }
 
     const targetHints = factory.targetHints();
+    const workspaceDirectory = workspaceDirectoryOf(payload);
     return {
       status: "parsed",
       events: factory.events(),
       ...(warnings.length === 0 ? {} : { warnings }),
       ...(targetHints.size === 0 ? {} : { targetHints }),
+      ...(workspaceDirectory === undefined ? {} : { workspaceDirectory }),
     };
   };
 

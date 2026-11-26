@@ -202,6 +202,18 @@ describe("cursor adapter: lifecycle contract", () => {
     expect(outcome.identity?.workspace.keySource).toBe("working-directory");
   });
 
+  it("names the session's directory for routing: the one workspace root, else cwd, never one of several", () => {
+    const adapter = createCursorAdapter();
+    const directoryOf = (payload: unknown): string | undefined => {
+      const result = adapter.parse(manualParseInput(payload), manualContext());
+      return result.status === "parsed" ? result.workspaceDirectory : undefined;
+    };
+    expect(directoryOf(sessionStartPayload({ workspace_roots: ["/work/one"] }))).toBe("/work/one");
+    expect(directoryOf(sessionStartPayload({ workspace_roots: WORKSPACE_ROOT_MULTI }))).toBeUndefined();
+    expect(directoryOf(preToolUsePayload({ workspace_roots: undefined, cwd: "/work/cwd" }))).toBe("/work/cwd");
+    expect(directoryOf(preToolUsePayload({ workspace_roots: undefined, cwd: "" }))).toBeUndefined();
+  });
+
   it("maps sessionEnd to session.end, in milliseconds", async () => {
     const harness = harnessWithCursor();
     await ingest(harness, sessionEndPayload());
