@@ -1,3 +1,10 @@
+## [0.14.1](https://github.com/os-factory/otel-hook/compare/v0.14.0...v0.14.1) (2026-11-26)
+
+
+### Bug Fixes
+
+* route events without a stamp by the session's own repository ([#79](https://github.com/os-factory/otel-hook/issues/79)) ([6cc2aed](https://github.com/os-factory/otel-hook/commit/6cc2aed23741263ac1e93fc715085ebec390740b))
+
 # [0.14.0](https://github.com/os-factory/otel-hook/compare/v0.13.2...v0.14.0) (2026-11-26)
 
 
