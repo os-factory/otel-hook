@@ -1,6 +1,6 @@
 {
   "name": "@osfactory/otel-hook",
-  "version": "0.13.2",
+  "version": "0.14.0",
   "description": "Provider-neutral coding-agent hooks to OpenTelemetry",
   "scripts": {
     "test": "vitest run",

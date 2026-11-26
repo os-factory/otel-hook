@@ -1,3 +1,10 @@
+# [0.14.0](https://github.com/os-factory/otel-hook/compare/v0.13.2...v0.14.0) (2026-11-26)
+
+
+### Features
+
+* per-destination repository scopes (what goes where, at which detail) ([#78](https://github.com/os-factory/otel-hook/issues/78)) ([d1ec221](https://github.com/os-factory/otel-hook/commit/d1ec221df38274fa1eef2ce94869a9ec3410f82a))
+
 ## [0.13.2](https://github.com/os-factory/otel-hook/compare/v0.13.1...v0.13.2) (2026-11-26)
 
 
