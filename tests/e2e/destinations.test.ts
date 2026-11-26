@@ -5,7 +5,7 @@
  * synthetic Claude Code hook payload written for this test. Nothing is copied from
  * a real session.
  */
-import { readdir, writeFile } from "node:fs/promises";
+import { mkdir, readdir, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
@@ -425,5 +425,80 @@ describe("otel-hook doctor: destinations", () => {
 
     const text = await runCliProcess(["doctor", "--config-file", config, "--state-dir", stateDir], "");
     expect(text.stdout).toMatch(/destination down: .*dropped 2/);
+  }, 120_000);
+});
+
+describe("otel-hook run: per-repository destination scopes", () => {
+  const REPO_A = "https://github.com/synthetic-org/repo-a";
+  const REPO_B = "git@github.com:synthetic-org/repo-b.git";
+
+  const writeContext = async (dir: string, sessionId: string, repository: string): Promise<void> => {
+    await mkdir(path.join(dir, "claude_code"), { recursive: true });
+    await writeFile(
+      path.join(dir, "claude_code", `${sessionId}.json`),
+      JSON.stringify({
+        version: 1,
+        agentTool: "claude_code",
+        sessionId,
+        segments: [
+          {
+            from: "2000-01-01T00:00:00Z",
+            to: null,
+            reason: "launch",
+            attributes: { "vcs.repository.url.full": repository },
+          },
+        ],
+      }),
+      "utf8",
+    );
+  };
+
+  it("sends a scoped destination only its repository's sessions, and doctor shows the scope", async () => {
+    const local = await withCollector();
+    const hosted = await withCollector();
+    const stateDir = await withStateDir();
+    const contextDir = path.join(stateDir, "context");
+    await writeContext(contextDir, "ses-e2e-scope-a", REPO_A);
+    await writeContext(contextDir, "ses-e2e-scope-b", REPO_B);
+    const config = await writeConfig(stateDir, {
+      sessionContext: { dir: contextDir },
+      exporter: {
+        destinations: [
+          { name: "local", endpoint: local.url },
+          {
+            name: "hosted",
+            endpoint: hosted.url,
+            scopes: [{ repositories: [`${REPO_A}.git`], signals: ["traces"], includeSessionId: false }],
+          },
+        ],
+      },
+    });
+    for (const sessionId of ["ses-e2e-scope-a", "ses-e2e-scope-b", "ses-e2e-scope-none"]) {
+      const result = await runHook(config, stateDir, prompt(sessionId, 1));
+      expect(result.code).toBe(0);
+    }
+
+    const sessionsOf = (spans: readonly DecodedSpan[]): string[] =>
+      [...new Set(spans.map((span) => String(span.attributes["session.id"])))].sort();
+    expect(sessionsOf(spansOf(local))).toEqual(["ses-e2e-scope-a", "ses-e2e-scope-b", "ses-e2e-scope-none"]);
+    expect(sessionsOf(spansOf(hosted))).toEqual(["ses-e2e-scope-a"]);
+    expect(spansOf(hosted).every((span) => span.attributes["vcs.repository.url.full"] === REPO_A)).toBe(true);
+
+    const doctor = await runCliProcess(["doctor", "--config-file", config, "--state-dir", stateDir], "");
+    expect(doctor.stdout).toMatch(/destination local: .*all repositories/);
+    expect(doctor.stdout).toMatch(/destination hosted: .*scoped \(1 scope\(s\)/);
+    expect(doctor.stdout).toContain(
+      "scope 1: github.com/synthetic-org/repo-a; traces; content as configured; no session.id on metrics",
+    );
+    const json = JSON.parse(
+      (await runCliProcess(["doctor", "--json", "--config-file", config, "--state-dir", stateDir], "")).stdout,
+    ) as { destinations: { name: string; scopes?: unknown }[] };
+    expect(json.destinations.find((entry) => entry.name === "hosted")?.scopes).toEqual([
+      {
+        repositories: ["github.com/synthetic-org/repo-a"],
+        signals: ["traces"],
+        includeSessionId: false,
+      },
+    ]);
   }, 120_000);
 });

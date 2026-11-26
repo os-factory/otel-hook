@@ -88,6 +88,7 @@ export {
 export {
   createSignalFanout,
   shareCorrelationPerBatch,
+  type SharedCorrelationResolver,
   type SignalFanoutOptions,
   type SignalFanoutSink,
 } from "../telemetry/signal-fanout.js";
@@ -101,10 +102,28 @@ export {
   createExportDestinationSinks,
   exporterPolicyForDestination,
   spoolQueueNamesFor,
+  type DestinationFanoutOptions,
   type ExportDestinationSinks,
   type ExportDestinationsOptions,
   type SkippedExportDestination,
 } from "../telemetry/export-destinations.js";
+/**
+ * Per-repository destination scopes (`exporter.destinations[].scopes`): the
+ * pure routing a scoped destination applies to a batch and to metric points.
+ */
+export {
+  eventRepositoryKey,
+  omitRestrictedContent,
+  pointRepositoryKey,
+  resourceRepositoryKey,
+  restrictEventContent,
+  routeEventsToScopes,
+  routePointsToScopes,
+  sessionIdVariantsFor,
+  type ContentRestrictor,
+  type RouteEventsOptions,
+  type ScopedBatch,
+} from "../telemetry/destination-scope.js";
 export { isPermanentExportFailure } from "../telemetry/export-failure.js";
 
 /**

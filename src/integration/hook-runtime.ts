@@ -71,6 +71,12 @@ import {
   type MetricPoint,
 } from "../telemetry/metric-model.js";
 import { createOtlpLogSink, type OtlpLogTelemetrySink } from "../telemetry/otlp-log-sink.js";
+import { ATTR_VCS_REPOSITORY_URL_FULL } from "../config/repository-key.js";
+import {
+  resourceRepositoryKey,
+  routePointsToScopes,
+  sessionIdVariantsFor,
+} from "../telemetry/destination-scope.js";
 import { createOtlpTraceSink, type OtlpTelemetrySink } from "../telemetry/otlp-sink.js";
 import {
   shareCorrelationPerBatch,
@@ -606,6 +612,7 @@ export const createHookRuntime = (options: HookRuntimeOptions): HookRuntime => {
       allowRawContent: privacy.policy.allowRawContent,
     },
     correlate,
+    restrictContent: (fact, mode) => privacy.restrictContent(fact, mode),
   });
 
   // The primary destination backs the single-destination accessors below: `default`
@@ -630,7 +637,7 @@ export const createHookRuntime = (options: HookRuntimeOptions): HookRuntime => {
   const spool = primary?.spool;
   const logSpool = primary?.logSpool;
 
-  const sink = createDestinationFanout(exportDestinations.destinations);
+  const sink = createDestinationFanout(exportDestinations.destinations, { correlate });
 
   const hookDeps = {
     stateStore,
@@ -681,6 +688,8 @@ export const createHookRuntime = (options: HookRuntimeOptions): HookRuntime => {
     (destination) => destination.metrics.enabled,
   );
   const metricResource = resourceFromExporterPolicy(options.config.exporter);
+  const scopedMetricDestinations = metricDestinations.filter((destination) => destination.scopes !== undefined);
+  const unscopedMetricDestinations = metricDestinations.filter((destination) => destination.scopes === undefined);
   const deliveryRetentionMillis = options.deliveryRetentionMillis ?? lifecycleMaxAge;
   if (deliveryRetentionMillis < staleClaimMillis) {
     // Not raised, only reported: an operator who wants dedup records gone in a
@@ -779,27 +788,76 @@ export const createHookRuntime = (options: HookRuntimeOptions): HookRuntime => {
           turnStarts.set(event.sessionId, await metricSeries.readTurnStart(event.sessionId));
         }
       }
-      const observations = deriveMetricObservations({
-        events: ingest.events,
-        usage: ingest.usageObservations,
-        resource: metricResource,
-        includeSessionId: metricsPolicy.includeSessionId,
-        ...(generationStarts === undefined ? {} : { generationStarts }),
-        turnStart: (sessionId) => turnStarts.get(sessionId),
-      });
-      if (observations.length === 0) {
+      // One set of points per `session.id` variant some destination needs: the
+      // installation's own for unscoped destinations, and the session-less one
+      // for a scope that turns it off. Usually just the first, computed once.
+      const scopedRepositoryFallback =
+        scopedMetricDestinations.length === 0 ? undefined : resourceRepositoryKey(metricResource.attributes);
+      // With a scoped destination, a point must carry the repository it is routed
+      // by: a series that is not per session would otherwise merge sessions of
+      // different repositories under one Resource-less identity.
+      const resourceRepository = metricResource.attributes[ATTR_VCS_REPOSITORY_URL_FULL];
+      const metricEvents =
+        scopedRepositoryFallback === undefined || typeof resourceRepository !== "string"
+          ? ingest.events
+          : ingest.events.map((event): CanonicalEvent =>
+              event.contextAttributes?.[ATTR_VCS_REPOSITORY_URL_FULL] === undefined
+                ? {
+                    ...event,
+                    contextAttributes: {
+                      ...event.contextAttributes,
+                      [ATTR_VCS_REPOSITORY_URL_FULL]: resourceRepository,
+                    },
+                  }
+                : event,
+            );
+      const pointsByVariant = new Map<boolean, readonly MetricPoint[]>();
+      const variants = new Set<boolean>(
+        unscopedMetricDestinations.length > 0 ? [metricsPolicy.includeSessionId] : [],
+      );
+      for (const destination of scopedMetricDestinations) {
+        for (const variant of sessionIdVariantsFor(destination.scopes ?? [], metricsPolicy.includeSessionId)) {
+          variants.add(variant);
+        }
+      }
+      for (const includeSessionId of variants) {
+        const observations = deriveMetricObservations({
+          events: metricEvents,
+          usage: ingest.usageObservations,
+          resource: metricResource,
+          includeSessionId,
+          ...(generationStarts === undefined ? {} : { generationStarts }),
+          turnStart: (sessionId) => turnStarts.get(sessionId),
+        });
+        if (observations.length === 0) {
+          continue;
+        }
+        pointsByVariant.set(
+          includeSessionId,
+          metricsPolicy.temporality === "delta"
+            ? aggregateDeltaPoints(observations, clock.now())
+            : await metricSeries.recordCumulative(observations, {
+                perSession: includeSessionId,
+                ...(deliveryToken === undefined ? {} : { deliveryToken }),
+              }),
+        );
+      }
+      if (pointsByVariant.size === 0) {
         return undefined;
       }
-      const points: readonly MetricPoint[] =
-        metricsPolicy.temporality === "delta"
-          ? aggregateDeltaPoints(observations, clock.now())
-          : await metricSeries.recordCumulative(observations, {
-              perSession: metricsPolicy.includeSessionId,
-              ...(deliveryToken === undefined ? {} : { deliveryToken }),
-            });
       const context = agreedContextAttributes(ingest.events);
       const results = await Promise.all(
         metricDestinations.map(async (destination) => {
+          const points =
+            destination.scopes === undefined
+              ? (pointsByVariant.get(metricsPolicy.includeSessionId) ?? [])
+              : routePointsToScopes(destination.scopes, (variant) => pointsByVariant.get(variant), {
+                  fallbackKey: scopedRepositoryFallback,
+                  includeSessionId: metricsPolicy.includeSessionId,
+                });
+          if (points.length === 0) {
+            return { name: destination.name, accepted: 0, rejected: 0 };
+          }
           const result = await destination.metrics.exportPoints(points, context).catch(
             (thrown: unknown) => ({
               accepted: 0,
@@ -813,7 +871,8 @@ export const createHookRuntime = (options: HookRuntimeOptions): HookRuntime => {
           return { name: destination.name, accepted: result.accepted, rejected: result.rejected };
         }),
       );
-      return { points: points.length, destinations: results };
+      const points = Math.max(0, ...[...pointsByVariant.values()].map((variant) => variant.length));
+      return { points, destinations: results };
     } catch (thrown) {
       diagnostics.push(stateDiagnostic(thrown));
       logger.warn("hook-derived metrics could not be recorded for this callback", {});

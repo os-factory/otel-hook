@@ -197,6 +197,24 @@ export const resolveConfig = (layers: readonly ConfigLayer[] = []): ConfigResolu
         );
       }
     }
+    // A scope can only restrict: say so when one asks for more than the installation discloses.
+    const rank = { omit: 0, mask: 1, redact: 2, raw: 3 } as const;
+    const effectiveMode =
+      parsed.data.privacy.contentMode === "raw" && !parsed.data.privacy.allowRawContent
+        ? "omit"
+        : parsed.data.privacy.contentMode;
+    const widening = enabled
+      .filter((destination) =>
+        (destination.scopes ?? []).some(
+          (scope) => scope.contentMode !== undefined && rank[scope.contentMode] > rank[effectiveMode],
+        ),
+      )
+      .map((destination) => destination.name);
+    if (widening.length > 0) {
+      notes.push(
+        `destination(s) ${widening.join(", ")} have a scope contentMode above privacy.contentMode=${effectiveMode}; a scope can only lower disclosure, so ${effectiveMode} applies`,
+      );
+    }
   }
   if (
     !withDestinations &&
@@ -264,6 +282,11 @@ const describeDestinationAttributes = (config: OtelHookConfig): Attributes => {
     }
     attributes[`${prefix}.header_names`] = [...destination.headerNames];
     attributes[`${prefix}.header_variables`] = [...destination.headerVariables];
+    if (destination.scopes !== undefined) {
+      // A count only: the snapshot is exported, and which repositories one
+      // destination takes is not something every other destination should learn.
+      attributes[`${prefix}.scope_count`] = destination.scopes.length;
+    }
   }
   return attributes;
 };

@@ -651,6 +651,86 @@ export const runConcurrencyLab = async ({ labRoot, pluginRoot, repoRoot, cliPath
           drain: { rounds: drainRounds, replayed: replayCheck.counts, duplicates, missing, remaining, quarantined },
         };
       }),
+
+    /**
+     * 9. Per-repository destination scopes: two repositories in parallel (as s1),
+     * every hook sending to the scenario collector (unscoped, like Mission
+     * Control) and to a hosted-like destination scoped to repository A only,
+     * without session.id on its metric points. The hosted collector must see
+     * repository A's records and nothing else — never B's, never the stale
+     * Resource repository — with the same span ids the unscoped one got.
+     */
+    s9: () =>
+      withCollector("s9", async (ctx) => {
+        const hosted = await startOtlpReceiver({ captureDir: path.join(labRoot, "capture", "s9-hosted") });
+        try {
+          const [repoA, repoB] = await Promise.all([har.initRepo("repo-s9a", repoUrl("repo-s9a")), har.initRepo("repo-s9b", repoUrl("repo-s9b"))]);
+          const configFile = path.join(labRoot, "s9-scopes.json");
+          await writeFile(
+            configFile,
+            `${JSON.stringify(
+              {
+                exporter: {
+                  destinations: [
+                    {
+                      name: "hosted",
+                      endpoint: hosted.tracesUrl,
+                      signals: ["traces", "logs", "metrics"],
+                      scopes: [{ repositories: [repoA.url], includeSessionId: false }],
+                    },
+                  ],
+                },
+              },
+              null,
+              2,
+            )}\n`,
+          );
+          const sidA = randomUUID();
+          const sidB = randomUUID();
+          const [slotA, slotB] = await Promise.all([
+            har.launch(repoA, 1, { agent: { ...CLAUDE, sessionId: sidA }, workId: "wu-s9a" }),
+            har.launch(repoB, 1, { agent: { ...CLAUDE, sessionId: sidB }, workId: "wu-s9b" }),
+          ]);
+          const runs = await Promise.all([
+            runAgentSession(ctx, { provider: claudeCodeProvider, workspace: slotA.workDir, label: "s9-a", sessionId: sidA, configFile }),
+            runAgentSession(ctx, { provider: claudeCodeProvider, workspace: slotB.workDir, label: "s9-b", sessionId: sidB, configFile }),
+          ]);
+          const local = decodeCollector(ctx.collector);
+          const remote = decodeCollector(hosted);
+          const failures = [];
+          const repoOf = (record) => record.attributes["vcs.repository.url.full"];
+          for (const repo of [repoA, repoB]) {
+            if (!local.some((record) => repoOf(record) === repo.url)) failures.push(`unscoped collector has no records of ${repo.name}`);
+          }
+          const foreign = remote.filter((record) => repoOf(record) !== repoA.url);
+          if (foreign.length > 0) {
+            failures.push(`hosted collector got ${String(foreign.length)} records outside ${repoA.name}: ${JSON.stringify([...new Set(foreign.map(repoOf))])}`);
+          }
+          for (const signal of ["span", "log", "metric"]) {
+            if (!remote.some((record) => record.signal === signal)) failures.push(`hosted collector got no ${signal} of ${repoA.name}`);
+          }
+          const withSession = remote.filter((record) => record.signal === "metric" && "session.id" in record.attributes);
+          if (withSession.length > 0) failures.push(`${String(withSession.length)} hosted metric points carry session.id`);
+          const spanKey = (record) => `${record.traceId}/${record.spanId}/${record.name}`;
+          const localA = new Set(local.filter((r) => r.signal === "span" && repoOf(r) === repoA.url).map(spanKey));
+          const remoteA = remote.filter((r) => r.signal === "span").map(spanKey);
+          const unmatched = remoteA.filter((k) => !localA.has(k));
+          if (unmatched.length > 0) failures.push(`${String(unmatched.length)} hosted spans have ids the unscoped collector never saw`);
+          if (new Set(remoteA).size !== remoteA.length) failures.push("hosted collector got a span twice");
+          return {
+            ok: failures.length === 0 && runs.every((r) => r.exitCode === 0),
+            failures,
+            slots: [slotA, slotB],
+            agents: runs.map(summarizeRun),
+            wire: {
+              unscoped: { a: local.filter((r) => repoOf(r) === repoA.url).length, b: local.filter((r) => repoOf(r) === repoB.url).length },
+              hosted: { a: remote.length - foreign.length, foreign: foreign.length, bySignal: Object.fromEntries(["span", "log", "metric"].map((s) => [s, remote.filter((r) => r.signal === s).length])) },
+            },
+          };
+        } finally {
+          await hosted.close();
+        }
+      }),
   };
 
   const selected = only === undefined ? Object.keys(scenarios) : only.split(",").map((s) => s.trim());

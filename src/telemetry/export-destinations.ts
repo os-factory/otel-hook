@@ -1,6 +1,7 @@
 import {
   DEFAULT_DESTINATION_NAME,
   effectiveSpoolPolicy,
+  type DestinationScope,
   hasConfiguredDestinations,
   resolveDestinationHeaders,
   resolveExportDestinations,
@@ -30,7 +31,19 @@ import {
 } from "./otlp-metric-sink.js";
 import { createOtlpTraceSink, type OtlpTelemetrySink } from "./otlp-sink.js";
 import type { SpanCorrelationResolver } from "./semconv.js";
-import { createSignalFanout, type SignalFanoutSink } from "./signal-fanout.js";
+import {
+  omitRestrictedContent,
+  resourceRepositoryKey,
+  routeEventsToScopes,
+  type ContentRestrictor,
+  type ScopedBatch,
+} from "./destination-scope.js";
+import { resourceFromExporterPolicy } from "./exporter-resource.js";
+import {
+  createSignalFanout,
+  type SharedCorrelationResolver,
+  type SignalFanoutSink,
+} from "./signal-fanout.js";
 
 /**
  * Spool queue directories for one destination, below the identity namespace.
@@ -119,6 +132,13 @@ export type ExportDestinationSinks = {
   /** Hook-derived metrics; a disabled sink unless this destination takes `metrics`. */
   readonly metrics: OtlpMetricTelemetrySink;
   readonly metricSpool?: DurableMetricSpool;
+  /**
+   * Per-repository filter (`exporter.destinations[].scopes`). Absent: this
+   * destination is sent every record, exactly as before scopes existed.
+   */
+  readonly scopes?: readonly DestinationScope[];
+  /** Splits a batch by {@link scopes}; present exactly when they are. */
+  readonly route?: (events: readonly CanonicalEvent[]) => ScopedBatch;
 };
 
 /** A destination left out of this invocation, and why — by name only. */
@@ -163,6 +183,12 @@ export type ExportDestinationsOptions = {
    * signal of this call.
    */
   readonly endpointHealth?: EndpointHealth;
+  /**
+   * Lowers content disclosure for a scope's `contentMode` — the privacy
+   * service's `restrictContent`. Default: content above the scope's mode is
+   * omitted outright.
+   */
+  readonly restrictContent?: ContentRestrictor;
 };
 
 /**
@@ -217,6 +243,9 @@ export const createExportDestinationSinks = (
       ...(options.exporter.endpointDownMillis === undefined ? {} : { downMillis: options.exporter.endpointDownMillis }),
       probeMillis: effectiveExportTimeoutMillis(options.exporter) + 1_000,
     });
+
+  const scopedResourceKey = resourceRepositoryKey(resourceFromExporterPolicy(options.exporter).attributes);
+  const restrict = options.restrictContent ?? omitRestrictedContent;
 
   for (const destination of resolveExportDestinations(options.exporter)) {
     let headers: Readonly<Record<string, string>> | undefined;
@@ -331,9 +360,62 @@ export const createExportDestinationSinks = (
       ...(spool === undefined ? {} : { spool }),
       ...(logSpool === undefined ? {} : { logSpool }),
       ...(metricSpool === undefined ? {} : { metricSpool }),
+      ...(destination.scopes === undefined
+        ? {}
+        : {
+            scopes: destination.scopes,
+            route: (events: readonly CanonicalEvent[]): ScopedBatch =>
+              routeEventsToScopes(events, destination.scopes ?? [], {
+                ...(scopedResourceKey === undefined ? {} : { resourceRepositoryKey: scopedResourceKey }),
+                restrict,
+              }),
+          }),
     });
   }
   return { destinations, skipped };
+};
+
+export type DestinationFanoutOptions = {
+  /**
+   * The batch's shared correlation resolver (`shareCorrelationPerBatch`), the
+   * same one every sink was built with. A scoped destination resolves it over the
+   * *whole* batch and aliases its subsets to that answer, so every destination is
+   * served one resolution and no destination's filter changes another's span ids.
+   */
+  readonly correlate?: SharedCorrelationResolver;
+};
+
+/** A scoped destination's traces-then-logs emission over its own subsets. */
+const createScopedFanout = (
+  destination: ExportDestinationSinks,
+  correlate: SharedCorrelationResolver | undefined,
+): SignalFanoutSink => {
+  const route = destination.route;
+  const unscoped = createSignalFanout({ traces: destination.traces, logs: destination.logs });
+  if (route === undefined) {
+    return unscoped;
+  }
+  const none: TelemetryEmitResult = { accepted: 0, rejected: 0, errors: [] };
+  return {
+    ...unscoped,
+    emit: async (events) => {
+      const batch = route(events);
+      if (correlate !== undefined && (batch.traces.length > 0 || batch.logs.length > 0)) {
+        // Resolve the whole batch (a memo hit when another destination already
+        // did), then let this destination's subsets be served that answer.
+        await correlate(events);
+        correlate.alias(batch.traces, events);
+        correlate.alias(batch.logs, events);
+      }
+      const traces = batch.traces.length === 0 ? none : await destination.traces.emit(batch.traces);
+      const logs = batch.logs.length === 0 ? none : await destination.logs.emit(batch.logs);
+      return {
+        accepted: traces.accepted + logs.accepted,
+        rejected: traces.rejected + logs.rejected,
+        errors: [...traces.errors, ...logs.errors],
+      };
+    },
+  };
 };
 
 /**
@@ -350,16 +432,20 @@ export const createExportDestinationSinks = (
  * and safe to retry; some → `partial`, terminal, because retrying would re-export
  * to the destinations that already accepted.
  *
- * With one destination this returns that destination's fanout unchanged.
+ * With one unscoped destination this returns that destination's fanout unchanged.
+ * A scoped destination (`scopes`) is sent only its own subset of each batch,
+ * per signal; see `destination-scope.ts`.
  */
 export const createDestinationFanout = (
   destinations: readonly ExportDestinationSinks[],
+  options: DestinationFanoutOptions = {},
 ): SignalFanoutSink => {
   const fanouts = destinations.map((destination) => ({
     name: destination.name,
-    sink: createSignalFanout({ traces: destination.traces, logs: destination.logs }),
+    sink: createScopedFanout(destination, options.correlate),
   }));
-  const only = fanouts.length === 1 ? fanouts[0] : undefined;
+  const scoped = destinations.some((destination) => destination.route !== undefined);
+  const only = fanouts.length === 1 && !scoped ? fanouts[0] : undefined;
   if (only !== undefined) {
     return only.sink;
   }

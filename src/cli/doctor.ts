@@ -7,6 +7,7 @@ import {
   resolveDestinationHeaders,
   resolveExportDestinations,
   type DestinationDescription,
+  type DestinationScopeDescription,
   type ExportSignal,
 } from "../config/destinations.js";
 import { describeResolvedConfig } from "../config/resolve.js";
@@ -370,8 +371,27 @@ const describeDestinationLine = (destination: DoctorDestination): string => {
       );
     }
   }
-  return `${destination.ok ? "ok  " : "FAIL"} destination ${destination.name}: ${parts.join("; ")}`;
+  if (destination.scopes === undefined) {
+    if (destination.enabled) {
+      parts.push("all repositories");
+    }
+  } else {
+    parts.push(`scoped (${String(destination.scopes.length)} scope(s); records without a repository are not sent)`);
+  }
+  const lines = [`${destination.ok ? "ok  " : "FAIL"} destination ${destination.name}: ${parts.join("; ")}`];
+  for (const [index, scope] of (destination.scopes ?? []).entries()) {
+    lines.push(`       scope ${String(index + 1)}: ${describeScopeLine(scope)}`);
+  }
+  return lines.join("\n");
 };
+
+const describeScopeLine = (scope: DestinationScopeDescription): string =>
+  [
+    scope.repositories === "*" ? "every repository" : scope.repositories.join(", "),
+    scope.signals.length === 0 ? "no signals" : scope.signals.join("+"),
+    `content ${scope.contentMode ?? "as configured"}`,
+    scope.includeSessionId ? "session.id on metrics" : "no session.id on metrics",
+  ].join("; ");
 
 const sumSpoolStats = (all: readonly SpoolStats[]): SpoolStats => {
   const oldest = all

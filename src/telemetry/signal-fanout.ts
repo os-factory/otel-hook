@@ -92,29 +92,48 @@ export const createSignalFanout = (options: SignalFanoutOptions): SignalFanoutSi
  *
  * Memoized on the identity of the `events` array, which is what makes it correct
  * without a reset: every batch is a distinct array, so a new batch cannot be served
- * a previous one's answer, and a retry of the *same* array deliberately is. The
- * promise is cached rather than its value, so two callers arriving before the first
+ * a previous one's answer, and a retry of the *same* array deliberately is. A
+ * scoped destination's share of the batch is served the batch's answer once it
+ * is registered with `alias`. The promise is cached rather than its value, so two callers arriving before the first
  * resolution completes still share it.
  *
  * Exported because the one-call-per-batch property is a requirement of the
  * correlator, not a convenience of the fanout: a host wiring its own pair of sinks
  * needs to be able to express it too.
  */
+export type SharedCorrelationResolver = SpanCorrelationResolver & {
+  /**
+   * Serve `subset` — a scoped destination's share of `batch`, possibly with
+   * content-lowered copies of its events — the answer resolved for `batch`.
+   * Correlations are looked up by scope, so the entries for events outside the
+   * subset are inert; resolving the subset on its own would record its start
+   * edges a second time. A no-op unless `batch` is the batch last resolved.
+   */
+  alias(subset: readonly CanonicalEvent[], batch: readonly CanonicalEvent[]): void;
+};
+
 export const shareCorrelationPerBatch = (
   correlate: SpanCorrelationResolver,
-): SpanCorrelationResolver => {
+): SharedCorrelationResolver => {
   let pending:
     | {
         readonly events: readonly CanonicalEvent[];
+        readonly aliases: Set<readonly CanonicalEvent[]>;
         readonly result: Promise<readonly SpanCorrelation[]>;
       }
     | undefined;
-  return (events): Promise<readonly SpanCorrelation[]> => {
-    if (pending?.events === events) {
+  const resolve = (events: readonly CanonicalEvent[]): Promise<readonly SpanCorrelation[]> => {
+    if (pending !== undefined && (pending.events === events || pending.aliases.has(events))) {
       return pending.result;
     }
     const result = correlate(events);
-    pending = { events, result };
+    pending = { events, aliases: new Set(), result };
     return result;
   };
+  const alias = (subset: readonly CanonicalEvent[], batch: readonly CanonicalEvent[]): void => {
+    if (pending?.events === batch && subset !== batch) {
+      pending.aliases.add(subset);
+    }
+  };
+  return Object.assign(resolve, { alias });
 };
