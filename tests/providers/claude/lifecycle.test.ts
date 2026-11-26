@@ -122,7 +122,13 @@ describe("Claude Code adapter: lifecycle mapping", () => {
     expect(startEvent.delegationDepth).toBe(1);
     expect(startEvent.subagentType).toBe("Explore");
     expect(stopEvent.outcome).toBe("ok");
-    expect(stopEvent.usage?.cachedInputTokens).toBe(4096);
+    // Usage on SubagentStop is the subagent's own generation's (issue #68), not
+    // restated on the subagent span.
+    expect(stopEvent.usage).toBeUndefined();
+    const generation = eventOfType(stopOutcome.events, "generation.end");
+    if (generation.type !== "generation.end") throw new Error("unreachable");
+    expect(generation.subagentId).toBe(stopEvent.subagentId);
+    expect(generation.usage?.cachedInputTokens).toBe(4096);
   });
 
   it("a tool call from inside a subagent links back via parentInvocationId", async () => {

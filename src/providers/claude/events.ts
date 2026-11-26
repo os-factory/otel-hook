@@ -241,14 +241,50 @@ export const parseClaudeCode = (
       });
       break;
 
-    case "SubagentStop":
+    case "SubagentStop": {
+      // The subagent's tokens (attached from its own transcript, issue #68) are
+      // reported on a generation inside the subagent, where metrics and receivers
+      // count generation spend, and nowhere else: not on the subagent span, which
+      // would restate them, and not on the parent turn, which never sums sidechain
+      // requests. The model is the subagent's own; the session's would be a guess.
+      const usage = withPartialUsage(extractedUsage ?? payload.usage, payload.usage_partial);
+      if (usage.usage !== undefined || payload.model !== undefined) {
+        // Replay-stable for the once-per-run stop, which is also what delivery
+        // deduplicates on (`delivery.ts`): a reclaimed delivery folds into the
+        // same generation instead of opening a second one. A hook-continued stop
+        // repeats `agent_id`, so it needs the sequence to be a generation of its own.
+        const generationId = context.ids.newOpaqueId([
+          "claude-subagent-generation",
+          payload.session_id,
+          payload.agent_id,
+          ...(payload.stop_hook_active === true ? [String(input.sequenceBase)] : []),
+        ]);
+        const models = generationModels(payload.model, undefined);
+        factory.build({ type: "generation.start", generationId, model: models.request });
+        factory.build({
+          type: "generation.end",
+          generationId,
+          model: models.response,
+          outcome: "ok",
+          outputContent: [
+            payload.last_assistant_message === undefined
+              ? context.privacy.describeUnavailableContent({ kind: "response", role: "assistant" })
+              : context.privacy.describeContent({
+                  kind: "response",
+                  role: "assistant",
+                  text: payload.last_assistant_message,
+                }),
+          ],
+          ...usage,
+        });
+      }
       factory.build({
         type: "subagent.end",
         subagentInvocationId: subagentInvocationIdFor(context, payload.session_id, payload.agent_id),
         outcome: "ok",
-        ...withUsage(payload.usage),
       });
       break;
+    }
 
     case "PreCompact":
       // Fires before compaction runs; the completed operation is reported once at

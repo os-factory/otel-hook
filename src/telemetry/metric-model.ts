@@ -226,7 +226,8 @@ const isFailedOutcome = (outcome: string): boolean =>
  *   2. a `generation.start` recorded by an *earlier* callback;
  *   3. the turn's start: the last `prompt.submitted` of the session, no later than
  *      the end. For Claude Code and Codex a generation is a turn, so this is the
- *      turn's wall-clock time, tool calls included.
+ *      turn's wall-clock time, tool calls included. Not for a subagent's
+ *      generation, which did not start with the parent's prompt.
  *   A `generation.start` in the *same* batch as its end is not a start: an
  *   adapter that emits both from one callback (Claude Code's `Stop`) synthesized
  *   it, and measuring from it would record a zero.
@@ -270,6 +271,11 @@ export const deriveMetricObservations = (
     const recovered = startsInBatch.has(end.generationId) ? undefined : input.generationStarts?.(end.generationId);
     if (recovered !== undefined) {
       return end.occurredAt - recovered.startMillis;
+    }
+    // The turn's prompt is the parent's: a subagent's generation started later,
+    // when the subagent did, so measuring from the prompt would overstate it.
+    if (end.subagentId !== undefined) {
+      return undefined;
     }
     const turn = lastPromptInBatch?.get(end.sessionId) ?? input.turnStart?.(end.sessionId);
     return turn === undefined || turn > end.occurredAt ? undefined : end.occurredAt - turn;

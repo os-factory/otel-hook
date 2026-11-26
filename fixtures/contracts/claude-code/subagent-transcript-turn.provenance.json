@@ -1,0 +1,12 @@
+{
+  "fixture": "subagent-transcript-turn.json",
+  "sourceContract": "Claude Code subagent transcript JSONL (the file a SubagentStop payload names as agent_transcript_path), read for record and field names only: every record carries isSidechain: true and the subagent's agentId, and assistant records carry message.id, message.model and message.usage. Stored here as a JSON object whose `records` array the tests write out one per line.",
+  "provider": "claude-code",
+  "providerVersionObserved": "2.1.332",
+  "capturedDate": "2026-11-26",
+  "author": "otel-hook claude-code provider owner (agent)",
+  "sanitization": "Shape only. Every value is invented: session, agent, uuid, request, message and tool ids are fabricated, text is placeholder sentences, and model ids are fictional claude-synthetic-* names. Token counts are round numbers chosen to satisfy the invariants in docs/claude-code-usage-contract.md; none is a measurement. No transcript content was copied.",
+  "licenseBasis": "Original synthetic authorship: record and field names reproduce a third-party CLI's on-disk transcript format, all values are this repository's own.",
+  "sha256": "060cae5d9ee2d0225b85edeb9cf5b7542c8923a972552b2c166f4f11df94b1c9",
+  "notes": "One subagent run of two model requests (issue #68). With readTranscriptUsage on, SubagentStop sums both onto the subagent's own generation (model claude-synthetic-haiku-9), and the parent turn's totals are unchanged. Exercised by tests/providers/claude/transcript-usage-enricher.test.ts and tests/e2e-proof/proof-run.test.ts."
+}

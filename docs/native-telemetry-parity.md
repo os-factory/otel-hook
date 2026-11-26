@@ -68,10 +68,12 @@ otel-hook uses one vocabulary for every provider:
 
 Facts that hold for every provider:
 
-- **No cost.** The canonical model has `cost` on `session.end` and
-  `generation.end`, but neither mapping exports it.
-- **No metrics.** otel-hook emits traces and logs only. A count such as "tool
-  calls" is the number of spans or records.
+- **No computed cost.** `otelhook.cost.usage` (metrics) carries a cost only when
+  the provider reports one in USD, which Claude Code does not. A receiver prices
+  tokens by model itself.
+- **Hook-derived metrics, opt-in** (`--metrics`, issue #69):
+  `gen_ai.client.token.usage`, `gen_ai.client.operation.duration`,
+  `otelhook.sessions`, `otelhook.tool.calls`, `otelhook.cost.usage`.
 - **Durations come from span timing.** A tool span starts at the `tool.start`
   edge and ends at the `tool.end` edge, using the provider's own timestamp
   where it sends one and the hook's clock otherwise. A provider-reported
@@ -99,7 +101,7 @@ otel-hook sources:
 
 | Item | Native | otel-hook | Status |
 | --- | --- | --- | --- |
-| Tokens: input / output / cache read / cache write | `claude_code.token.usage{type=input\|output\|cacheRead\|cacheCreation}`; per request on `claude_code.api_request` (`input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_creation_tokens`) (docs) | No hook carries a token counter, and the adapter may not read `transcript_path` (code; hook schema confirmed on 2.1.220). With the opt-in `providers.claudeCode.readTranscriptUsage` (`--claude-transcript-usage`), the hook runtime sums every main-thread request of the turn from a per-session transcript cursor, and the generation span carries all four `gen_ai.usage.*` buckets with `otelhook.usage.partial=false`; when a turn cannot be summed it reports the last request with `otelhook.usage.partial=true` (code; issue #64) | **covered** per turn with the setting on; subagent requests are not included; no per-request breakdown |
+| Tokens: input / output / cache read / cache write | `claude_code.token.usage{type=input\|output\|cacheRead\|cacheCreation}`; per request on `claude_code.api_request` (`input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_creation_tokens`) (docs) | No hook carries a token counter, and the adapter may not read `transcript_path` (code; hook schema confirmed on 2.1.220). With the opt-in `providers.claudeCode.readTranscriptUsage` (`--claude-transcript-usage`), the hook runtime sums every main-thread request of the turn from a per-session transcript cursor, and the generation span carries all four `gen_ai.usage.*` buckets with `otelhook.usage.partial=false`; when a turn cannot be summed it reports the last request with `otelhook.usage.partial=true` (code; issue #64). Each subagent's requests are summed from its own transcript at `SubagentStop` onto a generation inside the subagent (`otelhook.subagent.id`, the subagent's model), never onto the parent turn (code; issue #68). The same tokens reach `gen_ai.client.token.usage` with `--metrics` (code; issue #69) | **covered** per turn and per subagent run with the setting on; no per-request breakdown |
 | Reported cost | `claude_code.cost.usage` (USD); `cost_usd` on `api_request` (docs) | Not exported (code) | **impossible**: no tokens either |
 | Model | `model` on token and cost metrics and on `api_request` (docs) | Taken from `SessionStart.model` and remembered for the session in the state store, so every generation span carries it as `gen_ai.request.model` / `gen_ai.response.model` and is named `generation <model>`. A model a harness attaches to `Stop` (the transcript's `message.model`, which follows `/model`) becomes that turn's response model and the session's model from then on. `unknown` only when nothing in the session named a model (code; issue #64). | **covered** with a durable state store; per-turn exactness needs the harness |
 | API request count and latency | One `api_request` event per request, with `duration_ms`; beta span `claude_code.llm_request` (docs) | Nothing at request level (code) | **impossible** |
@@ -117,18 +119,19 @@ otel-hook sources:
 | Lines of code changed | `claude_code.lines_of_code.count{type=added\|removed}` (docs) | none (code) | **derivable** from `Edit`/`Write`/`MultiEdit` tool input on `PostToolUse` |
 | Commits and PRs | `claude_code.commit.count`, `claude_code.pull_request.count` (docs) | none (code) | **derivable**, by heuristic, from a successful `Bash` call running `git commit` or `gh pr create` |
 | Active time | `claude_code.active_time.total{type=user\|cli}` (docs) | none (code) | **derivable** for CLI time (prompt-to-`Stop` intervals). User time is impossible. |
-| Subagents | `subagent_completed` (`agent_type`, `total_tokens`, `total_tool_uses`, `duration_ms`) (docs) | `SubagentStart`/`SubagentStop` → `subagent` span plus `otelhook.subagent.id` on child events (code) | **partial**: no tokens or tool counts |
+| Subagents | `subagent_completed` (`agent_type`, `total_tokens`, `total_tool_uses`, `duration_ms`) (docs) | `SubagentStart`/`SubagentStop` → `subagent` span plus `otelhook.subagent.id` on child events; with `readTranscriptUsage`, the subagent's tokens and model on its own generation (code; issue #68) | **partial**: tokens covered with the setting; tool counts only by counting its tool spans |
 | **Personal data** | `user.email` and `organization.id` whenever available, with no opt-out; `user.account_uuid`/`user.account_id` on by default (`OTEL_METRICS_INCLUDE_ACCOUNT_UUID` turns them off); `user.id` (anonymous, always); `terminal.type`; `host.name` with `OTEL_RESOURCE_INCLUDE_HOST` (docs) | None of these. Session ids are the provider's own; workspace and repository ids are salted handles, never paths; content is off by default (code). See [Personal data](#personal-data-on-the-otel-hook-side). | otel-hook carries **less** |
 
-**Recommendation: not yet.** "otel-hook only" for Claude Code loses every
-token, cost, API-request, error-detail, retry, lines-of-code, commit/PR and
-active-time signal. These are the signals a cost or usage dashboard is built
-on. Claude Code's hooks do not carry them, and three of them cannot be
-recovered from hooks at all. A launcher can choose "otel-hook only" when it
-needs only activity telemetry (sessions, prompts, tools, subagents) and wants
-email and account ids kept off the wire. Otherwise, keep the native exporter
-and remove `user.email`, `user.account_uuid` and `organization.id` in a
-collector.
+**Recommendation: otel-hook only, with `readTranscriptUsage` on.** With the
+setting, every billed token reaches a receiver once: per turn on the `Stop`
+generation and per subagent run on the subagent's generation, each with its
+model, all four token buckets, and `otelhook.usage.partial`. That is what a cost
+dashboard needs: it prices tokens by model itself, because Claude Code reports no
+cost to hooks. What "otel-hook only" still loses is the request level (per-request
+latency, HTTP status, retries), lines of code, commit/PR counts and active time;
+the last three are derivable (see the follow-ups below), the first is not. Without
+the setting, "otel-hook only" carries activity telemetry only (sessions, prompts,
+tools, subagents). Either way, email and account ids stay off the wire.
 
 ## Codex CLI
 

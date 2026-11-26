@@ -104,16 +104,26 @@ const isTranscriptPath = (transcriptPath: unknown): transcriptPath is string =>
   path.isAbsolute(transcriptPath) &&
   path.extname(transcriptPath) === ".jsonl";
 
+/**
+ * A record of subagent `agentId`: a sidechain record naming that agent, or
+ * naming none (the file is the agent's own; only a different name excludes it).
+ */
+const isRecordOfAgent = (record: Record<string, unknown>, agentId: string): boolean =>
+  record.isSidechain === true && (typeof record.agentId !== "string" || record.agentId === agentId);
+
 type AssistantRecord = { readonly id?: string; readonly model?: string; readonly usage?: ClaudeUsage };
 
 /**
  * The request id, model and usage of one transcript line, or `undefined` when
- * it is not a usable main-thread assistant record.
+ * it is not a usable assistant record of the thread being read.
  *
- * Sidechain records are a subagent's conversation; the parent's `Stop` is not
- * about them.
+ * Without `agentId` that thread is the main one: sidechain records are a
+ * subagent's conversation, and the parent's `Stop` is not about them. With
+ * `agentId` it is that subagent's, read from its own transcript
+ * (`agent_transcript_path`), where every record is a sidechain record; a record
+ * naming another agent is skipped.
  */
-const assistantRecordOf = (line: string): AssistantRecord | undefined => {
+const assistantRecordOf = (line: string, agentId?: string): AssistantRecord | undefined => {
   // Cheap pre-filter: most lines are user, tool-result, or summary records, and
   // parsing every one of them would spend the budget on records never used.
   if (!line.includes('"assistant"')) {
@@ -126,7 +136,10 @@ const assistantRecordOf = (line: string): AssistantRecord | undefined => {
     return undefined;
   }
   const record = asRecord(parsed);
-  if (record === undefined || record.type !== "assistant" || record.isSidechain === true) {
+  if (record === undefined || record.type !== "assistant") {
+    return undefined;
+  }
+  if (agentId === undefined ? record.isSidechain === true : !isRecordOfAgent(record, agentId)) {
     return undefined;
   }
   const message = asRecord(record.message);
@@ -259,7 +272,11 @@ const completeLinesEnd = (bytes: Buffer, start: number): number => {
 
 type TailRead = { readonly turn: ClaudeTranscriptTurn; readonly endOffset: number };
 
-const readTail = (transcriptPath: string, maxTailBytes: number): Promise<TailRead | FileUnavailable> =>
+const readTail = (
+  transcriptPath: string,
+  maxTailBytes: number,
+  agentId: string | undefined,
+): Promise<TailRead | FileUnavailable> =>
   withRegularFile(transcriptPath, async (handle, size): Promise<TailRead> => {
     const length = Math.min(size, maxTailBytes);
     const start = size - length;
@@ -272,7 +289,7 @@ const readTail = (transcriptPath: string, maxTailBytes: number): Promise<TailRea
       lines.shift();
     }
     for (let index = lines.length - 1; index >= 0; index -= 1) {
-      const record = assistantRecordOf((lines[index] ?? "").trim());
+      const record = assistantRecordOf((lines[index] ?? "").trim(), agentId);
       if (record !== undefined) {
         return {
           turn: {
@@ -290,11 +307,13 @@ const readTail = (transcriptPath: string, maxTailBytes: number): Promise<TailRea
 const boundedTail = async (
   transcriptPath: string,
   options: ReadClaudeTranscriptTurnOptions,
+  agentId?: string,
 ): Promise<TailRead | FileUnavailable | typeof TIMED_OUT> =>
   withTimeout<TailRead | FileUnavailable>(
     readTail(
       transcriptPath,
       clamp(options.maxTailBytes, DEFAULT_CLAUDE_TRANSCRIPT_TAIL_BYTES, MIN_TAIL_BYTES, MAX_TAIL_BYTES),
+      agentId,
     ),
     clamp(options.timeoutMillis, DEFAULT_CLAUDE_TRANSCRIPT_TIMEOUT_MILLIS, MIN_TIMEOUT_MILLIS, MAX_TIMEOUT_MILLIS),
     { status: "unavailable", reason: "unreadable" },
@@ -352,11 +371,17 @@ export type ReadClaudeTranscriptRangeOptions = {
   readonly maxRangeBytes?: number;
   /** Budget for the whole range read. Default 500 ms, clamped to 10 ms..5 s. */
   readonly rangeTimeoutMillis?: number;
+  /**
+   * Read subagent `agentId`'s requests (its sidechain records) instead of the
+   * main thread's. For a subagent's own transcript, `agent_transcript_path`.
+   */
+  readonly agentId?: string;
 };
 
 /**
- * Sum every main-thread model request written between `fromOffset` and the end
- * of the transcript. Never throws, never rejects.
+ * Sum every main-thread model request (or, with `agentId`, every request of that
+ * subagent) written between `fromOffset` and the end of the transcript. Never
+ * throws, never rejects.
  *
  * Records of one request share a `message.id` and each repeats its usage, so the
  * last record per id is the one counted; a record without an id counts alone.
@@ -391,7 +416,7 @@ export const readClaudeTranscriptRange = async (
     let anonymous = 0;
     let model: string | undefined;
     for (const line of complete.split("\n")) {
-      const record = assistantRecordOf(line.trim());
+      const record = assistantRecordOf(line.trim(), options.agentId);
       if (record === undefined) {
         continue;
       }
@@ -476,7 +501,7 @@ export const attachClaudeTranscriptTurn = async (
 };
 
 export type ClaudeTranscriptUsageEnricherOptions = ReadClaudeTranscriptTurnOptions &
-  ReadClaudeTranscriptRangeOptions;
+  Omit<ReadClaudeTranscriptRangeOptions, "agentId">;
 
 export const CLAUDE_TRANSCRIPT_USAGE_ENRICHER_ID = "claude-transcript-usage";
 
@@ -484,9 +509,35 @@ export const CLAUDE_TRANSCRIPT_USAGE_ENRICHER_ID = "claude-transcript-usage";
 const sourceDigest = (transcriptPath: string): string =>
   createHash("sha256").update(transcriptPath, "utf8").digest("hex").slice(0, 32);
 
+const SUBAGENT_STOP = "SubagentStop";
+
+const agentIdOf = (record: Record<string, unknown>): string | undefined => {
+  const agentId = record.agent_id ?? record.agentId;
+  return typeof agentId === "string" && agentId.length > 0 && agentId.length <= 256 ? agentId : undefined;
+};
+
+const agentTranscriptPathOf = (record: Record<string, unknown>): unknown =>
+  record.agent_transcript_path ?? record.agentTranscriptPath;
+
+/**
+ * The cursor scope of a `SubagentStop`: one cursor per subagent, beside the
+ * session's own. An opaque digest of the agent id, never the id or a path.
+ */
+const subagentCursorScope = (payload: unknown): string | undefined => {
+  const record = asRecord(payload);
+  if (record === undefined || eventNameOf(record) !== SUBAGENT_STOP) {
+    return undefined;
+  }
+  const agentId = agentIdOf(record);
+  return agentId === undefined
+    ? undefined
+    : `agent-${createHash("sha256").update(agentId, "utf8").digest("hex").slice(0, 32)}`;
+};
+
 /**
  * The hook-runtime side of `providers.claudeCode.readTranscriptUsage`: attach
- * each turn's model and **summed** usage to its `Stop` / `StopFailure`.
+ * each turn's model and **summed** usage to its `Stop` / `StopFailure`, and each
+ * subagent run's to its `SubagentStop`.
  *
  * The runtime keeps a byte cursor per session (state value `read-cursor`):
  *
@@ -504,6 +555,15 @@ const sourceDigest = (transcriptPath: string): string =>
  *   the next turn's range includes this one: tokens are counted late, never
  *   twice and never lost.
  *
+ * `SubagentStop` does the same over the subagent's own transcript
+ * (`agent_transcript_path`), with a cursor of its own per subagent (see
+ * {@link PayloadEnricher.cursorScope}), summing that agent's sidechain records.
+ * A subagent with no cursor yet is read from the start of its file: the file is
+ * that subagent's alone, so the first stop is its exact total, not a fallback.
+ * The parent's cursor is never touched, and the parent's `Stop` never counts
+ * sidechain records, so a subagent's requests are counted once, on its own
+ * generation (issue #68).
+ *
  * A payload that already carries `usage` (a wrapper attached it) is left as it
  * is, and the cursor moves past it so those tokens are not counted again.
  */
@@ -519,6 +579,68 @@ export const createClaudeTranscriptUsageEnricher = (
     }
   };
 
+  const readOptions = (agentId: string | undefined): ReadClaudeTranscriptRangeOptions => ({
+    ...(options.maxRangeBytes === undefined ? {} : { maxRangeBytes: options.maxRangeBytes }),
+    ...(options.rangeTimeoutMillis === undefined ? {} : { rangeTimeoutMillis: options.rangeTimeoutMillis }),
+    ...(agentId === undefined ? {} : { agentId }),
+  });
+
+  /**
+   * Sum one transcript since `fromOffset` and attach the result, or fall back to
+   * the bounded tail. `fromOffset` undefined means there is no usable cursor.
+   */
+  const attachSince = async (
+    record: Record<string, unknown>,
+    transcriptPath: string,
+    fromOffset: number | undefined,
+    agentId: string | undefined,
+  ): Promise<PayloadEnrichment> => {
+    const source = sourceDigest(transcriptPath);
+    const attach = (
+      model: string | undefined,
+      usage: ClaudeUsage | undefined,
+      partial: boolean,
+    ): Record<string, unknown> => ({
+      ...record,
+      ...(record.model === undefined && model !== undefined ? { model } : {}),
+      ...(usage === undefined ? {} : { usage, usage_partial: partial }),
+    });
+
+    if (fromOffset !== undefined) {
+      const range = await readClaudeTranscriptRange(transcriptPath, fromOffset, readOptions(agentId));
+      if (range.status === "found") {
+        return {
+          payload: attach(range.model, range.usage, false),
+          cursor: { source, offset: range.endOffset },
+          notes: [`summed ${String(range.requestCount)} request(s) since the last stop`],
+        };
+      }
+      if (range.reason !== "truncated" && range.reason !== "over-cap") {
+        return { payload: record, notes: [`transcript range not read (${range.reason}); cursor kept`] };
+      }
+    }
+
+    // No usable cursor, or a range that cannot be summed within bounds.
+    const tail = await boundedTail(transcriptPath, options, agentId);
+    if (tail === TIMED_OUT || !("turn" in tail)) {
+      return { payload: record, notes: [`transcript tail not read (${tail === TIMED_OUT ? "timeout" : tail.reason})`] };
+    }
+    const why = fromOffset === undefined ? "no cursor for this transcript" : "range not summable within bounds";
+    return {
+      payload: tail.turn.status === "found" ? attach(tail.turn.model, tail.turn.usage, true) : record,
+      cursor: { source, offset: tail.endOffset },
+      notes: [`${why}; attached the last request only (usage_partial)`],
+    };
+  };
+
+  /** A wrapper attached usage: keep it, and move the cursor past what it covered. */
+  const skipAttached = async (payload: unknown, transcriptPath: string): Promise<PayloadEnrichment> => {
+    const size = await fileSize(transcriptPath);
+    return typeof size === "number"
+      ? { payload, cursor: { source: sourceDigest(transcriptPath), offset: size } }
+      : { payload };
+  };
+
   const enrich = async (input: {
     readonly payload: unknown;
     readonly cursor?: ReadCursor;
@@ -529,6 +651,20 @@ export const createClaudeTranscriptUsageEnricher = (
       return unchanged;
     }
     const eventName = eventNameOf(record);
+
+    if (eventName === SUBAGENT_STOP) {
+      const agentTranscriptPath = agentTranscriptPathOf(record);
+      const agentId = agentIdOf(record);
+      if (agentId === undefined || !isTranscriptPath(agentTranscriptPath)) {
+        return unchanged;
+      }
+      if (hasUsage(record)) {
+        return skipAttached(input.payload, agentTranscriptPath);
+      }
+      const cursor = input.cursor?.source === sourceDigest(agentTranscriptPath) ? input.cursor : undefined;
+      return attachSince(record, agentTranscriptPath, cursor?.offset ?? 0, agentId);
+    }
+
     const transcriptPath = transcriptPathOf(record);
     if (typeof eventName !== "string" || !isTranscriptPath(transcriptPath)) {
       return unchanged;
@@ -550,52 +686,16 @@ export const createClaudeTranscriptUsageEnricher = (
     if (!STOP_EVENTS.has(eventName)) {
       return unchanged;
     }
-
     if (hasUsage(record)) {
-      const size = await fileSize(transcriptPath);
-      return typeof size === "number" ? { payload: input.payload, cursor: { source, offset: size } } : unchanged;
+      return skipAttached(input.payload, transcriptPath);
     }
-
-    const attach = (
-      model: string | undefined,
-      usage: ClaudeUsage | undefined,
-      partial: boolean,
-    ): Record<string, unknown> => ({
-      ...record,
-      ...(record.model === undefined && model !== undefined ? { model } : {}),
-      ...(usage === undefined ? {} : { usage, usage_partial: partial }),
-    });
-
-    if (cursor !== undefined) {
-      const range = await readClaudeTranscriptRange(transcriptPath, cursor.offset, options);
-      if (range.status === "found") {
-        return {
-          payload: attach(range.model, range.usage, false),
-          cursor: { source, offset: range.endOffset },
-          notes: [`summed ${String(range.requestCount)} request(s) since the last stop`],
-        };
-      }
-      if (range.reason !== "truncated" && range.reason !== "over-cap") {
-        return { ...unchanged, notes: [`transcript range not read (${range.reason}); cursor kept`] };
-      }
-    }
-
-    // No usable cursor, or a range that cannot be summed within bounds.
-    const tail = await boundedTail(transcriptPath, options);
-    if (tail === TIMED_OUT || !("turn" in tail)) {
-      return { ...unchanged, notes: [`transcript tail not read (${tail === TIMED_OUT ? "timeout" : tail.reason})`] };
-    }
-    const why = cursor === undefined ? "no cursor for this transcript" : "range not summable within bounds";
-    return {
-      payload: tail.turn.status === "found" ? attach(tail.turn.model, tail.turn.usage, true) : input.payload,
-      cursor: { source, offset: tail.endOffset },
-      notes: [`${why}; attached the last request only (usage_partial)`],
-    };
+    return attachSince(record, transcriptPath, cursor?.offset, undefined);
   };
 
   return Object.freeze({
     id: CLAUDE_TRANSCRIPT_USAGE_ENRICHER_ID,
     providerId: CLAUDE_CODE_PROVIDER_ID,
+    cursorScope: subagentCursorScope,
     enrich,
   });
 };
