@@ -169,7 +169,16 @@ export const subagentStopPayloadSchema = z.object({
   last_assistant_message: z.string().optional(),
   /** True when this stop fired because a hook continued the subagent's turn. */
   stop_hook_active: z.boolean().optional(),
+  /**
+   * The subagent run's tokens since its previous stop — harness- or
+   * enricher-supplied, never upstream. Reported on the subagent's own
+   * generation, never on the parent turn (issue #68).
+   */
   usage: claudeUsageSchema.optional(),
+  /** Harness-supplied, never upstream: the subagent's model, from its transcript. */
+  model: z.string().min(1).max(256).optional().catch(undefined),
+  /** Harness-supplied, never upstream: see `stopPayloadSchema.usage_partial`. */
+  usage_partial: z.boolean().optional().catch(undefined),
 });
 export type SubagentStopPayload = z.infer<typeof subagentStopPayloadSchema>;
 

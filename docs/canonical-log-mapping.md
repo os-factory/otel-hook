@@ -106,7 +106,7 @@ Identity, identical to the span mapping and derived from the same fields:
 | `otelhook.invocation.id` | one hook invocation |
 | `otelhook.provider.id`, `otelhook.provider.version` | attributed provider |
 | `otelhook.workspace.id` | opaque `<scheme>:<token>` handle; never a path |
-| `otelhook.subagent.id` | the provider's own subagent id (Claude Code `agent_id`), on every record of an event emitted inside a subagent; absent otherwise |
+| `otelhook.subagent.id` | the provider's own subagent id (Claude Code `agent_id`), on every record of an event emitted inside a subagent, including a subagent's own `generation.*` records (Claude Code `SubagentStop` with transcript usage, issue #68); absent otherwise |
 
 ### Worktree target
 

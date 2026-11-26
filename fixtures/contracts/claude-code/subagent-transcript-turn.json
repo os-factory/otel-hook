@@ -1,0 +1,74 @@
+{
+  "records": [
+    {
+      "type": "user",
+      "isSidechain": true,
+      "agentId": "agent-contract-0001",
+      "sessionId": "ses-contract-claude-0002",
+      "uuid": "uuid-contract-sub-0001",
+      "parentUuid": null,
+      "message": { "role": "user", "content": "Synthetic placeholder task for a subagent." }
+    },
+    {
+      "type": "assistant",
+      "isSidechain": true,
+      "agentId": "agent-contract-0001",
+      "sessionId": "ses-contract-claude-0002",
+      "uuid": "uuid-contract-sub-0002",
+      "parentUuid": "uuid-contract-sub-0001",
+      "requestId": "req_contract_sub_0001",
+      "message": {
+        "id": "msg_contract_sub_0001",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-synthetic-haiku-9",
+        "stop_reason": "tool_use",
+        "content": [
+          { "type": "tool_use", "id": "toolu_contract_sub_0001", "name": "Grep", "input": { "pattern": "placeholder" } }
+        ],
+        "usage": {
+          "input_tokens": 7,
+          "output_tokens": 30,
+          "cache_read_input_tokens": 2000,
+          "cache_creation_input_tokens": 500
+        }
+      }
+    },
+    {
+      "type": "user",
+      "isSidechain": true,
+      "agentId": "agent-contract-0001",
+      "sessionId": "ses-contract-claude-0002",
+      "uuid": "uuid-contract-sub-0003",
+      "parentUuid": "uuid-contract-sub-0002",
+      "message": {
+        "role": "user",
+        "content": [{ "type": "tool_result", "tool_use_id": "toolu_contract_sub_0001", "content": "Synthetic placeholder search result." }]
+      }
+    },
+    {
+      "type": "assistant",
+      "isSidechain": true,
+      "agentId": "agent-contract-0001",
+      "sessionId": "ses-contract-claude-0002",
+      "uuid": "uuid-contract-sub-0004",
+      "parentUuid": "uuid-contract-sub-0003",
+      "requestId": "req_contract_sub_0002",
+      "message": {
+        "id": "msg_contract_sub_0002",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-synthetic-haiku-9",
+        "stop_reason": "end_turn",
+        "content": [{ "type": "text", "text": "Synthetic placeholder for the subagent's final message." }],
+        "usage": {
+          "input_tokens": 4,
+          "output_tokens": 250,
+          "cache_read_input_tokens": 2600,
+          "cache_creation_input_tokens": 300,
+          "cache_creation": { "ephemeral_5m_input_tokens": 300, "ephemeral_1h_input_tokens": 0 }
+        }
+      }
+    }
+  ]
+}

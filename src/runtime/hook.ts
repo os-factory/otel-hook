@@ -340,8 +340,8 @@ const usageScopeOf = (
 
 const sequenceKey = (sessionId: string): string => `sequence:${sessionId}`;
 const sessionModelKey = (sessionId: string): string => `model:${sessionId}`;
-const readCursorKey = (enricherId: string, sessionId: string): string =>
-  `cursor:${enricherId}:${sessionId}`;
+const readCursorKey = (enricherId: string, sessionId: string, scope: string | undefined): string =>
+  scope === undefined ? `cursor:${enricherId}:${sessionId}` : `cursor:${enricherId}:${sessionId}:${scope}`;
 
 /**
  * The placeholder an adapter uses when its payload names no model. Never
@@ -493,7 +493,17 @@ export const createOtelHook = (deps: OtelHookDependencies): OtelHook => {
       if (enricher.providerId !== providerId) {
         continue;
       }
-      const key = readCursorKey(enricher.id, sessionId);
+      let scope: string | undefined;
+      try {
+        scope = enricher.cursorScope?.(current);
+      } catch (thrown) {
+        logger.warn("payload enricher failed; parsing the payload as delivered", {
+          "enricher.id": enricher.id,
+          "error.name": thrown instanceof Error ? thrown.name : typeof thrown,
+        });
+        continue;
+      }
+      const key = readCursorKey(enricher.id, sessionId, scope);
       let cursor: ReadCursor | undefined;
       try {
         const record = await deps.stateStore.read(key);

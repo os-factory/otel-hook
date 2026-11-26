@@ -62,6 +62,15 @@ describe("Claude Code adapter: lifecycle mapping", () => {
     expect(event.toolKind).toBe("execute");
   });
 
+  it("the subagent tool is a delegation under both of its names, Task and Agent", async () => {
+    for (const toolName of ["Task", "Agent"]) {
+      const { run } = ingest({ ...fixtures.preToolUseBash, tool_name: toolName, tool_input: { subagent_type: "Explore" } });
+      const event = eventOfType((await run()).events, "tool.start");
+      if (event.type !== "tool.start") throw new Error("unreachable");
+      expect({ toolName, toolKind: event.toolKind }).toEqual({ toolName, toolKind: "delegate" });
+    }
+  });
+
   it("PostToolUse -> tool.end with outcome ok", async () => {
     const { run } = ingest(fixtures.postToolUseBash);
     const outcome = await run();
@@ -122,7 +131,13 @@ describe("Claude Code adapter: lifecycle mapping", () => {
     expect(startEvent.delegationDepth).toBe(1);
     expect(startEvent.subagentType).toBe("Explore");
     expect(stopEvent.outcome).toBe("ok");
-    expect(stopEvent.usage?.cachedInputTokens).toBe(4096);
+    // Usage on SubagentStop is the subagent's own generation's (issue #68), not
+    // restated on the subagent span.
+    expect(stopEvent.usage).toBeUndefined();
+    const generation = eventOfType(stopOutcome.events, "generation.end");
+    if (generation.type !== "generation.end") throw new Error("unreachable");
+    expect(generation.subagentId).toBe(stopEvent.subagentId);
+    expect(generation.usage?.cachedInputTokens).toBe(4096);
   });
 
   it("a tool call from inside a subagent links back via parentInvocationId", async () => {

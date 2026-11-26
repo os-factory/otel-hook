@@ -72,9 +72,8 @@ const usageOf = (events: readonly CanonicalEvent[], type: string): CanonicalUsag
   return event.usage;
 };
 
-/** Whichever end-edge the fixture produces, so one assertion can span fixtures. */
-const anyUsage = (events: readonly CanonicalEvent[]): CanonicalUsage | undefined =>
-  usageOf(events, "generation.end") ?? usageOf(events, "subagent.end");
+/** Every fixture's usage lands on a generation, a subagent's included (issue #68). */
+const anyUsage = (events: readonly CanonicalEvent[]): CanonicalUsage | undefined => usageOf(events, "generation.end");
 
 describe("Claude Code usage contract: where every counter lives", () => {
   it("reads all four token buckets from the nested usage object", async () => {
@@ -123,7 +122,9 @@ describe("Claude Code usage contract: where every counter lives", () => {
 
   it("derives the fresh figure correctly when cache reads dominate by five orders of magnitude", async () => {
     const { events } = await replay(await loadFixture("subagent-stop-cache-heavy.json"));
-    const usage = usageOf(events, "subagent.end");
+    // The subagent's own generation carries it (issue #68); the subagent span does not restate it.
+    expect(usageOf(events, "subagent.end")).toBeUndefined();
+    const usage = usageOf(events, "generation.end");
 
     expect(usage?.uncachedInputTokens).toBe(2);
     expect(usage?.cachedInputTokens).toBe(713_000);

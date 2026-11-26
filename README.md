@@ -639,10 +639,12 @@ resource), no content, and no per-event ids.
   retried, records nothing. A callback replayed after a crash restates its series'
   totals instead of adding to them.
 
-These numbers are **hook-derived**. They can differ from a provider's own
-telemetry: for example, Claude Code's native `claude_code.token.usage` counts
-subagent spend that hooks do not see yet (#68). A harness that already books Claude
-Code usage from native telemetry should not add both.
+These numbers are **hook-derived**. For Claude Code, tokens exist only with
+`providers.claudeCode.readTranscriptUsage` on: each turn's main-thread requests are
+counted on its `Stop` generation, and each subagent's requests on a generation of
+its own at `SubagentStop` (#68), named for the subagent's model and carrying
+`otelhook.subagent.id`. A harness that already books Claude Code usage from native
+telemetry should not add both.
 
 | Field | Default | Flag | Variable |
 | --- | --- | --- | --- |

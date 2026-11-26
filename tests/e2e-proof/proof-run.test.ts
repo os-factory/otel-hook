@@ -297,4 +297,116 @@ describe.skipIf(!gitAvailable)("e2e proof: receiver capture → evidence checker
       "otelhook.usage.partial": false,
     });
   }, 120_000);
+  /**
+   * Issue #68: a turn that spawns a subagent. The subagent's requests are in its
+   * own transcript, which `SubagentStop` names; with `--claude-transcript-usage`
+   * otel-hook sums them onto the subagent's own generation (its own model), the
+   * parent turn keeps exactly its own requests, and the session total on spans
+   * and on the token-usage metric is the sum of both, counted once.
+   */
+  it("counts a subagent's tokens once, on the subagent's generation, with --claude-transcript-usage", async () => {
+    const temp = await makeTempDir("otel-hook-proof-transcript-subagent-");
+    cleanups.push(() => temp.remove());
+    const root = await realpath(temp.dir);
+    const checkout = path.join(root, "sandbox");
+    await mkdir(checkout);
+    execFileSync("git", ["init", "-q", "-b", "proof/synthetic"], { cwd: checkout, stdio: "ignore" });
+
+    const contracts = path.resolve(import.meta.dirname, "..", "..", "fixtures", "contracts", "claude-code");
+    const lines = async (name: string): Promise<string> => {
+      const { records } = JSON.parse(await readFile(path.join(contracts, name), "utf8")) as { records: unknown[] };
+      return `${records.map((record) => JSON.stringify(record)).join("\n")}\n`;
+    };
+    const transcriptPath = path.join(root, "transcript.jsonl");
+    const agentTranscriptPath = path.join(root, "subagents", "agent-contract-0001.jsonl");
+    await mkdir(path.dirname(agentTranscriptPath));
+
+    const captureDir = path.join(root, "capture");
+    const receiver = await startReceiverProcess(["--capture-dir", captureDir]);
+    cleanups.push(async () => {
+      if (receiver.child.exitCode === null) {
+        await receiver.stop();
+      }
+    });
+
+    const base = { session_id: "ses-proof-transcript-0003", transcript_path: transcriptPath, cwd: checkout };
+    const run = async (event: Record<string, unknown>): Promise<void> => {
+      const result = await runNode(
+        [
+          CLI_PATH,
+          "run",
+          "--provider",
+          "claude-code",
+          "--claude-transcript-usage",
+          "--endpoint",
+          receiver.tracesUrl,
+          "--metrics",
+          "--metrics-endpoint",
+          receiver.tracesUrl.replace(/\/v1\/traces$/, "/v1/metrics"),
+          "--state-dir",
+          path.join(root, "state"),
+        ],
+        { stdin: JSON.stringify(event), env: { OTEL_RESOURCE_ATTRIBUTES: `session.id=${LAUNCHER_SESSION}` } },
+      );
+      expect(result.code).toBe(0);
+    };
+    await run({ ...base, hook_event_name: "SessionStart", source: "startup", model: "claude-synthetic-opus-9" });
+    await run({ ...base, hook_event_name: "SubagentStart", agent_id: "agent-contract-0001", agent_type: "Explore" });
+    await appendFile(agentTranscriptPath, await lines("subagent-transcript-turn.json"));
+    await run({
+      ...base,
+      hook_event_name: "SubagentStop",
+      agent_id: "agent-contract-0001",
+      agent_type: "Explore",
+      agent_transcript_path: agentTranscriptPath,
+      stop_hook_active: false,
+    });
+    await appendFile(transcriptPath, await lines("transcript-tail-turn.json"));
+    await run({ ...base, hook_event_name: "Stop", prompt_id: "prompt-1", stop_hook_active: false, last_assistant_message: "READY" });
+    await run({ ...base, hook_event_name: "SessionEnd", reason: "other" });
+    await receiver.stop();
+
+    // Parent turn: input=126608, output=432, cache_read=119000, cache_creation=7600.
+    // Subagent: input=7+2000+500+4+2600+300=5411, output=280, cache_read=4600, cache_creation=800.
+    const { result } = await runChecker([
+      captureDir,
+      "--provider",
+      "claude-code",
+      "--session-id",
+      LAUNCHER_SESSION,
+      "--expect-usage",
+      "input=132019,output=712,cache_read=123600,cache_creation=8400",
+      "--expect-metric",
+      "gen_ai.client.token.usage",
+    ]);
+    expect({ status: statusOf(result, "token-usage"), details: detailsOf(result, "token-usage") }).toMatchObject({
+      status: "pass",
+    });
+    expect({ status: statusOf(result, "metrics"), details: detailsOf(result, "metrics") }).toMatchObject({
+      status: "pass",
+    });
+    expect(detailsOf(result, "metrics")).toContain("metric token totals match the agent-reported totals");
+    expect(statusOf(result, "privacy")).toBe("pass");
+
+    const spans: { name: string; attributes: Record<string, unknown> }[] = [];
+    for (const name of (await readdir(captureDir)).filter((entry) => /^\d+-traces\.json$/.test(entry))) {
+      const meta = JSON.parse(await readFile(path.join(captureDir, name), "utf8")) as {
+        decoded: { spans: { name: string; attributes: Record<string, unknown> }[] } | null;
+      };
+      spans.push(...(meta.decoded?.spans ?? []));
+    }
+    const generations = spans.filter((span) => span.attributes["gen_ai.operation.name"] === "chat");
+    const subagent = generations.find((span) => span.attributes["otelhook.subagent.id"] === "agent-contract-0001");
+    const parent = generations.find((span) => span.attributes["otelhook.subagent.id"] === undefined);
+    expect(subagent?.name).toBe("generation claude-synthetic-haiku-9");
+    expect(subagent?.attributes).toMatchObject({
+      "gen_ai.response.model": "claude-synthetic-haiku-9",
+      "gen_ai.usage.output_tokens": 280,
+      "otelhook.usage.partial": false,
+    });
+    expect(parent?.name).toBe("generation claude-synthetic-opus-9");
+    expect(parent?.attributes).toMatchObject({ "gen_ai.usage.output_tokens": 432, "otelhook.usage.partial": false });
+    const subagentSpan = spans.find((span) => span.name === "subagent");
+    expect(subagentSpan?.attributes["gen_ai.usage.output_tokens"]).toBeUndefined();
+  }, 120_000);
 });
