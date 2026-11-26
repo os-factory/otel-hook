@@ -31,6 +31,12 @@ describe("normalizeRepositoryKey", () => {
     expect(normalizeRepositoryKey(reference)).toBe(key);
   });
 
+  it("trims trailing slashes in linear time", () => {
+    const started = performance.now();
+    expect(normalizeRepositoryKey(`github.com/acme/widget.git${"/".repeat(1_500)}`)).toBe("github.com/acme/widget");
+    expect(performance.now() - started).toBeLessThan(500);
+  });
+
   it.each(["", "   ", "/home/user/repo", "./repo", "file:///srv/repo.git", "https://github.com/", "C:\\repo"])(
     "names no repository: %j",
     (reference) => {

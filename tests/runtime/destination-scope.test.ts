@@ -157,6 +157,22 @@ describe("routeEventsToScopes", () => {
     expect(bounded.restrictContent(fact, "redact").text).toBe("token ");
   });
 
+  it("drops the trailing token in linear time, even on a long run of non-whitespace", () => {
+    const bounded = createPrivacyService({
+      ...DEFAULT_PRIVACY_POLICY,
+      contentMode: "raw",
+      allowRawContent: true,
+      limits: { ...DEFAULT_PRIVACY_POLICY.limits, maxStringLength: 65_536 },
+    });
+    // `/\S+$/` backtracked quadratically here (CodeQL js/polynomial-redos).
+    const described = bounded.describeContent({ kind: "prompt", text: `${"!".repeat(60_000)} tail 😀x` });
+    const fact = { ...described, truncated: true };
+    const started = performance.now();
+    const restricted = bounded.restrictContent(fact, "redact");
+    expect(performance.now() - started).toBeLessThan(1000);
+    expect(restricted.text?.endsWith(" tail ")).toBe(true);
+  });
+
   it("without a privacy service, omits whatever must be lowered", () => {
     const fact = rawPrivacy.describeContent({ kind: "prompt", text: "hello" });
     expect(omitRestrictedContent(fact, "mask")).toMatchObject({ disclosure: "omitted" });

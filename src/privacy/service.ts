@@ -111,7 +111,20 @@ const DISCLOSURE_RANK: Readonly<Record<ContentFact["disclosure"], number>> = Obj
  * for a value pattern to recognize. Before redacting such text, its trailing
  * run of non-whitespace — where a cut secret would sit — is dropped.
  */
-const withoutTrailingToken = (text: string): string => text.replace(/\S+$/u, "");
+const WHITESPACE = /\s/u;
+const withoutTrailingToken = (text: string): string => {
+  // A linear scan, not `/\S+$/`: that pattern backtracks quadratically on a long
+  // run of non-whitespace that is not at the end (CodeQL js/polynomial-redos).
+  let end = text.length;
+  while (end > 0) {
+    // Step back one code point, so a surrogate pair is never split.
+    const low = text.charCodeAt(end - 1);
+    const width = end >= 2 && low >= 0xdc00 && low <= 0xdfff ? 2 : 1;
+    if (WHITESPACE.test(text.slice(end - width, end))) break;
+    end -= width;
+  }
+  return text.slice(0, end);
+};
 
 const compilePatterns = (sources: readonly string[], flags: string): readonly RegExp[] => {
   const compiled: RegExp[] = [];

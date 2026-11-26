@@ -21,11 +21,18 @@ const SCHEME_PATTERN = /^[a-z][a-z0-9+.-]*:\/\//i;
 /** `user@host:path` (scp-like git syntax), never `C:\...` or `host:port/...`. */
 const SCP_LIKE_PATTERN = /^(?:[^@/\s]+@)?([^:/\s]+):(?!\/\/)(.+)$/;
 
+/** Drops trailing `/` with a linear scan (`/\/+$/` backtracks quadratically). */
+const trimTrailingSlashes = (value: string): string => {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 0x2f) end -= 1;
+  return value.slice(0, end);
+};
+
 const keyOf = (host: string, pathname: string): string | undefined => {
-  const cleanedPath = pathname
-    .replace(/\/+$/, "")
-    .replace(/\.git$/i, "")
-    .replace(/\/+$/, "");
+  const withoutSlashes = trimTrailingSlashes(pathname);
+  const cleanedPath = trimTrailingSlashes(
+    withoutSlashes.toLowerCase().endsWith(".git") ? withoutSlashes.slice(0, -4) : withoutSlashes,
+  );
   if (host.length === 0 || cleanedPath.length === 0 || cleanedPath === "/") {
     return undefined;
   }
