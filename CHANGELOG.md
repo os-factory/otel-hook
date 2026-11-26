@@ -1,3 +1,10 @@
+# [0.13.0](https://github.com/os-factory/otel-hook/compare/v0.12.0...v0.13.0) (2026-11-26)
+
+
+### Features
+
+* count Claude Code subagent tokens on the subagent's own generation ([#72](https://github.com/os-factory/otel-hook/issues/72)) ([970f8eb](https://github.com/os-factory/otel-hook/commit/970f8eb4cd42520ed8655dd3f1a042c8060e7fe2)), closes [#68](https://github.com/os-factory/otel-hook/issues/68)
+
 # [0.12.0](https://github.com/os-factory/otel-hook/compare/v0.11.0...v0.12.0) (2026-11-26)
 
 
