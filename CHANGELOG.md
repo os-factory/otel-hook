@@ -1,3 +1,10 @@
+## [0.13.1](https://github.com/os-factory/otel-hook/compare/v0.13.0...v0.13.1) (2026-11-26)
+
+
+### Bug Fixes
+
+* keep session context, spans and spools correct under many concurrent sessions ([#74](https://github.com/os-factory/otel-hook/issues/74)) ([763a842](https://github.com/os-factory/otel-hook/commit/763a8425ec569d9c8f36ec1565671cf6f4993eb6))
+
 # [0.13.0](https://github.com/os-factory/otel-hook/compare/v0.12.0...v0.13.0) (2026-11-26)
 
 
