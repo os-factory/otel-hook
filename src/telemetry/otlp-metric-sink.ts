@@ -16,7 +16,7 @@ import { createErrorInfo, type OtelHookErrorInfo } from "../errors/index.js";
 import type { Clock, Logger } from "../runtime/ports.js";
 import type { DurableMetricSpool, MetricSpoolBatch } from "./durable-metric-spool.js";
 import { isPermanentExportFailure } from "./export-failure.js";
-import { replayResource, resourceFromExporterPolicy } from "./exporter-resource.js";
+import { replayResource, resourceFromExporterPolicy, resourceWithContext } from "./exporter-resource.js";
 import { METRIC_INSTRUMENTS, withoutAccountIdentity, type MetricPoint } from "./metric-model.js";
 import { DEFAULT_INSTRUMENTATION_SCOPE } from "./semconv.js";
 import type { SpoolSendOutcome } from "./spool-queue.js";
@@ -109,7 +109,15 @@ export type MetricExportResult = {
 export interface OtlpMetricTelemetrySink {
   /** Whether this sink sends anything. A disabled sink accepts nothing and reports nothing. */
   readonly enabled: boolean;
-  exportPoints(points: readonly MetricPoint[]): Promise<MetricExportResult>;
+  /**
+   * `context`: the session context the points' events agree on (see
+   * `agreedContextAttributes`). It overrides the same keys on the Resource for
+   * this export, as the trace and log sinks do; the points carry it already.
+   */
+  exportPoints(
+    points: readonly MetricPoint[],
+    context?: Readonly<Record<string, string | number | boolean>>,
+  ): Promise<MetricExportResult>;
   /** Replays spooled batches; bounded, best-effort, never throws. */
   flush(): Promise<void>;
   shutdown(): Promise<void>;
@@ -272,10 +280,10 @@ export const createOtlpMetricSink = (options: OtlpMetricSinkOptions): OtlpMetric
       }
     });
 
-  const toSpoolBatch = (points: readonly MetricPoint[]): MetricSpoolBatch => ({
+  const toSpoolBatch = (points: readonly MetricPoint[], batchResource: Resource): MetricSpoolBatch => ({
     providerId: options.providerId,
     installationId: options.installationId,
-    resourceAttributes: { ...resource.attributes },
+    resourceAttributes: { ...batchResource.attributes },
     instrumentationScope: {
       name: scope.name,
       ...(scope.version === undefined ? {} : { version: scope.version }),
@@ -295,11 +303,15 @@ export const createOtlpMetricSink = (options: OtlpMetricSinkOptions): OtlpMetric
     return isPermanentExportFailure(result) ? "discard" : false;
   };
 
-  const exportPoints = async (points: readonly MetricPoint[]): Promise<MetricExportResult> => {
+  const exportPoints = async (
+    points: readonly MetricPoint[],
+    context?: Readonly<Record<string, string | number | boolean>>,
+  ): Promise<MetricExportResult> => {
     if (points.length === 0) {
       return { accepted: 0, rejected: 0, errors: [] };
     }
-    const result = await exportResourceMetrics(points, resource, scope);
+    const batchResource = context === undefined ? resource : resourceWithContext(resource, context);
+    const result = await exportResourceMetrics(points, batchResource, scope);
     if (result.code === ExportResultCode.SUCCESS) {
       health.recordSuccess(points.length, options.clock.now());
       return { accepted: points.length, rejected: 0, errors: [] };
@@ -307,7 +319,7 @@ export const createOtlpMetricSink = (options: OtlpMetricSinkOptions): OtlpMetric
     health.recordFailure("telemetry-export-failure", points.length, options.clock.now());
     const permanent = isPermanentExportFailure(result);
     if (options.spool !== undefined && !permanent) {
-      const spooled = await options.spool.enqueue(toSpoolBatch(points)).catch(() => ({
+      const spooled = await options.spool.enqueue(toSpoolBatch(points, batchResource)).catch(() => ({
         spooled: false as const,
         reason: "capacity-exceeded" as const,
       }));

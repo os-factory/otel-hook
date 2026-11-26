@@ -9,6 +9,7 @@ import {
   sanitizeResourceAttributes,
 } from "../config/resource-attributes.js";
 import type { ExporterPolicy } from "../config/schema.js";
+import type { CanonicalEvent } from "../model/events.js";
 import { MAX_IDENTIFIER_LENGTH } from "../model/primitives.js";
 
 /**
@@ -110,4 +111,61 @@ export const replayResource = (attributes: Attributes, policy: ExporterPolicy): 
   }
 
   return resourceFromAttributes(safe);
+};
+
+/**
+ * The session context attributes every event of a batch agrees on.
+ *
+ * The core stamps one invocation's events from one context file, so a batch
+ * normally agrees on everything. Should two events disagree on a key (a segment
+ * boundary inside one callback), or one event lack it, the key is left out: the
+ * Resource is shared by the whole batch and must not state a value one of its
+ * records contradicts. Each record still carries its own value.
+ */
+export const agreedContextAttributes = (
+  events: readonly CanonicalEvent[],
+): Readonly<Record<string, string | number | boolean>> => {
+  const [first, ...rest] = events;
+  if (first?.contextAttributes === undefined) {
+    return {};
+  }
+  const agreed: Record<string, string | number | boolean> = { ...first.contextAttributes };
+  for (const event of rest) {
+    for (const key of Object.keys(agreed)) {
+      if (event.contextAttributes?.[key] !== agreed[key]) {
+        delete agreed[key];
+      }
+    }
+  }
+  return agreed;
+};
+
+/**
+ * The Resource a batch is exported under, with session context applied.
+ *
+ * Context overrides only keys the Resource already carries — a stale
+ * `factory.attempt.id` from the process environment, say — so the Resource and
+ * the records say the same thing to a backend that reads either. It adds no new
+ * key: the Resource describes the producer, and the context's own keys are on
+ * every record already. Service identity is never touched (context cannot carry
+ * it). Returns the input unchanged when nothing applies.
+ */
+export const resourceWithContext = (
+  resource: Resource,
+  context: Readonly<Record<string, string | number | boolean>>,
+): Resource => {
+  const overrides: Record<string, string | number | boolean> = {};
+  for (const [key, value] of Object.entries(context)) {
+    if (
+      Object.hasOwn(resource.attributes, key) &&
+      !isReservedResourceAttributeKey(key) &&
+      resource.attributes[key] !== value
+    ) {
+      overrides[key] = value;
+    }
+  }
+  if (Object.keys(overrides).length === 0) {
+    return resource;
+  }
+  return resourceFromAttributes({ ...resource.attributes, ...overrides });
 };

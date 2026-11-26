@@ -236,3 +236,34 @@ describe("resolved configuration snapshots", () => {
     expect(JSON.stringify(snapshot)).not.toContain("tenant-secret");
   });
 });
+
+describe("sessionContext", () => {
+  it("is off by default and set by a file, with a flag layer winning", () => {
+    const off = resolveConfig();
+    expect(off.status === "ok" && off.config.sessionContext).toBeUndefined();
+    const resolution = resolveConfig([
+      { source: "file", patch: { sessionContext: { dir: "/from/file" } } },
+      { source: "inline-override", patch: { sessionContext: { dir: "/from/flag" } } },
+    ]);
+    expect(resolution.status).toBe("ok");
+    if (resolution.status !== "ok") {
+      return;
+    }
+    expect(resolution.config.sessionContext).toEqual({ dir: "/from/flag" });
+    expect(resolution.provenance["sessionContext.dir"]).toBe("inline-override");
+    // Whether it is on, never the local path.
+    const described = describeResolvedConfig(resolution.config);
+    expect(described["session_context.enabled"]).toBe(true);
+    expect(JSON.stringify(described)).not.toContain("/from/flag");
+  });
+
+  it("requires an absolute directory", () => {
+    expect(otelHookConfigPatchSchema.safeParse({ sessionContext: { dir: "relative/dir" } }).success).toBe(false);
+    expect(otelHookConfigPatchSchema.safeParse({ sessionContext: { dir: "/abs/dir" } }).success).toBe(true);
+  });
+
+  it("has no environment variable", () => {
+    expect(Object.values(ENVIRONMENT_VARIABLES).some((name) => /CONTEXT/i.test(name))).toBe(false);
+    expect(parseEnvironmentConfig({ OTEL_HOOK_SESSION_CONTEXT_DIR: "/x" }).patch.sessionContext).toBeUndefined();
+  });
+});

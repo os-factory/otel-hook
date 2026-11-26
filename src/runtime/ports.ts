@@ -284,3 +284,37 @@ export interface PayloadEnricher {
   readonly providerId: string;
   enrich(input: PayloadEnrichmentInput): Promise<PayloadEnrichment>;
 }
+
+/**
+ * One window of a session's context: the attributes in force from `from`
+ * (inclusive) until `to` (exclusive), or open-ended when `to` is `null`.
+ * Attributes are already screened (see `sanitizeSessionContextAttributes`).
+ */
+export type SessionContextSegment = {
+  readonly from: EpochMillis;
+  readonly to: EpochMillis | null;
+  readonly attributes: Readonly<Record<string, string | number | boolean>>;
+};
+
+export type SessionContextRequest = {
+  /** The detected provider, e.g. `claude-code`. The reader maps it to its directory name. */
+  readonly providerId: string;
+  /**
+   * The session whose context applies: always the invocation's session, which
+   * for a subagent event is its parent's — never the subagent's own id.
+   */
+  readonly sessionId: string;
+};
+
+/**
+ * Reads the session context a harness wrote for one agent session.
+ *
+ * A port for the same reason {@link WorktreeLocator} is one: the core decides
+ * when to ask and what of the answer reaches a record; the implementation only
+ * reads. Adapters never see it (ADR 0003). Implementations must never throw or
+ * reject: no file, an unreadable file, an invalid one, or one of an unknown
+ * version are all `undefined`, and the core then stamps nothing.
+ */
+export interface SessionContextReader {
+  read(request: SessionContextRequest): Promise<readonly SessionContextSegment[] | undefined>;
+}

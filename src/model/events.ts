@@ -82,6 +82,14 @@ const baseEventFields = {
    */
   subagentId: subagentIdSchema.optional(),
   extensions: extensionsSchema.default(emptyExtensions),
+  /**
+   * Attributes of the session context segment in force when the event
+   * occurred (`docs/session-context.md`), stamped by the core from a file a
+   * harness wrote. Exported on every record of the event, over the same keys
+   * from the Resource. Absent when no context applies. Set by the core only,
+   * never by an adapter.
+   */
+  contextAttributes: z.record(z.string().min(1).max(255), z.union([z.string(), z.number(), z.boolean()])).optional(),
 } as const;
 
 const event = <TShape extends z.ZodRawShape>(shape: TShape) =>

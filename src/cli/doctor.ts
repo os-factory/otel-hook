@@ -1,4 +1,4 @@
-import { readdir } from "node:fs/promises";
+import { readdir, stat } from "node:fs/promises";
 import * as path from "node:path";
 
 import {
@@ -275,6 +275,28 @@ export const collectDoctorReport = async (
     detail: `content mode is "${privacy.policy.contentMode}"${
       privacy.policyNotes.length === 0 ? "" : `; ${privacy.policyNotes.join("; ")}`
     }`,
+  });
+
+  // Never a failure: session context is optional, and a directory a harness has
+  // not created yet (no session launched) is the normal state of a fresh machine.
+  const contextDir = resolved.config.sessionContext?.dir;
+  let contextDirExists = false;
+  if (contextDir !== undefined) {
+    try {
+      contextDirExists = (await stat(contextDir)).isDirectory();
+    } catch {
+      contextDirExists = false;
+    }
+  }
+  checks.push({
+    name: "session-context",
+    ok: true,
+    detail:
+      contextDir === undefined
+        ? "off (sessionContext.dir is not set)"
+        : `reading ${path.join(contextDir, "<agent-tool>", "<session-id>.json")}${
+            contextDirExists ? "" : " (directory does not exist yet; nothing is stamped until it does)"
+          }`,
   });
 
   const providers = describeProviderCatalog({

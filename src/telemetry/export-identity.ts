@@ -134,6 +134,29 @@ export const passthroughResourceAttributes = (resource: Resource): Attributes =>
 };
 
 /**
+ * Session context attributes the core stamped on this event
+ * (`docs/session-context.md`); empty when none applies.
+ */
+export const contextAttributesOf = (event: CanonicalEvent): Attributes =>
+  event.contextAttributes === undefined ? {} : { ...event.contextAttributes };
+
+/**
+ * The profile layer of a record: the Resource's passthrough namespaces,
+ * overridden key by key by the event's session context.
+ *
+ * Context wins because it is the more specific and more recent statement: a
+ * session that moved from one attempt to another still has the first one in its
+ * process environment (and so on the Resource), but its context names the
+ * second. Everything otel-hook derives for the event itself — `session.id`,
+ * `otelhook.*`, `gen_ai.*`, trace ids, and a resolved worktree target — is
+ * layered above this and is never overridden by it.
+ */
+export const profileAttributes = (event: CanonicalEvent, resource: Resource): Attributes => ({
+  ...passthroughResourceAttributes(resource),
+  ...contextAttributesOf(event),
+});
+
+/**
  * Session id to put on `session.id`, preferring an externally supplied key.
  *
  * A launcher supplies the key as a resource attribute (usually through
@@ -182,8 +205,8 @@ export const hexTraceAttributes = (ids: ExportedTraceIds): Attributes => ({
  * `session.id` is the externally supplied session key when the resource carries
  * one (`session.id`, then `har.session_key`), otherwise the provider session id.
  * The provider id is always also emitted under `otelhook.session.id` and
- * `gen_ai.conversation.id`. Profile resource attributes are copied on too (see
- * `passthroughResourceAttributes`).
+ * `gen_ai.conversation.id`. Profile resource attributes and the event's session
+ * context are copied on too, beneath them (see `profileAttributes`).
  */
 export const exportIdentityAttributes = (
   event: CanonicalEvent,
@@ -192,6 +215,8 @@ export const exportIdentityAttributes = (
 ): Attributes => {
   const { sessionId, providerSessionId } = resolveExportedSessionId(event.sessionId, resource);
   return {
+    // First, so nothing in the profile layer can replace an identity attribute.
+    ...profileAttributes(event, resource),
     [ATTR_SESSION_ID]: sessionId,
     [ATTR_OTELHOOK_SESSION_ID]: providerSessionId,
     [ATTR_GEN_AI_CONVERSATION_ID]: providerSessionId,
@@ -202,7 +227,6 @@ export const exportIdentityAttributes = (
       : { [ATTR_OTELHOOK_PROVIDER_VERSION]: event.provenance.providerVersion }),
     [ATTR_OTELHOOK_WORKSPACE_ID]: event.workspace.workspaceId,
     ...(event.subagentId === undefined ? {} : { [ATTR_OTELHOOK_SUBAGENT_ID]: event.subagentId }),
-    ...passthroughResourceAttributes(resource),
     ...hexTraceAttributes(ids),
   };
 };

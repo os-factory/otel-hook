@@ -58,6 +58,7 @@ import type {
   Logger,
   PayloadEnricher,
   ReadCursor,
+  SessionContextReader,
   StateStore,
   TelemetrySink,
   WorktreeLocator,
@@ -68,6 +69,7 @@ import {
   resolveEventTargets,
 } from "./target-resolution.js";
 import { isStateLockContention, withOptionalSessionLock } from "../state/store.js";
+import { stampSessionContext } from "./session-context.js";
 
 export const usageScopeSchema = z.enum(["session", "generation", "subagent"]);
 export type UsageScope = z.infer<typeof usageScopeSchema>;
@@ -269,6 +271,12 @@ export type OtelHookDependencies = {
    * default: nothing reads beyond the payload unless a host asks for it.
    */
   readonly payloadEnrichers?: readonly PayloadEnricher[];
+  /**
+   * Reads the session context a harness wrote (`docs/session-context.md`). Absent
+   * means none: no event carries `contextAttributes`. The filesystem
+   * implementation is `createDirectorySessionContextReader`.
+   */
+  readonly sessionContext?: SessionContextReader;
 };
 
 const MAX_ERROR_EVENTS = 8;
@@ -1234,6 +1242,18 @@ export const createOtelHook = (deps: OtelHookDependencies): OtelHook => {
         }
       }
 
+      // Session context: a core step, never adapter code (ADR 0003), outside the
+      // session lock like target resolution. One bounded read of the file for this
+      // invocation's session — for a subagent event that is its parent's session,
+      // because events carry the invocation's session id, never the subagent's.
+      // Always run, so an event can only ever carry the core's stamp.
+      batch = stampSessionContext(
+        batch,
+        !suppress && batch.length > 0 && deps.sessionContext !== undefined
+          ? await readSessionContext(deps.sessionContext, detection.providerId, identity.sessionId)
+          : undefined,
+      );
+
       let emitted = 0;
       let exportRejected = 0;
       if (!suppress && batch.length > 0) {
@@ -1384,6 +1404,19 @@ export const createOtelHook = (deps: OtelHookDependencies): OtelHook => {
   };
 
   return { resolveDelivery, ingest, flush, shutdown, config };
+};
+
+/** Fail-open wrapper: a reader that throws despite its contract stamps nothing. */
+const readSessionContext = async (
+  reader: SessionContextReader,
+  providerId: string,
+  sessionId: string,
+): Promise<Awaited<ReturnType<SessionContextReader["read"]>>> => {
+  try {
+    return await reader.read({ providerId, sessionId });
+  } catch {
+    return undefined;
+  }
 };
 
 const buildErrorEvents = (

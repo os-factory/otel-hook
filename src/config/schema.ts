@@ -1,3 +1,5 @@
+import { isAbsolute } from "node:path";
+
 import { z } from "zod";
 
 import { detectionConfidenceSchema, nonEmptyStringSchema } from "../model/primitives.js";
@@ -178,6 +180,27 @@ export const providersPolicySchema = z.strictObject({
 });
 export type ProvidersPolicy = z.infer<typeof providersPolicySchema>;
 
+/**
+ * Session context (`docs/session-context.md`): a directory a harness writes one
+ * JSON file per agent session into, laid out `<dir>/<agent-tool>/<session-id>.json`.
+ * With `dir` set, the hook reads that one file on every event and stamps the
+ * attributes of the segment in force on every span, log record and metric point.
+ * Absent (the default), nothing is read.
+ *
+ * Set in the configuration file or with `--session-context-dir`, never through
+ * the environment: some agents (Claude Code) strip `OTEL_*` variables from the
+ * hook processes they start.
+ */
+export const sessionContextPolicySchema = z.strictObject({
+  /** Absolute path of the context directory. */
+  dir: z
+    .string()
+    .min(1)
+    .max(4096)
+    .refine((value) => isAbsolute(value), { message: "must be an absolute path" }),
+});
+export type SessionContextPolicy = z.infer<typeof sessionContextPolicySchema>;
+
 export const otelHookConfigSchema = z.strictObject({
   exporter: exporterPolicySchema,
   privacy: privacyPolicySchema,
@@ -185,6 +208,8 @@ export const otelHookConfigSchema = z.strictObject({
   diagnostics: diagnosticsPolicySchema,
   /** Optional so a hand-built configuration from before it existed stays valid. */
   providers: providersPolicySchema.optional(),
+  /** Optional: absent means no session context is read. */
+  sessionContext: sessionContextPolicySchema.optional(),
 });
 export type OtelHookConfig = z.infer<typeof otelHookConfigSchema>;
 
@@ -215,6 +240,7 @@ export const otelHookConfigPatchSchema = z.strictObject({
     })
     .partial()
     .optional(),
+  sessionContext: sessionContextPolicySchema.partial().optional(),
 });
 export type OtelHookConfigPatch = z.infer<typeof otelHookConfigPatchSchema>;
 
@@ -258,6 +284,9 @@ export const DEFAULT_CONFIG: OtelHookConfig = Object.freeze({
 /** Whether the runtime may read Claude Code transcripts at `Stop` (default false). */
 export const readsClaudeTranscriptUsage = (config: OtelHookConfig): boolean =>
   config.providers?.claudeCode?.readTranscriptUsage === true;
+
+/** The session context directory in force, or `undefined` when none is configured. */
+export const sessionContextDir = (config: OtelHookConfig): string | undefined => config.sessionContext?.dir;
 
 /** Content mode is re-exported for callers building patches. */
 export { contentModeSchema };

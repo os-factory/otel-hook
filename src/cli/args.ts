@@ -7,6 +7,8 @@
  * and streams (see ADR 0001 on ambient state).
  */
 
+import { isAbsolute } from "node:path";
+
 import {
   checkResourceAttributeKey,
   MAX_RESOURCE_ATTRIBUTES,
@@ -75,6 +77,11 @@ export type CliPolicyFlags = {
    * at `Stop` for the turn's model and token usage. Off unless asked for.
    */
   readonly claudeTranscriptUsage?: boolean;
+  /**
+   * `sessionContext.dir`: read session context files from this absolute
+   * directory (`docs/session-context.md`). Overrides the config file's value.
+   */
+  readonly sessionContextDir?: string;
 };
 
 /**
@@ -186,6 +193,7 @@ const VALUE_FLAGS = new Set([
   "--logs-endpoint",
   "--metrics-endpoint",
   "--metrics-temporality",
+  "--session-context-dir",
   "--max-input-bytes",
   "--scope",
   "--project-dir",
@@ -449,6 +457,11 @@ const parsePolicy = (tokens: Tokenized, errors: string[]): CliPolicyFlags => {
     }
   }
 
+  const sessionContextDir = single(tokens, "--session-context-dir", errors);
+  if (sessionContextDir !== undefined && !isAbsolute(sessionContextDir)) {
+    errors.push("flag --session-context-dir expects an absolute path");
+  }
+
   return {
     ...(configFile === undefined ? {} : { configFile }),
     ...(endpoint === undefined ? {} : { endpoint }),
@@ -474,6 +487,7 @@ const parsePolicy = (tokens: Tokenized, errors: string[]): CliPolicyFlags => {
     ...(metricsTemporality === undefined ? {} : { metricsTemporality }),
     ...(tokens.booleans.has("--no-metrics-session-id") ? { metricsIncludeSessionId: false } : {}),
     ...(tokens.booleans.has("--claude-transcript-usage") ? { claudeTranscriptUsage: true } : {}),
+    ...(sessionContextDir === undefined || !isAbsolute(sessionContextDir) ? {} : { sessionContextDir }),
   };
 };
 
@@ -548,6 +562,7 @@ const RUN_FLAGS: ReadonlySet<string> = new Set([
   "--metrics-temporality",
   "--no-metrics-session-id",
   "--claude-transcript-usage",
+  "--session-context-dir",
   "--max-input-bytes",
   "--no-export",
   "--no-spool",
@@ -583,6 +598,7 @@ const DOCTOR_FLAGS: ReadonlySet<string> = new Set([
   "--metrics-temporality",
   "--no-metrics-session-id",
   "--claude-transcript-usage",
+  "--session-context-dir",
   "--include-experimental",
   "--no-experimental",
 ]);
@@ -882,6 +898,13 @@ Exporter and runtime policy (never identity):
                              payload names (bounded) for the turn's model and
                              summed token usage. Off by default; also
                              OTEL_HOOK_CLAUDE_TRANSCRIPT_USAGE=1
+  --session-context-dir <dir>
+                             absolute directory of session context files
+                             (<dir>/<agent-tool>/<session-id>.json); the
+                             attributes of the segment in force are put on
+                             every span, log record and metric point. Overrides
+                             sessionContext.dir in --config-file. No environment
+                             variable, by design
   --max-input-bytes <n>      stdin bound (default 1048576)
   --attr <key=value>         opaque consumer attribute for this invocation,
                              carried unchanged (not a resource attribute)

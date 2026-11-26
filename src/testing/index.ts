@@ -25,7 +25,7 @@ import {
   type RecordingLogger,
   type RecordingTelemetrySink,
 } from "../runtime/memory.js";
-import type { IdGenerator, PayloadEnricher, WorktreeLocator } from "../runtime/ports.js";
+import type { IdGenerator, PayloadEnricher, SessionContextReader, WorktreeLocator } from "../runtime/ports.js";
 
 export * from "./fixture-adapter.js";
 export * from "./assertions.js";
@@ -92,6 +92,8 @@ export type TestHarnessOptions = {
   readonly targetResolutionBudgetMillis?: number;
   /** Payload enrichers, as a host would configure them (none by default). */
   readonly payloadEnrichers?: readonly PayloadEnricher[];
+  /** Session context reader (none by default), e.g. a fake or the directory reader. */
+  readonly sessionContext?: SessionContextReader;
 };
 
 export type TestHarness = {
@@ -157,6 +159,7 @@ export const createTestHook = (options: TestHarnessOptions = {}): TestHarness =>
       ? {}
       : { targetResolutionBudgetMillis: options.targetResolutionBudgetMillis }),
     ...(options.payloadEnrichers === undefined ? {} : { payloadEnrichers: options.payloadEnrichers }),
+    ...(options.sessionContext === undefined ? {} : { sessionContext: options.sessionContext }),
   });
 
   return { hook, sink, stateStore, clock, ids, privacy, logger, registry, config };

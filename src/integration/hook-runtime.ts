@@ -1,4 +1,4 @@
-import { readsClaudeTranscriptUsage, type OtelHookConfig } from "../config/schema.js";
+import { readsClaudeTranscriptUsage, sessionContextDir, type OtelHookConfig } from "../config/schema.js";
 import { summarizeHealth, type DeliveryHealthSnapshot, type OverallHealth } from "../diagnostics/health.js";
 import { createErrorInfo, errorInfoFromThrown, type OtelHookErrorInfo } from "../errors/index.js";
 import type { CanonicalEvent } from "../model/events.js";
@@ -37,7 +37,15 @@ import {
 import { createDeterministicIdGenerator } from "../runtime/ids.js";
 import { createNullLogger } from "../runtime/logger.js";
 import { createFilesystemWorktreeLocator } from "../runtime/git-worktree.js";
-import type { Clock, IdGenerator, Logger, PayloadEnricher, WorktreeLocator } from "../runtime/ports.js";
+import type {
+  Clock,
+  IdGenerator,
+  Logger,
+  PayloadEnricher,
+  SessionContextReader,
+  WorktreeLocator,
+} from "../runtime/ports.js";
+import { createDirectorySessionContextReader } from "../runtime/session-context.js";
 import { createAsyncLock } from "../state/async-lock.js";
 import { createFilesystemStateStore, type FilesystemStateStore } from "../state/filesystem-store.js";
 import type { DurableLogSpool } from "../telemetry/durable-log-spool.js";
@@ -49,7 +57,7 @@ import {
   type SkippedExportDestination,
 } from "../telemetry/export-destinations.js";
 import { effectiveMetricsPolicy } from "../config/schema.js";
-import { resourceFromExporterPolicy } from "../telemetry/exporter-resource.js";
+import { agreedContextAttributes, resourceFromExporterPolicy } from "../telemetry/exporter-resource.js";
 import {
   aggregateDeltaPoints,
   deriveMetricObservations,
@@ -373,6 +381,12 @@ export type HookRuntimeOptions = {
    * Pass `[]` to run none regardless of configuration.
    */
   readonly payloadEnrichers?: readonly PayloadEnricher[];
+  /**
+   * Reads session context files (`docs/session-context.md`). When absent, the
+   * configuration decides: `sessionContext.dir` adds the directory reader, and
+   * without it nothing is read. Pass `null` to read none regardless.
+   */
+  readonly sessionContextReader?: SessionContextReader | null;
 };
 
 const DEFAULT_FLUSH_TIMEOUT_MILLIS = 2_000;
@@ -617,6 +631,16 @@ export const createHookRuntime = (options: HookRuntimeOptions): HookRuntime => {
     payloadEnrichers:
       options.payloadEnrichers ??
       (readsClaudeTranscriptUsage(options.config) ? [createClaudeTranscriptUsageEnricher()] : []),
+    ...(() => {
+      if (options.sessionContextReader === null) {
+        return {};
+      }
+      if (options.sessionContextReader !== undefined) {
+        return { sessionContext: options.sessionContextReader };
+      }
+      const dir = sessionContextDir(options.config);
+      return dir === undefined ? {} : { sessionContext: createDirectorySessionContextReader({ dir }) };
+    })(),
     ...(options.worktreeLocator === null
       ? {}
       : {
@@ -751,9 +775,10 @@ export const createHookRuntime = (options: HookRuntimeOptions): HookRuntime => {
               perSession: metricsPolicy.includeSessionId,
               ...(deliveryToken === undefined ? {} : { deliveryToken }),
             });
+      const context = agreedContextAttributes(ingest.events);
       const results = await Promise.all(
         metricDestinations.map(async (destination) => {
-          const result = await destination.metrics.exportPoints(points).catch(
+          const result = await destination.metrics.exportPoints(points, context).catch(
             (thrown: unknown) => ({
               accepted: 0,
               rejected: points.length,

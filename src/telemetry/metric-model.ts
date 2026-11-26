@@ -26,6 +26,9 @@ import { resolveExportedSessionId } from "./export-identity.js";
  *
  * ## What is never on a metric
  *
+ * Session context attributes (`docs/session-context.md`) are on every data point
+ * of an event that has them, so a new context starts a new series.
+ *
  * No account identity (`user.*`, `enduser.*`, `organization.id`), no content, no
  * paths, and no per-event ids (`otelhook.event.id`, tool-call ids, generation ids):
  * an id per data point is a new series per data point. `session.id` is the one
@@ -181,6 +184,11 @@ const commonAttributes = (
   resource: Resource,
   includeSessionId: boolean,
 ): Record<string, string | number | boolean> => ({
+  // Session context first, so the metric's own attributes always win; and never
+  // anything account-shaped, whatever the context says.
+  ...(event.contextAttributes === undefined
+    ? {}
+    : (withoutAccountIdentity(event.contextAttributes) as Record<string, string | number | boolean>)),
   [ATTR_OTELHOOK_PROVIDER_ID]: event.provenance.providerId,
   ...(includeSessionId
     ? { [ATTR_SESSION_ID]: resolveExportedSessionId(event.sessionId, resource).sessionId }

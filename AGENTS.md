@@ -33,6 +33,11 @@ are opaque, immutable invocation metadata.
   the hook runtime, never the adapter, reads the single Claude Code transcript a
   payload names, bounded and fail-open. See
   `docs/claude-code-usage-contract.md`, finding 8.
+- Session context (`sessionContext.dir`, `--session-context-dir`) is a core
+  step, never provider code: the hook runtime reads the one
+  `<dir>/<agent-tool>/<session-id>.json` of the invocation's session, bounded
+  and fail-open, and never scans the directory. It has no environment variable
+  on purpose. See `docs/session-context.md`.
 
 ## Branch names, CI, and releases
 
